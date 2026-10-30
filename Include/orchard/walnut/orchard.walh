@@ -1,0 +1,308 @@
+extern "C++" from "<orchard/script/script_api.hpp>" {
+    class NativeEntity as "orchard::script::Entity" {
+    public:
+        constructor();
+        static function current() -> NativeEntity;
+        static function none() -> NativeEntity;
+        function exists() const -> bool;
+        function same(const NativeEntity&: other) const -> bool;
+        function name() const -> string;
+        function set_name(const string&: name) const -> void;
+        function parent() const -> NativeEntity;
+        function destroy() const -> void;
+        function get(long int: which, long int: axis) const -> short float;
+        function set(long int: which, short float: x, short float: y, short float: z) const -> void;
+        function push(long int: kind, short float: x, short float: y, short float: z) const -> void;
+        function has_body() const -> bool;
+        function touching(const NativeEntity&: other) const -> bool;
+    } end class NativeEntity
+
+    class NativeWorld as "orchard::script::World" {
+    public:
+        static function on_start(function() -> void: fn) -> void;
+        static function on_tick(function() -> void: fn) -> void;
+        static function on_stop(function() -> void: fn) -> void;
+        static function log(const string&: message) -> void;
+        static function warn(const string&: message) -> void;
+        static function dt() -> short float;
+        static function time() -> short float;
+        static function is_2d() -> bool;
+        static function key_down(const string&: key) -> bool;
+        static function find(const string&: name) -> NativeEntity;
+        static function spawn(const string&: name) -> NativeEntity;
+        static function spawn_child(const string&: name, const NativeEntity&: parent) -> NativeEntity;
+    } end class NativeWorld
+} end extern
+
+class Entity {
+public:
+    NativeEntity: raw;
+
+    function exists() const -> bool {
+        return raw.exists();
+    } end function exists
+
+    function is(const Entity&: other) const -> bool {
+        return raw.same(other.raw);
+    } end function is
+
+    function name() const -> string {
+        return raw.name();
+    } end function name
+
+    function set_name(const string&: name) -> void {
+        raw.set_name(name);
+    } end function set_name
+
+    function parent() const -> Entity {
+        Entity: p;
+        p.raw = raw.parent();
+        return p;
+    } end function parent
+
+    function destroy() -> void {
+        raw.destroy();
+    } end function destroy
+
+    function x() const -> double {
+        return static_cast<double>(raw.get(0l, 0l));
+    } end function x
+
+    function y() const -> double {
+        return static_cast<double>(raw.get(0l, 1l));
+    } end function y
+
+    function z() const -> double {
+        return static_cast<double>(raw.get(0l, 2l));
+    } end function z
+
+    function set_position(double: x, double: y, double: z) -> void {
+        raw.set(0l, static_cast<short float>(x), static_cast<short float>(y), static_cast<short float>(z));
+    } end function set_position
+
+    function set_x(double: value) -> void {
+        set_position(value, y(), z());
+    } end function set_x
+
+    function set_y(double: value) -> void {
+        set_position(x(), value, z());
+    } end function set_y
+
+    function set_z(double: value) -> void {
+        set_position(x(), y(), value);
+    } end function set_z
+
+    function translate(double: dx, double: dy, double: dz) -> void {
+        set_position(x() + dx, y() + dy, z() + dz);
+    } end function translate
+
+    function rotation_x() const -> double {
+        return static_cast<double>(raw.get(1l, 0l));
+    } end function rotation_x
+
+    function rotation_y() const -> double {
+        return static_cast<double>(raw.get(1l, 1l));
+    } end function rotation_y
+
+    function rotation_z() const -> double {
+        return static_cast<double>(raw.get(1l, 2l));
+    } end function rotation_z
+
+    function set_rotation(double: x, double: y, double: z) -> void {
+        raw.set(1l, static_cast<short float>(x), static_cast<short float>(y), static_cast<short float>(z));
+    } end function set_rotation
+
+    function set_rotation_x(double: value) -> void {
+        set_rotation(value, rotation_y(), rotation_z());
+    } end function set_rotation_x
+
+    function set_rotation_y(double: value) -> void {
+        set_rotation(rotation_x(), value, rotation_z());
+    } end function set_rotation_y
+
+    function set_rotation_z(double: value) -> void {
+        set_rotation(rotation_x(), rotation_y(), value);
+    } end function set_rotation_z
+
+    function rotate(double: dx, double: dy, double: dz) -> void {
+        set_rotation(rotation_x() + dx, rotation_y() + dy, rotation_z() + dz);
+    } end function rotate
+
+    function scale_x() const -> double {
+        return static_cast<double>(raw.get(2l, 0l));
+    } end function scale_x
+
+    function scale_y() const -> double {
+        return static_cast<double>(raw.get(2l, 1l));
+    } end function scale_y
+
+    function scale_z() const -> double {
+        return static_cast<double>(raw.get(2l, 2l));
+    } end function scale_z
+
+    function set_scale(double: x, double: y, double: z) -> void {
+        raw.set(2l, static_cast<short float>(x), static_cast<short float>(y), static_cast<short float>(z));
+    } end function set_scale
+
+    function set_scale_x(double: value) -> void {
+        set_scale(value, scale_y(), scale_z());
+    } end function set_scale_x
+
+    function set_scale_y(double: value) -> void {
+        set_scale(scale_x(), value, scale_z());
+    } end function set_scale_y
+
+    function set_scale_z(double: value) -> void {
+        set_scale(scale_x(), scale_y(), value);
+    } end function set_scale_z
+
+    function velocity_x() const -> double {
+        return static_cast<double>(raw.get(3l, 0l));
+    } end function velocity_x
+
+    function velocity_y() const -> double {
+        return static_cast<double>(raw.get(3l, 1l));
+    } end function velocity_y
+
+    function velocity_z() const -> double {
+        return static_cast<double>(raw.get(3l, 2l));
+    } end function velocity_z
+
+    function set_velocity(double: x, double: y, double: z) -> void {
+        raw.set(3l, static_cast<short float>(x), static_cast<short float>(y), static_cast<short float>(z));
+    } end function set_velocity
+
+    function set_velocity_x(double: value) -> void {
+        set_velocity(value, velocity_y(), velocity_z());
+    } end function set_velocity_x
+
+    function set_velocity_y(double: value) -> void {
+        set_velocity(velocity_x(), value, velocity_z());
+    } end function set_velocity_y
+
+    function set_velocity_z(double: value) -> void {
+        set_velocity(velocity_x(), velocity_y(), value);
+    } end function set_velocity_z
+
+    function spin_x() const -> double {
+        return static_cast<double>(raw.get(4l, 0l));
+    } end function spin_x
+
+    function spin_y() const -> double {
+        return static_cast<double>(raw.get(4l, 1l));
+    } end function spin_y
+
+    function spin_z() const -> double {
+        return static_cast<double>(raw.get(4l, 2l));
+    } end function spin_z
+
+    function set_spin(double: x, double: y, double: z) -> void {
+        raw.set(4l, static_cast<short float>(x), static_cast<short float>(y), static_cast<short float>(z));
+    } end function set_spin
+
+    function set_spin_x(double: value) -> void {
+        set_spin(value, spin_y(), spin_z());
+    } end function set_spin_x
+
+    function set_spin_y(double: value) -> void {
+        set_spin(spin_x(), value, spin_z());
+    } end function set_spin_y
+
+    function set_spin_z(double: value) -> void {
+        set_spin(spin_x(), spin_y(), value);
+    } end function set_spin_z
+
+    function world_x() const -> double {
+        return static_cast<double>(raw.get(5l, 0l));
+    } end function world_x
+
+    function world_y() const -> double {
+        return static_cast<double>(raw.get(5l, 1l));
+    } end function world_y
+
+    function world_z() const -> double {
+        return static_cast<double>(raw.get(5l, 2l));
+    } end function world_z
+
+    function push(double: x, double: y, double: z) -> void {
+        raw.push(0l, static_cast<short float>(x), static_cast<short float>(y), static_cast<short float>(z));
+    } end function push
+
+    function add_force(double: x, double: y, double: z) -> void {
+        raw.push(1l, static_cast<short float>(x), static_cast<short float>(y), static_cast<short float>(z));
+    } end function add_force
+
+    function add_torque(double: x, double: y, double: z) -> void {
+        raw.push(2l, static_cast<short float>(x), static_cast<short float>(y), static_cast<short float>(z));
+    } end function add_torque
+
+    function has_body() const -> bool {
+        return raw.has_body();
+    } end function has_body
+
+    function touching(const Entity&: other) const -> bool {
+        return raw.touching(other.raw);
+    } end function touching
+} end class Entity
+
+function current() -> Entity {
+    Entity: e;
+    e.raw = NativeEntity::current();
+    return e;
+} end function current
+
+function find(const string&: name) -> Entity {
+    Entity: e;
+    e.raw = NativeWorld::find(name);
+    return e;
+} end function find
+
+function spawn(const string&: name) -> Entity {
+    Entity: e;
+    e.raw = NativeWorld::spawn(name);
+    return e;
+} end function spawn
+
+function spawn_child(const string&: name, const Entity&: parent) -> Entity {
+    Entity: e;
+    e.raw = NativeWorld::spawn_child(name, parent.raw);
+    return e;
+} end function spawn_child
+
+function log(const string&: message) -> void {
+    NativeWorld::log(message);
+} end function log
+
+function warn(const string&: message) -> void {
+    NativeWorld::warn(message);
+} end function warn
+
+function dt() -> double {
+    return static_cast<double>(NativeWorld::dt());
+} end function dt
+
+function time() -> double {
+    return static_cast<double>(NativeWorld::time());
+} end function time
+
+function is_2d() -> bool {
+    return NativeWorld::is_2d();
+} end function is_2d
+
+function key_down(const string&: key) -> bool {
+    return NativeWorld::key_down(key);
+} end function key_down
+
+function on_start(function() -> void: fn) -> void {
+    NativeWorld::on_start(fn);
+} end function on_start
+
+function on_tick(function() -> void: fn) -> void {
+    NativeWorld::on_tick(fn);
+} end function on_tick
+
+function on_stop(function() -> void: fn) -> void {
+    NativeWorld::on_stop(fn);
+} end function on_stop
+
+export this

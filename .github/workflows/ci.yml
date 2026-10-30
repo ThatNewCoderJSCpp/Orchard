@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  heartwood:
+    name: Heartwood and tests (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.compiler }}" = clang ]; then export CC=clang CXX=clang++; fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DORCHARD_BUILD_EDITOR=OFF -DORCHARD_BUILD_XYLEM=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+  editor:
+    name: Editor on Linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config xvfb \
+            libx11-dev libxft-dev libxrender-dev libfontconfig1-dev libfreetype-dev \
+            libssl-dev libpango1.0-dev libcairo2-dev zlib1g-dev libjpeg-dev \
+            libvulkan-dev libgl-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFIZMO_TUNE=OFF
+
+      - name: Build
+        timeout-minutes: 100
+        run: cmake --build build -j 4
+
+      - name: Test
+        working-directory: build
+        env:
+          ORCHARD_TEST_WALNUT: ${{ github.workspace }}/build/bin/walnut
+        run: ctest --output-on-failure
+
+      - name: Check the editor window and its script
+        run: |
+          build/bin/orchard --version
+          build/bin/orchard --check | tee check.txt
+          grep "built-in window ok, 1 compiled script" check.txt
+          build/bin/orchard --new smoke-project --2d --name Smoke
+          build/bin/orchard --graph smoke-project/Graphs/spin.graph
+          build/bin/orchard --simulate smoke-project 1
+          build/bin/orchard --new smoke-z --axes z-up --name SmokeZ
+          grep "axes: z-up;" smoke-z/project.orchard
+          build/bin/orchard --simulate smoke-z 1
+          timeout 20 xvfb-run -a build/bin/orchard smoke-project > run.log 2>&1 || status=$?
+          cat run.log
+          if [ "${status:-0}" != "124" ]; then
+            echo "::error::orchard should keep its window open until it's closed (exit status ${status:-0})"
+            exit 1
+          fi

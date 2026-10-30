@@ -1,0 +1,878 @@
+import module.grove
+import module.strings
+import module.io
+
+string: selected = "";
+string: mode = "edit";
+string: log_seq = "0";
+bool: filling = false;
+
+function call(const string&: name, const string&: arg) -> string;
+function el(const string&: tag, const string&: cls, const string&: label) -> grove::Element;
+function clear(grove::Element&: e) -> void;
+function show(const string&: id, bool: on) -> void;
+function failed(const string&: result) -> bool;
+function reason(const string&: result) -> string;
+function say(const string&: msg, bool: bad) -> void;
+function refresh() -> void;
+function build_tree() -> void;
+function build_files() -> void;
+function fill_inspector() -> void;
+function fill_transform() -> void;
+function fill_components() -> void;
+function select(const string&: id) -> void;
+function set_field(const string&: field) -> void;
+function set_component(const string&: field, const string&: value) -> void;
+function open_file(const string&: path) -> void;
+function enter_editor() -> void;
+function add_entity(const string&: parent) -> void;
+function save_project() -> void;
+function poll_logs() -> void;
+function float_input(const string&: value, const string&: step, const string&: field) -> grove::Element;
+function switch_row(const string&: label, bool: on, const string&: field) -> grove::Element;
+function collider_card(const string&: line) -> grove::Element;
+function fill_script_choices(const string&: current) -> void;
+function mix_row(const string&: label, const string&: value, const string&: project_label, const string&: field) -> grove::Element;
+function fill_mix_select(grove::Element&: pick, bool: with_default, const string&: project_label) -> void;
+function mark_flip(const string&: id, bool: on) -> void;
+function flip_axis(const string&: axis) -> void;
+function show_axes(const string&: fields) -> void;
+function pick_axes(const string&: style, const string&: flips) -> void;
+function toggle_axes_flip(const string&: axis) -> void;
+
+function call(const string&: name, const string&: arg) -> string {
+    return grove::call("orchard." + name, arg);
+} end function call
+
+function el(const string&: tag, const string&: cls, const string&: label) -> grove::Element {
+    grove::Element: e = grove::create_element(tag);
+    if (!cls.empty()) then {
+        e.set_attribute("class", cls);
+    }
+    if (!label.empty()) then {
+        e.set_inner_text(label);
+    }
+    return e;
+} end function el
+
+function clear(grove::Element&: e) -> void {
+    while (e.child_count() > 0l) {
+        e.child(0l).remove();
+    }
+} end function clear
+
+function show(const string&: id, bool: on) -> void {
+    grove::Element: e = grove::get_by_id(id);
+    if (on) then {
+        e.remove_class("hidden");
+    } else then {
+        e.add_class("hidden");
+    }
+} end function show
+
+function failed(const string&: result) -> bool {
+    return result.starts_with("error");
+} end function failed
+
+function reason(const string&: result) -> string {
+    auto: f = result.split("\t");
+    if (f.size() > 1l) then {
+        return f[1];
+    }
+    return result;
+} end function reason
+
+function say(const string&: msg, bool: bad) -> void {
+    grove::Element: box = grove::get_by_id("console");
+    grove::Element: line = el("div", "log-line", msg);
+    if (bad) then {
+        line.add_class("bad");
+    }
+    box.append_child(line);
+    line.set_attribute("reveal", "1");
+} end function say
+
+function mark_flip(const string&: id, bool: on) -> void {
+    if (on) then {
+        grove::get_by_id(id).add_class("on");
+    } else then {
+        grove::get_by_id(id).remove_class("on");
+    }
+} end function mark_flip
+
+function flip_axis(const string&: axis) -> void {
+    string: r = call("flip_axis", axis);
+    if (failed(r)) then {
+        say(reason(r), true);
+    }
+    refresh();
+} end function flip_axis
+
+string: axes_dim = "3d";
+string: axes_style = "y-up";
+string: axes_flips = "";
+
+function show_axes(const string&: fields) -> void {
+    auto: f = fields.split("\t");
+    if (f.size() < 5l) then {
+        return;
+    }
+    axes_dim = f[0];
+    axes_style = f[1];
+    axes_flips = f[2];
+    grove::get_by_id("axes-name").set_inner_text(f[3]);
+    show("axes-styles-3d", axes_dim == "3d");
+    show("axes-styles-2d", axes_dim == "2d");
+    show("ax-flip-y", axes_dim == "3d");
+    show("ax-flip-z", axes_dim == "3d");
+    show("axes-hint", axes_dim == "3d");
+    mark_flip("ax-y-up", f[4] == "y-up");
+    mark_flip("ax-y-up-left", f[4] == "y-up-left");
+    mark_flip("ax-z-up", f[4] == "z-up");
+    mark_flip("ax-z-up-left", f[4] == "z-up-left");
+    mark_flip("ax-source", f[4] == "source");
+    mark_flip("ax-2d-up", axes_style == "up");
+    mark_flip("ax-2d-down", axes_style == "down");
+    mark_flip("ax-flip-x", axes_flips.contains("x"));
+    mark_flip("ax-flip-y", axes_flips.contains("y"));
+    mark_flip("ax-flip-z", axes_flips.contains("z"));
+    grove::Element: facts = grove::get_by_id("axes-facts");
+    clear(facts);
+    for (long int: i = 5l; i < f.size(); i += 1l) {
+        facts.append_child(el("div", "axes-fact", f[i]));
+    }
+} end function show_axes
+
+function pick_axes(const string&: style, const string&: flips) -> void {
+    string: r = call("axes_pending", style + "\t" + flips);
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    show_axes(r);
+} end function pick_axes
+
+function flip_letter(const string&: axis, const string&: flipped) -> string {
+    bool: on = axes_flips.contains(axis);
+    if (axis == flipped) then {
+        on = !on;
+    }
+    if (on) then {
+        return axis;
+    }
+    return "";
+} end function flip_letter
+
+function toggle_axes_flip(const string&: axis) -> void {
+    pick_axes(axes_style, flip_letter("x", axis) + flip_letter("y", axis) + flip_letter("z", axis));
+} end function toggle_axes_flip
+
+function refresh() -> void {
+    auto: f = call("state", "").split("\t");
+    if (f.size() < 10l) then {
+        return;
+    }
+    grove::get_by_id("project-name").set_inner_text(f[1]);
+    show("dirty", f[6] == "1");
+    grove::get_by_id("version").set_inner_text("v" + f[8]);
+    if (f.size() > 11l) then {
+        string: label = f[10];
+        if (f[2] == "2d") then {
+            label = "y-" + f[10];
+        }
+        if (f[11].contains("x")) then {
+            label = label + " flip-x";
+        }
+        if (f[2] == "3d" && f[11].contains("y")) then {
+            label = label + " flip-y";
+        }
+        if (f[11].contains("z")) then {
+            label = label + " flip-z";
+        }
+        grove::get_by_id("axes-open").set_inner_text("Axes: " + label);
+    }
+    if (f[7] == "2d") then {
+        grove::get_by_id("view-2d").add_class("on");
+        grove::get_by_id("view-3d").remove_class("on");
+    } else then {
+        grove::get_by_id("view-3d").add_class("on");
+        grove::get_by_id("view-2d").remove_class("on");
+    }
+    selected = f[5];
+    mode = f[9];
+    grove::Element: m = grove::get_by_id("mode");
+    m.remove_class("playing");
+    m.remove_class("building");
+    if (mode == "playing") then {
+        m.set_inner_text("Playing");
+        m.add_class("playing");
+    } else if (mode == "building") then {
+        m.set_inner_text("Building scripts...");
+        m.add_class("building");
+    } else then {
+        m.set_inner_text("");
+    }
+    show("play", mode == "edit");
+    show("stop", mode != "edit");
+} end function refresh
+
+function build_tree() -> void {
+    grove::Element: box = grove::get_by_id("tree");
+    clear(box);
+    auto: rows = call("entities", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 4l) then {
+            continue;
+        }
+        string: id = f[0];
+        long int: depth = std::io::parse_int<long int>(f[2]);
+        grove::Element: row = el("row", "node", "");
+        row.set_style("padding", "4px 8px 4px " + (8l + depth * 16l).to_string() + "px");
+        row.append_child(el("text", "", f[3]));
+        if (f.size() > 4l && !f[4].empty()) then {
+            row.append_child(el("text", "tag", f[4]));
+        }
+        row.set_attribute("entity", id);
+        if (id == selected) then {
+            row.add_class("selected");
+        }
+        row.on("click", [id](grove::Event&: e) -> void {
+            select(id);
+        });
+        box.append_child(row);
+    }
+} end function build_tree
+
+function build_files() -> void {
+    grove::Element: box = grove::get_by_id("files");
+    clear(box);
+    auto: rows = call("files", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        string: path = f[1];
+        grove::Element: row = el("row", "file", "");
+        row.append_child(el("text", "kind", f[0]));
+        row.append_child(el("text", "", path));
+        row.on("click", [path](grove::Event&: e) -> void {
+            open_file(path);
+        });
+        box.append_child(row);
+    }
+} end function build_files
+
+function fill_transform() -> void {
+    auto: f = call("transform", selected).split("\t");
+    if (selected.empty() || f.size() < 10l) then {
+        return;
+    }
+    filling = true;
+    if (!grove::get_by_id("ins-name").focused()) then {
+        grove::get_by_id("ins-name").set_value_string(f[0]);
+    }
+    auto: ids = "px py pz rx ry rz sx sy sz".split(" ");
+    for (long int: i = 0l; i < ids.size(); i += 1l) {
+        grove::Element: input = grove::get_by_id(ids[i]);
+        if (!input.focused()) then {
+            input.set_value_float(std::io::parse_float<short float>(f[i + 1l]));
+        }
+    }
+    filling = false;
+} end function fill_transform
+
+function fill_inspector() -> void {
+    auto: f = call("transform", selected).split("\t");
+    bool: has = !selected.empty() && f.size() >= 10l;
+    show("inspector", has);
+    show("inspector-empty", !has);
+    if (!has) then {
+        return;
+    }
+    fill_transform();
+    fill_components();
+} end function fill_inspector
+
+function float_input(const string&: value, const string&: step, const string&: field) -> grove::Element {
+    grove::Element: input = grove::create_element("input_float");
+    input.set_attribute("step", step);
+    input.set_value_float(std::io::parse_float<short float>(value));
+    input.on("change", [field](grove::Event&: e) -> void {
+        set_component(field, e.target().value_float().to_string());
+    });
+    return input;
+} end function float_input
+
+function switch_row(const string&: label, bool: on, const string&: field) -> grove::Element {
+    grove::Element: row = el("row", "flag", "");
+    row.append_child(el("div", "", label));
+    grove::Element: sw = grove::create_element("input_bool");
+    sw.set_value_bool(on);
+    sw.on("change", [field](grove::Event&: e) -> void {
+        string: v = "0";
+        if (e.target().value_bool()) then {
+            v = "1";
+        }
+        set_component(field, v);
+    });
+    row.append_child(sw);
+    return row;
+} end function switch_row
+
+function collider_card(const string&: line) -> grove::Element {
+    auto: f = line.split("\t");
+    string: index = f[1];
+    string: base = "collider:" + index + ":";
+    grove::Element: card = el("column", "collider", "");
+    grove::Element: head = el("row", "collider-head", "");
+    grove::Element: shape = grove::create_element("input_select");
+    auto: shapes = "box sphere capsule".split(" ");
+    for (long int: i = 0l; i < shapes.size(); i += 1l) {
+        grove::Element: opt = el("option", "", shapes[i]);
+        opt.set_attribute("value", shapes[i]);
+        shape.append_child(opt);
+    }
+    shape.set_value_string(f[2]);
+    shape.on("change", [base](grove::Event&: e) -> void {
+        set_component(base + "shape", e.target().value_string());
+        fill_components();
+    });
+    head.append_child(shape);
+    head.append_child(el("div", "grow", ""));
+    grove::Element: remove = el("button", "small danger", "Remove");
+    remove.on("click", [index](grove::Event&: e) -> void {
+        set_component("remove_collider", index);
+        fill_components();
+        build_tree();
+    });
+    head.append_child(remove);
+    card.append_child(head);
+    card.append_child(el("div", "sub-title", "Size"));
+    grove::Element: size = el("row", "xyz", "");
+    size.append_child(float_input(f[3], "0.1", base + "sx"));
+    size.append_child(float_input(f[4], "0.1", base + "sy"));
+    size.append_child(float_input(f[5], "0.1", base + "sz"));
+    card.append_child(size);
+    card.append_child(el("div", "sub-title", "Offset"));
+    grove::Element: offset = el("row", "xyz", "");
+    offset.append_child(float_input(f[6], "0.1", base + "ox"));
+    offset.append_child(float_input(f[7], "0.1", base + "oy"));
+    offset.append_child(float_input(f[8], "0.1", base + "oz"));
+    card.append_child(offset);
+    card.append_child(el("div", "sub-title", "Density, friction, bounce"));
+    grove::Element: mat = el("row", "xyz", "");
+    mat.append_child(float_input(f[11], "0.1", base + "density"));
+    mat.append_child(float_input(f[12], "0.05", base + "friction"));
+    mat.append_child(float_input(f[13], "0.05", base + "bounce"));
+    card.append_child(mat);
+    if (f.size() > 17l) then {
+        card.append_child(mix_row("Friction mix", f[14], f[16], base + "friction_mix"));
+        card.append_child(mix_row("Bounce mix", f[15], f[17], base + "bounce_mix"));
+    }
+    card.append_child(switch_row("Enabled", f[9] == "1", base + "enabled"));
+    card.append_child(switch_row("Sensor (trigger)", f[10] == "1", base + "sensor"));
+    return card;
+} end function collider_card
+
+function fill_mix_select(grove::Element&: pick, bool: with_default, const string&: project_label) -> void {
+    auto: rows = call("combine_modes", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: c = rows[i].split("\t");
+        if (c.size() < 3l) then {
+            continue;
+        }
+        if (c[0] == "default" && !with_default) then {
+            continue;
+        }
+        string: label = c[1];
+        if (c[0] == "default") then {
+            label = "Default (" + project_label + ")";
+        }
+        grove::Element: opt = el("option", "", label);
+        opt.set_attribute("value", c[0]);
+        pick.append_child(opt);
+    }
+} end function fill_mix_select
+
+function mix_row(const string&: label, const string&: value, const string&: project_label, const string&: field) -> grove::Element {
+    grove::Element: row = el("row", "kv", "");
+    row.append_child(el("text", "k", label));
+    grove::Element: pick = grove::create_element("input_select");
+    pick.set_attribute("class", "v");
+    fill_mix_select(pick, true, project_label);
+    pick.set_value_string(value);
+    pick.on("change", [field](grove::Event&: e) -> void {
+        set_component(field, e.target().value_string());
+    });
+    row.append_child(pick);
+    return row;
+} end function mix_row
+
+function fill_script_choices(const string&: current) -> void {
+    grove::Element: pick = grove::get_by_id("ins-script");
+    clear(pick);
+    grove::Element: none = el("option", "", "No script");
+    none.set_attribute("value", "");
+    pick.append_child(none);
+    auto: rows = call("scripts", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        if (rows[i].empty()) then {
+            continue;
+        }
+        grove::Element: opt = el("option", "", rows[i]);
+        opt.set_attribute("value", rows[i]);
+        pick.append_child(opt);
+    }
+    pick.set_value_string(current);
+} end function fill_script_choices
+
+function fill_components() -> void {
+    if (selected.empty()) then {
+        return;
+    }
+    filling = true;
+    auto: rows = call("components", selected).split("\n");
+    string: script = "";
+    bool: has_body = false;
+    string: owner = "";
+    grove::Element: flags = grove::get_by_id("flags");
+    grove::Element: colliders = grove::get_by_id("colliders");
+    clear(flags);
+    clear(colliders);
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        if (f[0] == "script") then {
+            script = f[1];
+        } else if (f[0] == "owner") then {
+            owner = f[1];
+        } else if (f[0] == "body" && f.size() >= 6l) then {
+            has_body = true;
+            grove::get_by_id("ins-body-type").set_value_string(f[1]);
+            grove::get_by_id("ins-body-enabled").set_value_bool(f[2] == "1");
+            grove::get_by_id("ins-gravity").set_value_float(std::io::parse_float<short float>(f[3]));
+            grove::get_by_id("ins-lin-damp").set_value_float(std::io::parse_float<short float>(f[4]));
+            grove::get_by_id("ins-ang-damp").set_value_float(std::io::parse_float<short float>(f[5]));
+        } else if (f[0] == "flag" && f.size() >= 4l) then {
+            flags.append_child(switch_row(f[2], f[3] == "1", "flag:" + f[1]));
+        } else if (f[0] == "collider" && f.size() >= 14l) then {
+            colliders.append_child(collider_card(rows[i]));
+        }
+    }
+    fill_script_choices(script);
+    grove::get_by_id("ins-body").set_value_bool(has_body);
+    show("body-box", has_body);
+    show("ins-owner", !owner.empty());
+    grove::get_by_id("ins-owner").set_inner_text("Its colliders belong to " + owner + "'s body");
+    filling = false;
+} end function fill_components
+
+function select(const string&: id) -> void {
+    selected = call("select", id);
+    build_tree();
+    fill_inspector();
+} end function select
+
+function set_field(const string&: field) -> void {
+    if (filling || selected.empty()) then {
+        return;
+    }
+    string: v = grove::get_by_id(field).value_float().to_string();
+    call("set_transform", selected + "\t" + field + "\t" + v);
+    refresh();
+} end function set_field
+
+function set_component(const string&: field, const string&: value) -> void {
+    if (filling || selected.empty()) then {
+        return;
+    }
+    call("set_component", selected + "\t" + field + "\t" + value);
+    refresh();
+} end function set_component
+
+function open_file(const string&: path) -> void {
+    grove::get_by_id("code-title").set_inner_text(path);
+    grove::get_by_id("code").set_value_string(call("read_file", path));
+    grove::navigate("code-page");
+} end function open_file
+
+function enter_editor() -> void {
+    refresh();
+    build_tree();
+    build_files();
+    fill_inspector();
+    grove::navigate("editor");
+} end function enter_editor
+
+function add_entity(const string&: parent) -> void {
+    string: kind = grove::get_by_id("add-kind").value_string();
+    string: id = call("add_entity", "Entity\t" + parent + "\t" + kind);
+    refresh();
+    select(id);
+} end function add_entity
+
+function save_project() -> void {
+    string: r = call("save", "");
+    if (failed(r)) then {
+        say("Save failed: " + reason(r), true);
+    } else then {
+        say("Saved", false);
+    }
+    refresh();
+} end function save_project
+
+function poll_logs() -> void {
+    auto: rows = call("logs", log_seq).split("\n");
+    if (rows.size() < 1l) then {
+        return;
+    }
+    log_seq = rows[0];
+    for (long int: i = 1l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 2l) then {
+            continue;
+        }
+        say(f[1], f[0] == "!");
+    }
+} end function poll_logs
+
+grove::get_by_id("create").on("click", [](grove::Event&: e) -> void {
+    string: where = grove::get_by_id("new-where").value_string();
+    string: name = grove::get_by_id("new-name").value_string();
+    if (where.empty() || name.empty()) then {
+        grove::get_by_id("welcome-error").set_inner_text("Pick a name and a location first.");
+        show("welcome-error", true);
+        return;
+    }
+    string: dim = grove::get_by_id("new-dim").value_string();
+    string: r = call("new_project", where + "/" + name + "\t" + name + "\t" + dim);
+    if (failed(r)) then {
+        grove::get_by_id("welcome-error").set_inner_text(reason(r));
+        show("welcome-error", true);
+        return;
+    }
+    enter_editor();
+    say("Made " + dim + " project " + name, false);
+});
+
+grove::get_by_id("open-folder").on("change", [](grove::Event&: e) -> void {
+    string: r = call("open_project", e.target().value_string());
+    if (failed(r)) then {
+        grove::get_by_id("welcome-error").set_inner_text(reason(r));
+        show("welcome-error", true);
+        return;
+    }
+    enter_editor();
+});
+
+grove::get_by_id("save").on("click", [](grove::Event&: e) -> void {
+    save_project();
+});
+
+grove::get_by_id("play").on("click", [](grove::Event&: e) -> void {
+    string: r = call("play", "");
+    if (failed(r)) then {
+        say(reason(r), true);
+    }
+    refresh();
+    grove::get_by_id("viewport").focus();
+});
+
+grove::get_by_id("stop").on("click", [](grove::Event&: e) -> void {
+    call("stop", "");
+    refresh();
+    build_tree();
+    fill_inspector();
+});
+
+grove::get_by_id("view-2d").on("click", [](grove::Event&: e) -> void {
+    call("view", "2d");
+    refresh();
+});
+
+grove::get_by_id("view-3d").on("click", [](grove::Event&: e) -> void {
+    call("view", "3d");
+    refresh();
+});
+
+grove::get_by_id("reset-cam").on("click", [](grove::Event&: e) -> void {
+    call("reset_camera", "");
+});
+
+grove::get_by_id("physics-open").on("click", [](grove::Event&: e) -> void {
+    string: r = call("physics_settings", "");
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    auto: f = r.split("\t");
+    grove::Element: fr = grove::get_by_id("friction-mix");
+    grove::Element: bo = grove::get_by_id("bounce-mix");
+    clear(fr);
+    clear(bo);
+    fill_mix_select(fr, false, "");
+    fill_mix_select(bo, false, "");
+    fr.set_value_string(f[0]);
+    bo.set_value_string(f[1]);
+    grove::Element: list = grove::get_by_id("mix-help");
+    clear(list);
+    auto: rows = call("combine_modes", "").split("\n");
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: c = rows[i].split("\t");
+        if (c.size() < 3l || c[0] == "default") then {
+            continue;
+        }
+        grove::Element: line = el("row", "mix-help-row", "");
+        line.append_child(el("text", "mix-help-name", c[1]));
+        line.append_child(el("text", "mix-help-text", c[2]));
+        list.append_child(line);
+    }
+    grove::get_by_id("physics-dialog").open_modal();
+});
+
+grove::get_by_id("friction-mix").on("change", [](grove::Event&: e) -> void {
+    string: r = call("set_physics_setting", "friction\t" + e.target().value_string());
+    if (failed(r)) then {
+        say(reason(r), true);
+    }
+    fill_components();
+});
+
+grove::get_by_id("bounce-mix").on("change", [](grove::Event&: e) -> void {
+    string: r = call("set_physics_setting", "bounce\t" + e.target().value_string());
+    if (failed(r)) then {
+        say(reason(r), true);
+    }
+    fill_components();
+});
+
+grove::get_by_id("axes-open").on("click", [](grove::Event&: e) -> void {
+    string: r = call("axes_dialog", "");
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    show_axes(r);
+    grove::get_by_id("axes-dialog").open_modal();
+});
+
+grove::get_by_id("ax-y-up").on("click", [](grove::Event&: e) -> void { pick_axes("y-up", ""); });
+grove::get_by_id("ax-y-up-left").on("click", [](grove::Event&: e) -> void { pick_axes("y-up-left", ""); });
+grove::get_by_id("ax-z-up").on("click", [](grove::Event&: e) -> void { pick_axes("z-up", ""); });
+grove::get_by_id("ax-z-up-left").on("click", [](grove::Event&: e) -> void { pick_axes("z-up-left", ""); });
+grove::get_by_id("ax-source").on("click", [](grove::Event&: e) -> void { pick_axes("z-up-left", "y"); });
+grove::get_by_id("ax-2d-up").on("click", [](grove::Event&: e) -> void { pick_axes("up", axes_flips); });
+grove::get_by_id("ax-2d-down").on("click", [](grove::Event&: e) -> void { pick_axes("down", axes_flips); });
+grove::get_by_id("ax-flip-x").on("click", [](grove::Event&: e) -> void { toggle_axes_flip("x"); });
+grove::get_by_id("ax-flip-y").on("click", [](grove::Event&: e) -> void { toggle_axes_flip("y"); });
+grove::get_by_id("ax-flip-z").on("click", [](grove::Event&: e) -> void { toggle_axes_flip("z"); });
+
+grove::get_by_id("ax-standard").on("click", [](grove::Event&: e) -> void {
+    if (axes_dim == "2d") then {
+        pick_axes("up", "");
+    } else then {
+        pick_axes("y-up", "");
+    }
+});
+
+grove::Element: axes_canvas = grove::get_by_id("axes-preview");
+
+axes_canvas.on("mouse_down", [](grove::Event&: e) -> void {
+    call("axes_preview_press", e.x().to_string() + "\t" + e.y().to_string());
+});
+
+axes_canvas.on("mouse_move", [](grove::Event&: e) -> void {
+    call("axes_preview_move", e.x().to_string() + "\t" + e.y().to_string());
+});
+
+axes_canvas.on("mouse_up", [](grove::Event&: e) -> void {
+    call("axes_preview_release", "");
+});
+
+axes_canvas.on("double_click", [](grove::Event&: e) -> void {
+    call("axes_preview_reset", "");
+});
+
+grove::get_by_id("axes-apply").on("click", [](grove::Event&: e) -> void {
+    string: keep = "0";
+    if (grove::get_by_id("axes-keep").value_bool()) then {
+        keep = "1";
+    }
+    string: r = call("axes_apply", keep);
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    grove::get_by_id("axes-dialog").close_modal();
+    refresh();
+    fill_inspector();
+});
+
+grove::get_by_id("add-entity").on("click", [](grove::Event&: e) -> void {
+    add_entity("");
+});
+
+grove::get_by_id("add-child").on("click", [](grove::Event&: e) -> void {
+    add_entity(selected);
+});
+
+grove::get_by_id("delete-entity").on("click", [](grove::Event&: e) -> void {
+    call("remove_entity", selected);
+    refresh();
+    build_tree();
+    fill_inspector();
+});
+
+grove::get_by_id("ins-name").on("change", [](grove::Event&: e) -> void {
+    if (filling || selected.empty()) then {
+        return;
+    }
+    call("rename", selected + "\t" + e.target().value_string());
+    refresh();
+    build_tree();
+});
+
+grove::get_by_id("ins-script").on("change", [](grove::Event&: e) -> void {
+    set_component("script", e.target().value_string());
+    build_tree();
+});
+
+grove::get_by_id("new-script").on("change", [](grove::Event&: e) -> void {
+    string: ext = e.target().value_string();
+    if (ext.empty() || selected.empty()) then {
+        return;
+    }
+    e.target().set_value_string("");
+    string: r = call("new_script", selected + "\t" + ext);
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    fill_script_choices(r);
+    set_component("script", r);
+    build_tree();
+    build_files();
+    say("Made " + r, false);
+});
+
+grove::get_by_id("ins-body").on("change", [](grove::Event&: e) -> void {
+    string: v = "0";
+    if (e.target().value_bool()) then {
+        v = "1";
+    }
+    set_component("body", v);
+    fill_components();
+    build_tree();
+});
+
+grove::get_by_id("ins-body-type").on("change", [](grove::Event&: e) -> void {
+    set_component("body_type", e.target().value_string());
+});
+
+grove::get_by_id("ins-body-enabled").on("change", [](grove::Event&: e) -> void {
+    string: v = "0";
+    if (e.target().value_bool()) then {
+        v = "1";
+    }
+    set_component("body_enabled", v);
+});
+
+grove::get_by_id("ins-gravity").on("change", [](grove::Event&: e) -> void {
+    set_component("gravity_scale", e.target().value_float().to_string());
+});
+
+grove::get_by_id("ins-lin-damp").on("change", [](grove::Event&: e) -> void {
+    set_component("linear_damping", e.target().value_float().to_string());
+});
+
+grove::get_by_id("ins-ang-damp").on("change", [](grove::Event&: e) -> void {
+    set_component("angular_damping", e.target().value_float().to_string());
+});
+
+grove::get_by_id("add-collider").on("click", [](grove::Event&: e) -> void {
+    set_component("add_collider", grove::get_by_id("collider-kind").value_string());
+    fill_components();
+    build_tree();
+});
+
+grove::get_by_id("px").on("change", [](grove::Event&: e) -> void { set_field("px"); });
+grove::get_by_id("py").on("change", [](grove::Event&: e) -> void { set_field("py"); });
+grove::get_by_id("pz").on("change", [](grove::Event&: e) -> void { set_field("pz"); });
+grove::get_by_id("rx").on("change", [](grove::Event&: e) -> void { set_field("rx"); });
+grove::get_by_id("ry").on("change", [](grove::Event&: e) -> void { set_field("ry"); });
+grove::get_by_id("rz").on("change", [](grove::Event&: e) -> void { set_field("rz"); });
+grove::get_by_id("sx").on("change", [](grove::Event&: e) -> void { set_field("sx"); });
+grove::get_by_id("sy").on("change", [](grove::Event&: e) -> void { set_field("sy"); });
+grove::get_by_id("sz").on("change", [](grove::Event&: e) -> void { set_field("sz"); });
+
+grove::Element: viewport = grove::get_by_id("viewport");
+
+viewport.on("canvas_resize", [](grove::Event&: e) -> void {
+    call("viewport_resize", e.x().to_string() + "\t" + e.y().to_string());
+});
+
+viewport.on("mouse_down", [](grove::Event&: e) -> void {
+    string: shift = "0";
+    if (e.shift()) then {
+        shift = "1";
+    }
+    call("viewport_press", e.x().to_string() + "\t" + e.y().to_string() + "\t" + e.button().to_string() + "\t" + shift);
+});
+
+viewport.on("mouse_move", [](grove::Event&: e) -> void {
+    call("viewport_move", e.x().to_string() + "\t" + e.y().to_string());
+});
+
+viewport.on("mouse_up", [](grove::Event&: e) -> void {
+    string: r = call("viewport_release", e.x().to_string() + "\t" + e.y().to_string());
+    if (r.starts_with("pick")) then {
+        select(reason(r));
+    }
+});
+
+viewport.on("wheel", [](grove::Event&: e) -> void {
+    e.prevent_default();
+    call("viewport_zoom", e.delta_y().to_string());
+});
+
+viewport.on("key_down", [](grove::Event&: e) -> void {
+    if (mode == "playing") then {
+        e.prevent_default();
+        call("key", e.key() + "\t1");
+    }
+});
+
+viewport.on("key_up", [](grove::Event&: e) -> void {
+    if (mode == "playing") then {
+        call("key", e.key() + "\t0");
+    }
+});
+
+grove::get_by_id("app").on("key_down", [](grove::Event&: e) -> void {
+    if (e.ctrl() && e.key() == "S") then {
+        e.prevent_default();
+        save_project();
+    }
+});
+
+grove::set_interval(200.0, []() -> void {
+    poll_logs();
+    if (mode != "edit") then {
+        string: before = mode;
+        refresh();
+        if (mode == "playing") then {
+            fill_transform();
+        }
+        if (before == "building" && mode == "playing") then {
+            build_tree();
+        }
+    }
+});
+
+if (call("state", "").starts_with("1")) then {
+    enter_editor();
+}

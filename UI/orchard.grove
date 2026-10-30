@@ -1,0 +1,247 @@
+<!grove max-fps=120 idle-fps=5>
+<grove>
+    <head>
+        <title>Orchard</title>
+        <style src="orchard.bark"></style>
+        <script lang="walnut" src="orchard.wal"></script>
+    </head>
+    <body id="app" title="Orchard" app-id="orchard">
+        <page id="welcome" current>
+            <center>
+                <column class="welcome">
+                    <div class="logo">&#127823; Orchard</div>
+                    <div class="muted">A light, fast 2D and 3D game engine</div>
+                    <column class="card">
+                        <div class="card-title">NEW PROJECT</div>
+                        <row class="kv">
+                            <text class="k">Name</text>
+                            <input_string id="new-name" class="v" value="My Game" />
+                        </row>
+                        <row class="kv">
+                            <text class="k">Kind</text>
+                            <input_select id="new-dim" value="3d">
+                                <option value="3d">3D</option>
+                                <option value="2d">2D</option>
+                            </input_select>
+                        </row>
+                        <row class="kv">
+                            <text class="k">Location</text>
+                            <input_file id="new-where" mode="folder" placeholder="Pick a folder">Choose...</input_file>
+                        </row>
+                        <row class="actions">
+                            <button id="create" class="primary">Create project</button>
+                        </row>
+                    </column>
+                    <column class="card">
+                        <div class="card-title">OPEN</div>
+                        <input_file id="open-folder" mode="folder" hide-value>Open project folder...</input_file>
+                    </column>
+                    <div id="welcome-error" class="error hidden"></div>
+                </column>
+            </center>
+        </page>
+
+        <page id="editor">
+            <row class="appbar">
+                <text class="brand">&#127823; Orchard</text>
+                <text id="project-name" class="project"></text>
+                <text id="dirty" class="dirty hidden">&#9679;</text>
+                <button id="save" class="ghost">Save</button>
+                <div class="sep"></div>
+                <button id="view-2d" class="seg">2D</button>
+                <button id="view-3d" class="seg">3D</button>
+                <button id="reset-cam" class="ghost">Reset view</button>
+                <button id="axes-open" class="ghost axes-open" title="Pick which way is up, flip axes and see what it looks like">Axes: y-up</button>
+                <button id="physics-open" class="ghost" title="How friction and bounce mix when two colliders touch">Physics</button>
+                <div class="grow"></div>
+                <text id="mode" class="mode muted"></text>
+                <button id="play" class="primary">&#9654; Play</button>
+                <button id="stop" class="danger hidden">&#9632; Stop</button>
+                <text id="version" class="muted version"></text>
+            </row>
+
+            <row class="workspace">
+                <column class="side left">
+                    <row class="side-head">
+                        <div class="card-title grow">SCENE</div>
+                        <input_select id="add-kind" value="box" class="add-kind">
+                            <option value="">Empty</option>
+                            <option value="box">Physics box</option>
+                            <option value="ball">Physics ball</option>
+                            <option value="ground">Ground</option>
+                            <option value="trigger">Trigger zone</option>
+                        </input_select>
+                        <button id="add-entity" class="small">+ Add</button>
+                    </row>
+                    <column id="tree" class="scroll tree"></column>
+                </column>
+
+                <column class="center">
+                    <gpu_canvas id="viewport" tabindex="0"></gpu_canvas>
+                    <text class="hint overlay">Left drag: orbit (3D) or pan (2D) &#183; Right drag or Shift: pan &#183; Wheel: zoom &#183; Click: select &#183; Keys go to scripts while playing</text>
+                </column>
+
+                <column class="side right">
+                    <div class="card-title">INSPECTOR</div>
+                    <column id="inspector" class="scroll inspector hidden">
+                        <input_string id="ins-name" />
+                        <div class="sub-title">Position</div>
+                        <row class="xyz">
+                            <input_float id="px" step="0.1" /><input_float id="py" step="0.1" /><input_float id="pz" step="0.1" />
+                        </row>
+                        <div class="sub-title">Rotation</div>
+                        <row class="xyz">
+                            <input_float id="rx" step="1" /><input_float id="ry" step="1" /><input_float id="rz" step="1" />
+                        </row>
+                        <div class="sub-title">Scale</div>
+                        <row class="xyz">
+                            <input_float id="sx" step="0.1" /><input_float id="sy" step="0.1" /><input_float id="sz" step="0.1" />
+                        </row>
+                        <div class="sub-title">Script</div>
+                        <input_select id="ins-script" value="" placeholder="No script">
+                            <option value="">No script</option>
+                        </input_select>
+                        <input_select id="new-script" value="" placeholder="New script...">
+                            <option value="">New script...</option>
+                            <option value=".wal">Walnut</option>
+                            <option value=".cpp">C++</option>
+                            <option value=".c">C</option>
+                            <option value=".cs">C#</option>
+                            <option value=".java">Java</option>
+                            <option value=".lua">Lua</option>
+                        </input_select>
+                        <hr />
+                        <div class="section-title">PHYSICS</div>
+                        <text id="ins-owner" class="muted hidden"></text>
+                        <row class="kv">
+                            <text class="k">Body</text>
+                            <input_bool id="ins-body" />
+                        </row>
+                        <column id="body-box" class="body-box hidden">
+                            <row class="kv">
+                                <text class="k">Type</text>
+                                <input_select id="ins-body-type" value="dynamic">
+                                    <option value="dynamic">Dynamic</option>
+                                    <option value="static">Static</option>
+                                    <option value="kinematic">Kinematic</option>
+                                </input_select>
+                            </row>
+                            <row class="kv">
+                                <text class="k">Enabled</text>
+                                <input_bool id="ins-body-enabled" />
+                            </row>
+                            <row class="kv">
+                                <text class="k">Gravity scale</text>
+                                <input_float id="ins-gravity" step="0.1" class="v" />
+                            </row>
+                            <row class="kv">
+                                <text class="k">Drag</text>
+                                <input_float id="ins-lin-damp" step="0.05" class="v" />
+                            </row>
+                            <row class="kv">
+                                <text class="k">Spin drag</text>
+                                <input_float id="ins-ang-damp" step="0.05" class="v" />
+                            </row>
+                            <column id="flags" class="flags"></column>
+                        </column>
+                        <row class="side-head">
+                            <div class="sub-title grow">Colliders</div>
+                            <input_select id="collider-kind" value="box" class="add-kind">
+                                <option value="box">Box</option>
+                                <option value="sphere">Sphere</option>
+                                <option value="capsule">Capsule</option>
+                            </input_select>
+                            <button id="add-collider" class="small">+ Collider</button>
+                        </row>
+                        <column id="colliders" class="colliders"></column>
+                        <row class="actions">
+                            <button id="add-child" class="ghost">Add child</button>
+                            <button id="delete-entity" class="danger">Delete</button>
+                        </row>
+                    </column>
+                    <text id="inspector-empty" class="muted">Select something in the scene.</text>
+                </column>
+            </row>
+
+            <column class="bottom">
+                <row class="tabs">
+                    <button class="tab" to="files-page">Files</button>
+                    <button class="tab" to="code-page">Script</button>
+                    <button class="tab" to="console-page">Console</button>
+                    <div id="code-title" class="muted code-title">Pick a script or graph in Files. Graphs show the Walnut they turn into.</div>
+                </row>
+                <page id="files-page" current>
+                    <column id="files" class="scroll files"></column>
+                </page>
+                <page id="code-page">
+                    <input_code id="code" language="walnut" class="code" readonly></input_code>
+                </page>
+                <page id="console-page">
+                    <column id="console" class="scroll console"></column>
+                </page>
+            </column>
+        </page>
+        <modal id="physics-dialog" class="physics-modal">
+            <column class="physics-dialog">
+                <text class="section-title">PHYSICS</text>
+                <div class="muted">When two colliders touch, their friction and bounce are mixed into one value. These are the project's defaults; each collider can pick its own in the inspector. When two colliders pick different mixes, the one further down the list wins, the same rule Unity, Unreal and PhysX use.</div>
+                <row class="kv">
+                    <text class="k">Friction mix</text>
+                    <input_select id="friction-mix" class="v" value="geometric-mean"></input_select>
+                </row>
+                <row class="kv">
+                    <text class="k">Bounce mix</text>
+                    <input_select id="bounce-mix" class="v" value="maximum"></input_select>
+                </row>
+                <column id="mix-help" class="mix-help"></column>
+                <row class="axes-actions">
+                    <div class="grow"></div>
+                    <button to="close" class="primary">Done</button>
+                </row>
+            </column>
+        </modal>
+
+        <modal id="axes-dialog" class="axes-modal">
+            <column class="axes-dialog">
+                <row class="axes-head">
+                    <text class="section-title">AXES</text>
+                    <text id="axes-name" class="axes-name"></text>
+                    <div class="grow"></div>
+                    <text id="axes-hint" class="muted">Drag the preview to look around, double-click to reset</text>
+                </row>
+                <row class="axes-body">
+                    <column class="axes-side">
+                        <div class="sub-title">START FROM</div>
+                        <column id="axes-styles-3d" class="axes-styles">
+                            <column id="ax-y-up" class="axes-style" tabindex="0"><div class="axes-style-name">Y up</div><div class="axes-style-like">Godot, OpenGL, Maya, Fizmo</div></column>
+                            <column id="ax-y-up-left" class="axes-style" tabindex="0"><div class="axes-style-name">Y up, left-handed</div><div class="axes-style-like">Unity, DirectX</div></column>
+                            <column id="ax-z-up" class="axes-style" tabindex="0"><div class="axes-style-name">Z up</div><div class="axes-style-like">Blender, 3ds Max</div></column>
+                            <column id="ax-z-up-left" class="axes-style" tabindex="0"><div class="axes-style-name">Z up, left-handed</div><div class="axes-style-like">Unreal</div></column>
+                            <column id="ax-source" class="axes-style" tabindex="0"><div class="axes-style-name">Z up, X forward</div><div class="axes-style-like">Source</div></column>
+                        </column>
+                        <column id="axes-styles-2d" class="axes-styles hidden">
+                            <column id="ax-2d-up" class="axes-style" tabindex="0"><div class="axes-style-name">Y up</div><div class="axes-style-like">math, Box2D, Unity 2D</div></column>
+                            <column id="ax-2d-down" class="axes-style" tabindex="0"><div class="axes-style-name">Y down</div><div class="axes-style-like">screens, Godot 2D, GameMaker</div></column>
+                        </column>
+                        <div class="sub-title">FLIP</div>
+                        <row class="axes-flips">
+                            <button id="ax-flip-x" class="seg axes-flip">X</button>
+                            <button id="ax-flip-y" class="seg axes-flip">Y</button>
+                            <button id="ax-flip-z" class="seg axes-flip">Z</button>
+                            <div class="grow"></div>
+                            <button id="ax-standard" class="ghost small">Standard</button>
+                        </row>
+                        <column id="axes-facts" class="axes-facts"></column>
+                    </column>
+                    <gpu_canvas id="axes-preview" class="axes-preview"></gpu_canvas>
+                </row>
+                <row class="axes-actions">
+                    <input_bool id="axes-keep" class="axes-keep" switch checked>Keep my scenes looking the same (convert positions and rotations)</input_bool>
+                    <div class="grow"></div>
+                    <button to="close" class="ghost">Cancel</button>
+                    <button id="axes-apply" class="primary">Apply</button>
+                </row>
+            </column>
+        </modal>
+    </body>
+</grove>
