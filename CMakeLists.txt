@@ -11,9 +11,9 @@ option(ORCHARD_BUILD_EDITOR "Build the Orchard editor (fetches Fizmo, Grove and 
 option(ORCHARD_BUILD_TESTS "Build the Orchard tests" ON)
 option(ORCHARD_BUILD_XYLEM "Build Xylem, Orchard's physics (fetches Fizmo)" ON)
 option(ORCHARD_BUNDLE "Run orchard-host --bundle as part of the build to make orchard with its window built in (turn off when cross-compiling)" ON)
-set(ORCHARD_FIZMO_TAG "v0.3.9" CACHE STRING "Fizmo git tag to fetch")
+set(ORCHARD_FIZMO_TAG "v0.3.10" CACHE STRING "Fizmo git tag to fetch")
 set(ORCHARD_GROVE_TAG "v0.2.10" CACHE STRING "Grove git tag to fetch")
-set(ORCHARD_WALNUT_TAG "v0.2.10" CACHE STRING "Walnut git tag Grove fetches")
+set(ORCHARD_WALNUT_TAG "v0.2.11" CACHE STRING "Walnut git tag Grove fetches")
 
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
