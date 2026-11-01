@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(orchard VERSION 0.1.1 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
+project(orchard VERSION 0.1.2 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
