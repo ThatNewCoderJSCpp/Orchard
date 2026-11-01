@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(orchard VERSION 0.1.2 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
+project(orchard VERSION 0.1.3 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -11,9 +11,22 @@ option(ORCHARD_BUILD_EDITOR "Build the Orchard editor (fetches Fizmo, Grove and 
 option(ORCHARD_BUILD_TESTS "Build the Orchard tests" ON)
 option(ORCHARD_BUILD_XYLEM "Build Xylem, Orchard's physics (fetches Fizmo)" ON)
 option(ORCHARD_BUNDLE "Run orchard-host --bundle as part of the build to make orchard with its window built in (turn off when cross-compiling)" ON)
+option(ORCHARD_PACKAGE "Link orchard so it runs on machines without the build's C++ runtime, for release downloads" OFF)
 set(ORCHARD_FIZMO_TAG "v0.3.10" CACHE STRING "Fizmo git tag to fetch")
 set(ORCHARD_GROVE_TAG "v0.2.10" CACHE STRING "Grove git tag to fetch")
 set(ORCHARD_WALNUT_TAG "v0.2.11" CACHE STRING "Walnut git tag Grove fetches")
+set(ORCHARD_ANDROID_LIBS_DIR "${CMAKE_BINARY_DIR}/android-libs" CACHE PATH "Where the Android build puts <abi>/liborchard_android.so for grove build --runtime-lib")
+
+if(ANDROID)
+    set(ORCHARD_BUNDLE OFF CACHE BOOL "" FORCE)
+    set(ORCHARD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(ORCHARD_WITH_JAVA OFF CACHE BOOL "" FORCE)
+    set(ORCHARD_PACKAGE OFF CACHE BOOL "" FORCE)
+endif()
+
+if(WIN32)
+    enable_language(RC)
+endif()
 
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -112,7 +125,11 @@ FetchContent_Declare(fizmo
 if(ORCHARD_BUILD_EDITOR)
     set(GROVE_BUILD_RUNTIME ON CACHE BOOL "" FORCE)
     set(GROVE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(GROVE_WITH_WALNUT ON CACHE BOOL "" FORCE)
+    if(ANDROID)
+        set(GROVE_WITH_WALNUT OFF CACHE BOOL "" FORCE)
+    else()
+        set(GROVE_WITH_WALNUT ON CACHE BOOL "" FORCE)
+    endif()
     set(GROVE_WALNUT_TAG ${ORCHARD_WALNUT_TAG} CACHE STRING "" FORCE)
     set(GROVE_FIZMO_TAG ${ORCHARD_FIZMO_TAG} CACHE STRING "" FORCE)
     FetchContent_Declare(grove
@@ -147,12 +164,39 @@ if(NOT ORCHARD_BUILD_EDITOR)
     return()
 endif()
 
+if(ANDROID)
+    add_library(orchard_android SHARED Editor/orchard.cpp Editor/gpu_view.cpp Editor/axes_preview.cpp)
+    target_link_libraries(orchard_android PRIVATE orchard_heartwood orchard_xylem grove::core grove::runtime)
+    target_link_options(orchard_android PRIVATE
+        "LINKER:-z,max-page-size=16384"
+        "LINKER:-u,ANativeActivity_onCreate"
+        "LINKER:--gc-sections"
+        "$<$<NOT:$<CONFIG:Debug>>:LINKER:--strip-debug>"
+        "LINKER:--version-script=${grove_SOURCE_DIR}/cmake/android_exports.map")
+    set_property(TARGET orchard_android APPEND PROPERTY LINK_DEPENDS "${grove_SOURCE_DIR}/cmake/android_exports.map")
+    set_target_properties(orchard_android PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${ORCHARD_ANDROID_LIBS_DIR}/${ANDROID_ABI}")
+    orchard_warnings(orchard_android)
+    return()
+endif()
+
 add_executable(orchard-host Editor/orchard.cpp Editor/gpu_view.cpp Editor/axes_preview.cpp)
 target_link_libraries(orchard-host PRIVATE orchard_heartwood orchard_xylem grove::core grove::runtime)
 target_compile_definitions(orchard-host PRIVATE "ORCHARD_SOURCE_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/UI\"")
 orchard_warnings(orchard-host)
 if(WIN32)
     set_target_properties(orchard-host PROPERTIES WIN32_EXECUTABLE $<CONFIG:Release>)
+    set(ORCHARD_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/windows/orchard.ico")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Packaging/windows/orchard.rc.in" "${CMAKE_BINARY_DIR}/generated/orchard.rc" @ONLY)
+    target_sources(orchard-host PRIVATE "${CMAKE_BINARY_DIR}/generated/orchard.rc")
+endif()
+if(ORCHARD_PACKAGE)
+    if(MSVC)
+        message(FATAL_ERROR "ORCHARD_PACKAGE needs a GCC or Clang toolchain")
+    elseif(MINGW)
+        target_link_options(orchard-host PRIVATE -static)
+    elseif(NOT APPLE)
+        target_link_options(orchard-host PRIVATE -static-libstdc++ -static-libgcc)
+    endif()
 endif()
 
 add_custom_command(TARGET orchard-host POST_BUILD

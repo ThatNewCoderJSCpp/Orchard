@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-orchard-project">
+    <comment>Orchard project</comment>
+    <sub-class-of type="text/plain"/>
+    <icon name="application-x-orchard-project"/>
+    <glob pattern="project.orchard" weight="80"/>
+    <glob pattern="*.orchard"/>
+  </mime-type>
+</mime-info>

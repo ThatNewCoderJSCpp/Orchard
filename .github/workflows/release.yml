@@ -1,0 +1,736 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  LLVM_MINGW_VERSION: "20261020"
+  LLVM_MINGW: llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  version:
+    name: Check the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      walnut: ${{ steps.read.outputs.walnut }}
+      walnut_base: ${{ steps.read.outputs.walnut_base }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the versions
+        id: read
+        shell: bash
+        run: |
+          version=$(sed -n 's/^project(orchard VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -n 1)
+          walnut=$(sed -n 's/^set(ORCHARD_WALNUT_TAG "v\([0-9][0-9.]*\)".*/\1/p' CMakeLists.txt | head -n 1)
+          if [ -z "$version" ] || [ -z "$walnut" ]; then
+            echo "::error::couldn't read the version or ORCHARD_WALNUT_TAG from CMakeLists.txt"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "walnut=$walnut" >> "$GITHUB_OUTPUT"
+          echo "walnut_base=https://github.com/ThatNewCoderJSCpp/Walnut/releases/download/v$walnut/Walnut-$walnut" >> "$GITHUB_OUTPUT"
+
+      - name: Check the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          if [ "v${{ steps.read.outputs.version }}" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::CMakeLists.txt says VERSION ${{ steps.read.outputs.version }} but the tag is $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: Wait for the Walnut release Orchard bundles
+        shell: bash
+        run: |
+          walnut=${{ steps.read.outputs.walnut }}
+          base=${{ steps.read.outputs.walnut_base }}
+          files="linux-x86_64.tar.gz linux-arm64.tar.gz linux-i686.tar.gz macos-arm64.tar.gz macos-x86_64.tar.gz windows-ucrt64.zip windows-ucrt64-with-compiler.zip windows-i686.zip windows-i686-with-compiler.zip windows-clangarm64.zip windows-clangarm64-with-compiler.zip"
+          for attempt in $(seq 1 60); do
+            missing=""
+            for f in $files; do
+              curl -sfIL -o /dev/null "$base-$f" || missing="$missing Walnut-$walnut-$f"
+            done
+            if [ -z "$missing" ]; then
+              echo "Walnut $walnut's release has every package"
+              exit 0
+            fi
+            echo "Walnut $walnut's release doesn't have$missing yet (check $attempt of 60); its release workflow is probably still running, so waiting a minute"
+            sleep 60
+          done
+          echo "::error::Walnut $walnut's release still doesn't have$missing after an hour. Check that Walnut's v$walnut release workflow finished, or change ORCHARD_WALNUT_TAG in CMakeLists.txt"
+          exit 1
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config xvfb rpm dpkg-dev file desktop-file-utils \
+            libx11-dev libxft-dev libxrender-dev libfontconfig1-dev libfreetype-dev \
+            libssl-dev libpango1.0-dev libcairo2-dev zlib1g-dev libjpeg-dev \
+            libvulkan-dev libgl-dev
+
+      - name: Configure
+        run: |
+          lib=/usr/lib/$(gcc -print-multiarch)
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DORCHARD_PACKAGE=ON -DFIZMO_TUNE=OFF \
+            -DJPEG_LIBRARY=$lib/libjpeg.a -DJPEG_LIBRARY_RELEASE=$lib/libjpeg.a \
+            -DZLIB_LIBRARY=$lib/libz.a -DZLIB_LIBRARY_RELEASE=$lib/libz.a
+
+      - name: Build
+        timeout-minutes: 120
+        run: cmake --build build -j 4
+
+      - name: Test
+        working-directory: build
+        env:
+          ORCHARD_TEST_WALNUT: ${{ github.workspace }}/build/bin/walnut
+        run: ctest --output-on-failure
+
+      - name: Check orchard only needs common system libraries
+        run: |
+          readelf -d build/bin/orchard | grep NEEDED
+          if readelf -d build/bin/orchard | grep NEEDED | grep -E "libjpeg|libz\.|libstdc\+\+|libgcc_s"; then
+            echo "::error::orchard links to a library users may not have"
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          curl -fL --retry 5 --retry-delay 10 -o walnut.tar.gz "${{ needs.version.outputs.walnut_base }}-linux-${{ matrix.arch }}.tar.gz"
+          bash .github/scripts/stage.sh walnut.tar.gz build/bin/orchard . stage
+          cmake -S Packaging -B pkg -DORCHARD_STAGE="$PWD/stage" -DORCHARD_VERSION=${{ needs.version.outputs.version }} \
+            -DORCHARD_PLATFORM=linux-${{ matrix.arch }} "-DORCHARD_GENERATORS=TGZ;TXZ;ZIP;DEB;RPM"
+          (cd pkg && cpack)
+
+      - name: Make Orchard.app and the disk image
+        run: bash .github/scripts/macos-app.sh stage . ${{ needs.version.outputs.version }} pkg macos-${{ matrix.arch }}
+
+      - name: Test the archive
+        run: |
+          mv build "$RUNNER_TEMP/build-done"
+          mkdir -p smoke
+          tar -xzf pkg/Orchard-*.tar.gz -C smoke
+          app=$(ls -d "$PWD"/smoke/Orchard-*)
+          cd "$RUNNER_TEMP"
+          "$app/bin/orchard" --version
+          "$app/bin/orchard" --check | tee check.txt
+          grep "built-in window ok, 1 compiled script" check.txt
+          "$app/bin/orchard" --new smoke-project --2d --name Smoke
+          "$app/bin/orchard" --graph smoke-project/Graphs/spin.graph
+          "$app/bin/orchard" --simulate smoke-project 1
+          timeout 20 xvfb-run -a "$app/bin/orchard" smoke-project > run.log 2>&1 || status=$?
+          cat run.log
+          if [ "${status:-0}" != "124" ]; then
+            echo "::error::orchard should keep its window open until it's closed (exit status ${status:-0})"
+            exit 1
+          fi
+
+      - name: Test the .deb
+        run: |
+          sudo apt-get install -y ./pkg/Orchard-*.deb
+          test -L /usr/bin/orchard
+          desktop-file-validate /usr/share/applications/orchard.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/orchard.svg
+          test -f /usr/share/icons/hicolor/scalable/mimetypes/application-x-orchard-project.svg
+          test -f /usr/share/mime/packages/orchard.xml
+          grep -q "application/x-orchard-project" /usr/share/mime/globs2
+          orchard --version
+          orchard --check | grep "built-in window ok, 1 compiled script"
+          orchard --new "$RUNNER_TEMP/mime-project" --2d --name Mime
+          if command -v gio > /dev/null; then
+            gio info -a standard::content-type "$RUNNER_TEMP/mime-project/project.orchard" | tee mime.txt
+            grep -q "application/x-orchard-project" mime.txt
+          else
+            echo "::warning::gio isn't installed, so the project.orchard file type wasn't checked"
+          fi
+          sudo apt-get remove -y orchard
+          test ! -e /usr/bin/orchard
+          test ! -e /usr/share/applications/orchard.desktop
+          test ! -e /usr/share/mime/packages/orchard.xml
+          ! grep -q "application/x-orchard-project" /usr/share/mime/globs2
+
+      - name: Check the .rpm
+        run: |
+          rpm -qpi pkg/Orchard-*.rpm
+          rpm -qpl pkg/Orchard-*.rpm | grep -x /opt/orchard/bin/orchard
+          rpm -qpl pkg/Orchard-*.rpm | grep -x /opt/orchard/bin/walnut
+          rpm -qpl pkg/Orchard-*.rpm | grep -x /opt/orchard/share/orchard/orchard-mime.xml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orchard-linux-${{ matrix.arch }}
+          path: |
+            pkg/Orchard-*.tar.gz
+            pkg/Orchard-*.tar.xz
+            pkg/Orchard-*.zip
+            pkg/Orchard-*.deb
+            pkg/Orchard-*.rpm
+          compression-level: 0
+          if-no-files-found: error
+
+  linux-i686:
+    name: Linux i686
+    needs: version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build, test and package in a 32-bit container
+        env:
+          ORCHARD_VERSION: ${{ needs.version.outputs.version }}
+          WALNUT_URL: ${{ needs.version.outputs.walnut_base }}-linux-i686.tar.gz
+        run: |
+          docker run --rm --platform linux/386 -e ORCHARD_VERSION -e WALNUT_URL -v "$PWD:/src" -w /src i386/debian:bookworm bash -euo pipefail -c '
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates curl git g++ cmake ninja-build pkg-config file rpm dpkg-dev binutils unzip zip xz-utils \
+              libx11-dev libxft-dev libxrender-dev libfontconfig-dev libfreetype-dev \
+              libssl-dev libpango1.0-dev libcairo2-dev zlib1g-dev libjpeg-dev \
+              libvulkan-dev libgl-dev
+            lib=/usr/lib/$(gcc -print-multiarch)
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DORCHARD_PACKAGE=ON -DORCHARD_WITH_JAVA=OFF -DFIZMO_TUNE=OFF \
+              -DJPEG_LIBRARY=$lib/libjpeg.a -DJPEG_LIBRARY_RELEASE=$lib/libjpeg.a \
+              -DZLIB_LIBRARY=$lib/libz.a -DZLIB_LIBRARY_RELEASE=$lib/libz.a
+            cmake --build build -j 4
+            (cd build && ORCHARD_TEST_WALNUT=/src/build/bin/walnut ctest --output-on-failure)
+            readelf -d build/bin/orchard | grep NEEDED
+            if readelf -d build/bin/orchard | grep NEEDED | grep -E "libjpeg|libz\.|libstdc\+\+|libgcc_s"; then
+              echo "::error::orchard links to a library users may not have"
+              exit 1
+            fi
+            curl -fL --retry 5 --retry-delay 10 -o walnut.tar.gz "$WALNUT_URL"
+            bash .github/scripts/stage.sh walnut.tar.gz build/bin/orchard . stage
+            cmake -S Packaging -B pkg -DORCHARD_STAGE=/src/stage -DORCHARD_VERSION=$ORCHARD_VERSION \
+              -DORCHARD_PLATFORM=linux-i686 "-DORCHARD_GENERATORS=TGZ;TXZ;ZIP;DEB;RPM"
+            (cd pkg && cpack)
+            mv build /tmp/build-done
+            mkdir -p smoke
+            tar -xzf pkg/Orchard-*.tar.gz -C smoke
+            app=$(ls -d /src/smoke/Orchard-*)
+            cd /tmp
+            "$app/bin/orchard" --version
+            "$app/bin/orchard" --check | grep "built-in window ok, 1 compiled script"
+            "$app/bin/orchard" --new smoke-project --2d --name Smoke
+            "$app/bin/orchard" --simulate smoke-project 1
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orchard-linux-i686
+          path: |
+            pkg/Orchard-*.tar.gz
+            pkg/Orchard-*.tar.xz
+            pkg/Orchard-*.zip
+            pkg/Orchard-*.deb
+            pkg/Orchard-*.rpm
+          compression-level: 0
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x86_64
+            runner: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        if: matrix.arch == 'arm64'
+        run: |
+          brew update
+          brew install ninja pkg-config fontconfig freetype harfbuzz pango cairo openssl@3 jpeg-turbo zlib vulkan-headers dylibbundler
+          echo "FIZMO_VULKAN_INC=$(brew --prefix vulkan-headers)/include" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (Intel)
+        if: matrix.arch == 'x86_64'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_UPGRADE: 1
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+        run: |
+          brew list --versions ninja pkgconf fontconfig freetype harfbuzz openssl@3 jpeg-turbo
+          brew install pango cairo dylibbundler
+          git clone --depth 1 --branch v1.4.363 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vulkan-headers"
+          echo "FIZMO_VULKAN_INC=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: |
+          prefix=$(brew --prefix)
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DORCHARD_PACKAGE=ON -DORCHARD_BUNDLE=OFF -DFIZMO_TUNE=OFF \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DFIZMO_VULKAN_INCLUDE_DIR="$FIZMO_VULKAN_INC" \
+            -DCMAKE_PREFIX_PATH="$prefix;$(brew --prefix jpeg-turbo);$(brew --prefix zlib)"
+
+      - name: Build
+        timeout-minutes: 120
+        run: cmake --build build -j 4
+
+      - name: Test
+        working-directory: build
+        env:
+          ORCHARD_TEST_WALNUT: ${{ github.workspace }}/build/bin/walnut
+        run: ctest --output-on-failure
+
+      - name: Copy the Homebrew libraries orchard needs next to it
+        run: |
+          dylibbundler -od -b -x build/bin/orchard-host -d macos-lib -p @executable_path/../lib/
+          codesign --force --sign - build/bin/orchard-host
+          for l in macos-lib/*.dylib; do codesign --force --sign - "$l"; done
+          otool -L build/bin/orchard-host
+          if otool -L build/bin/orchard-host | tail -n +2 | grep -vE "^[[:space:]]+(/usr/lib/|/System/Library/|@executable_path/)"; then
+            echo "::error::orchard links to a library users may not have"
+            exit 1
+          fi
+
+      - name: Build orchard with its window built in
+        run: ORCHARD_UI_DIR="$PWD/UI" build/bin/orchard-host --bundle "$PWD/build/bin/orchard"
+
+      - name: Package
+        run: |
+          curl -fL --retry 5 --retry-delay 10 -o walnut.tar.gz "${{ needs.version.outputs.walnut_base }}-macos-${{ matrix.arch }}.tar.gz"
+          bash .github/scripts/stage.sh walnut.tar.gz build/bin/orchard . stage macos-lib
+          cmake -S Packaging -B pkg -DORCHARD_STAGE="$PWD/stage" -DORCHARD_VERSION=${{ needs.version.outputs.version }} \
+            -DORCHARD_PLATFORM=macos-${{ matrix.arch }} "-DORCHARD_GENERATORS=TGZ;ZIP"
+          (cd pkg && cpack)
+
+      - name: Test the archive
+        run: |
+          mv build "$RUNNER_TEMP/build-done"
+          mkdir -p smoke
+          tar -xzf pkg/Orchard-*.tar.gz -C smoke
+          app=$(ls -d "$PWD"/smoke/Orchard-*)
+          cd "$RUNNER_TEMP"
+          "$app/bin/orchard" --version
+          "$app/bin/orchard" --check | tee check.txt
+          grep "built-in window ok, 1 compiled script" check.txt
+          "$app/bin/orchard" --new smoke-project --2d --name Smoke
+          "$app/bin/orchard" --simulate smoke-project 1
+
+      - name: Test the disk image
+        run: |
+          dmg=$(ls "$PWD"/pkg/Orchard-*.dmg)
+          mount="$RUNNER_TEMP/orchard-dmg"
+          mkdir -p "$mount"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
+          trap 'hdiutil detach "$mount" -force || true' EXIT
+          test -L "$mount/Applications"
+          app="$mount/Orchard.app"
+          plutil -lint "$app/Contents/Info.plist"
+          test -f "$app/Contents/Resources/orchard.icns"
+          codesign --verify --verbose "$app" || echo "::warning::Orchard.app's ad-hoc signature doesn't verify"
+          cp -R "$app" "$RUNNER_TEMP/Orchard.app"
+          cd "$RUNNER_TEMP"
+          ./Orchard.app/Contents/MacOS/orchard --version
+          ./Orchard.app/Contents/MacOS/orchard --check | tee app-check.txt
+          grep "built-in window ok, 1 compiled script" app-check.txt
+          ./Orchard.app/Contents/MacOS/orchard --new app-project --2d --name AppSmoke
+          ./Orchard.app/Contents/MacOS/orchard --simulate app-project 1
+          ./Orchard.app/Contents/MacOS/orchard app-project/project.orchard &
+          pid=$!
+          sleep 15
+          if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid" || true
+            echo "::warning::Orchard.app closed by itself; the runner may have no screen for it"
+          else
+            kill "$pid"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orchard-macos-${{ matrix.arch }}
+          path: |
+            pkg/Orchard-*.tar.gz
+            pkg/Orchard-*.zip
+            pkg/Orchard-*.dmg
+          compression-level: 0
+          if-no-files-found: error
+
+  windows-build:
+    name: Build for Windows ${{ matrix.platform }}
+    needs: version
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-w64-mingw32
+            platform: windows-ucrt64
+            wine: true
+          - target: i686-w64-mingw32
+            platform: windows-i686
+            wine: false
+          - target: aarch64-w64-mingw32
+            platform: windows-clangarm64
+            wine: false
+    env:
+      LLVM_MINGW_TARGET: ${{ matrix.target }}
+      LLVM_MINGW_DEPS: ${{ github.workspace }}/windows-deps
+      WINEDEBUG: -all
+      WINEPREFIX: ${{ github.workspace }}/.wineprefix
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          if [ "${{ matrix.wine }}" = "true" ]; then sudo apt-get install -y wine64; fi
+
+      - name: Cache llvm-mingw
+        id: llvm-mingw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/llvm-mingw
+          key: ${{ env.LLVM_MINGW }}
+
+      - name: Download llvm-mingw
+        if: steps.llvm-mingw-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fL --retry 5 --retry-delay 10 -o /tmp/llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_VERSION/$LLVM_MINGW.tar.xz"
+          mkdir -p ~/llvm-mingw
+          tar -xf /tmp/llvm-mingw.tar.xz -C ~/llvm-mingw --strip-components=1
+
+      - name: Put llvm-mingw on the PATH
+        run: echo "$HOME/llvm-mingw/bin" >> "$GITHUB_PATH"
+
+      - name: Cache the Windows libraries
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: windows-deps
+          key: windows-deps-${{ matrix.target }}-${{ env.LLVM_MINGW }}-${{ hashFiles('.github/scripts/windows-deps.sh', 'cmake/llvm-mingw.cmake') }}
+
+      - name: Build zlib, libjpeg-turbo and the Vulkan headers
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: bash .github/scripts/windows-deps.sh "$LLVM_MINGW_TARGET" "$LLVM_MINGW_DEPS" "$RUNNER_TEMP/windows-deps-src"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake \
+            -DORCHARD_PACKAGE=ON -DORCHARD_BUNDLE=OFF -DORCHARD_WITH_JAVA=OFF -DFIZMO_TUNE=OFF \
+            -DJPEG_LIBRARY="$LLVM_MINGW_DEPS/lib/libjpeg.a" -DJPEG_INCLUDE_DIR="$LLVM_MINGW_DEPS/include" \
+            -DZLIB_LIBRARY="$LLVM_MINGW_DEPS/lib/libzs.a" -DZLIB_INCLUDE_DIR="$LLVM_MINGW_DEPS/include"
+
+      - name: Build
+        timeout-minutes: 120
+        run: cmake --build build -j 4 --target orchard-host orchard_tests xylem_tests
+
+      - name: Test under Wine
+        if: matrix.wine
+        working-directory: build
+        run: |
+          wineboot --init || true
+          ctest --output-on-failure
+
+      - name: Check orchard only needs DLLs that come with Windows
+        run: |
+          $LLVM_MINGW_TARGET-objdump -p build/bin/orchard-host.exe | grep "DLL Name"
+          if $LLVM_MINGW_TARGET-objdump -p build/bin/orchard-host.exe | grep "DLL Name" | grep -iE "libstdc|libgcc|libwinpthread|libc\+\+|libunwind|zlib|libjpeg"; then
+            echo "::error::orchard needs a DLL that users will not have"
+            exit 1
+          fi
+
+      - name: Gather what the Windows bundle step needs
+        run: |
+          mkdir -p stage
+          cp build/bin/orchard-host.exe stage/
+          cp -R build/_deps/grove-src/Include stage/grove-include
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orchard-host-${{ matrix.platform }}
+          path: stage
+          retention-days: 3
+          if-no-files-found: error
+
+  windows-bundle:
+    name: Bundle on Windows ${{ matrix.platform }}
+    needs: [version, windows-build]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-ucrt64
+            runner: windows-latest
+          - platform: windows-i686
+            runner: windows-latest
+          - platform: windows-clangarm64
+            runner: windows-11-arm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: orchard-host-${{ matrix.platform }}
+          path: stage
+
+      - name: Download Walnut with its compiler
+        run: |
+          curl -fL --retry 5 --retry-delay 10 -o walnut.zip "${{ needs.version.outputs.walnut_base }}-${{ matrix.platform }}-with-compiler.zip"
+          mkdir -p walnut
+          unzip -q walnut.zip -d walnut
+          echo "GROVE_WALNUT=$(cygpath -m "$(ls -d "$PWD"/walnut/Walnut-*)/bin/walnut.exe")" >> "$GITHUB_ENV"
+
+      - name: Build orchard with its window built in
+        run: |
+          export ORCHARD_UI_DIR="$(cygpath -m "$PWD/UI")"
+          export GROVE_INCLUDE_DIR="$(cygpath -m "$PWD/stage/grove-include")"
+          "$GROVE_WALNUT" init --status
+          ./stage/orchard-host.exe --bundle "$(cygpath -m "$PWD/stage/orchard.exe")"
+          ./stage/orchard.exe --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orchard-exe-${{ matrix.platform }}
+          path: stage/orchard.exe
+          retention-days: 3
+          if-no-files-found: error
+
+  windows-package:
+    name: Package Windows ${{ matrix.platform }}
+    needs: [version, windows-bundle]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-ucrt64, windows-i686, windows-clangarm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis p7zip-full zip unzip
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: orchard-exe-${{ matrix.platform }}
+          path: exe
+
+      - name: Package
+        run: |
+          base="${{ needs.version.outputs.walnut_base }}-${{ matrix.platform }}"
+          curl -fL --retry 5 --retry-delay 10 -o walnut.zip "$base.zip"
+          curl -fL --retry 5 --retry-delay 10 -o walnut-with-compiler.zip "$base-with-compiler.zip"
+          for variant in plain with-compiler; do
+            if [ "$variant" = plain ]; then archive=walnut.zip; suffix=""; else archive=walnut-with-compiler.zip; suffix=-with-compiler; fi
+            bash .github/scripts/stage.sh $archive exe/orchard.exe . stage-$variant
+            cmake -S Packaging -B pkg-$variant -DORCHARD_STAGE="$PWD/stage-$variant" -DORCHARD_VERSION=${{ needs.version.outputs.version }} \
+              -DORCHARD_PLATFORM=${{ matrix.platform }} -DORCHARD_PACKAGE_SUFFIX=$suffix "-DORCHARD_GENERATORS=ZIP;7Z;NSIS"
+            (cd pkg-$variant && cpack)
+          done
+          mkdir -p packages
+          mv pkg-*/Orchard-*.zip pkg-*/Orchard-*.7z pkg-*/Orchard-*.exe packages/
+          ls -l packages
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orchard-${{ matrix.platform }}
+          path: packages/Orchard-*
+          compression-level: 0
+          if-no-files-found: error
+
+  windows-test:
+    name: Run on Windows ${{ matrix.platform }}
+    needs: windows-package
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-ucrt64
+            runner: windows-latest
+          - platform: windows-i686
+            runner: windows-latest
+          - platform: windows-clangarm64
+            runner: windows-11-arm
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: orchard-${{ matrix.platform }}
+          path: packages
+
+      - name: Run the package with the compiler
+        run: |
+          $zip = Get-ChildItem packages/Orchard-*-with-compiler.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath bundled
+          $app = (Get-ChildItem bundled -Directory | Select-Object -First 1).FullName
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+          Set-Location $env:RUNNER_TEMP
+          & "$app\bin\orchard.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $out = & "$app\bin\orchard.exe" --check
+          $out
+          if (-not ($out -match "built-in window ok, 1 compiled script")) { exit 1 }
+          & "$app\bin\orchard.exe" --new smoke-project --2d --name Smoke
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "$app\bin\orchard.exe" --simulate smoke-project 1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Run the plain package
+        run: |
+          $zip = Get-ChildItem packages/Orchard-*.zip | Where-Object { $_.Name -notlike "*-with-compiler.zip" } | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath plain
+          $app = (Get-ChildItem plain -Directory | Select-Object -First 1).FullName
+          & "$app\bin\orchard.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $out = & "$app\bin\orchard.exe" --check
+          $out
+          if (-not ($out -match "built-in window ok, 1 compiled script")) { exit 1 }
+
+      - name: Install and uninstall with the installer
+        run: |
+          $exe = Get-ChildItem packages/Orchard-*.exe | Where-Object { $_.Name -notlike "*-with-compiler.exe" } | Select-Object -First 1
+          $dir = "$env:RUNNER_TEMP\OrchardInstall"
+          Start-Process -FilePath $exe.FullName -ArgumentList "/S", "/D=$dir" -Wait
+          if (-not (Test-Path "$dir\bin\orchard.exe")) { Write-Error "the installer didn't put orchard.exe in $dir\bin"; exit 1 }
+          & "$dir\bin\orchard.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $open = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\Orchard.Project\shell\open\command").'(default)'
+          Write-Output "project.orchard opens with: $open"
+          if ($open -notlike "*orchard.exe*") { Write-Error "the installer didn't register .orchard files"; exit 1 }
+          $progid = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\.orchard").'(default)'
+          if ($progid -ne "Orchard.Project") { Write-Error ".orchard is $progid, not Orchard.Project"; exit 1 }
+          if (-not (Test-Path "Registry::HKEY_CLASSES_ROOT\Directory\shell\Orchard\command")) { Write-Error "the installer didn't add Open with Orchard to folders"; exit 1 }
+          $info = (Get-Item "$dir\bin\orchard.exe").VersionInfo
+          Write-Output "orchard.exe says it is $($info.ProductName) $($info.ProductVersion)"
+          if ($info.ProductName -ne "Orchard") { Write-Error "orchard.exe has no version resource"; exit 1 }
+          Start-Process -FilePath "$dir\Uninstall.exe" -ArgumentList "/S", "_?=$dir" -Wait
+          if (Test-Path "$dir\bin\orchard.exe") { Write-Error "the uninstaller left orchard.exe behind"; exit 1 }
+          if (Test-Path "Registry::HKEY_CLASSES_ROOT\Orchard.Project") { Write-Error "the uninstaller left Orchard.Project behind"; exit 1 }
+          if (Test-Path "Registry::HKEY_CLASSES_ROOT\Directory\shell\Orchard") { Write-Error "the uninstaller left Open with Orchard behind"; exit 1 }
+
+  android:
+    name: Android
+    needs: version
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config unzip \
+            libx11-dev libxft-dev libxrender-dev libfontconfig1-dev libfreetype-dev \
+            libssl-dev libpango1.0-dev libcairo2-dev libharfbuzz-dev zlib1g-dev libjpeg-dev \
+            libvulkan-dev libgl-dev
+
+      - name: Build the APK
+        timeout-minutes: 150
+        env:
+          ORCHARD_KEYSTORE_BASE64: ${{ secrets.ORCHARD_KEYSTORE_BASE64 }}
+          ORCHARD_KEYSTORE_PASS: ${{ secrets.ORCHARD_KEYSTORE_PASS }}
+          ORCHARD_KEY_ALIAS: ${{ secrets.ORCHARD_KEY_ALIAS }}
+        run: bash .github/scripts/android-apk.sh arm64-v8a,x86_64 packages
+
+      - name: Check the APK
+        run: |
+          apk=$(ls packages/Orchard-*-android.apk)
+          build_tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          "$build_tools/aapt2" dump badging "$apk" | tee badging.txt
+          grep "package: name='io.github.thatnewcoderjscpp.orchard'" badging.txt
+          grep "versionName='${{ needs.version.outputs.version }}'" badging.txt
+          "$build_tools/apksigner" verify --print-certs "$apk"
+          for abi in arm64-v8a x86_64; do
+            unzip -l "$apk" | grep "lib/$abi/liborchard_android.so"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orchard-android
+          path: packages/Orchard-*-android.apk
+          compression-level: 0
+          if-no-files-found: error
+
+  publish:
+    name: Attach Orchard to the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, linux-i686, macos, android, windows-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: orchard-linux-*
+          path: packages
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: orchard-windows-*
+          path: packages
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: orchard-macos-*
+          path: packages
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: orchard-android
+          path: packages
+
+      - name: List the packages
+        run: |
+          ls -l packages
+          if ! ls packages/Orchard-*-macos-* > /dev/null 2>&1; then
+            echo "::warning::the macOS builds failed, so this release has no macOS packages"
+          fi
+          if ! ls packages/Orchard-*.dmg > /dev/null 2>&1; then
+            echo "::warning::this release has no macOS disk image"
+          fi
+          if ! ls packages/Orchard-*-android.apk > /dev/null 2>&1; then
+            echo "::warning::the Android build failed, so this release has no APK"
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: packages/Orchard-*
+          fail_on_unmatched_files: true

@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    ln -sf /opt/orchard/bin/orchard /usr/bin/orchard
+    install -Dm644 /opt/orchard/share/orchard/orchard.desktop /usr/share/applications/orchard.desktop
+    install -Dm644 /opt/orchard/share/orchard/orchard.svg /usr/share/icons/hicolor/scalable/apps/orchard.svg
+    install -Dm644 /opt/orchard/share/orchard/orchard-mime.xml /usr/share/mime/packages/orchard.xml
+    install -Dm644 /opt/orchard/share/orchard/application-x-orchard-project.svg /usr/share/icons/hicolor/scalable/mimetypes/application-x-orchard-project.svg
+    update-mime-database /usr/share/mime 2>/dev/null || true
+    update-desktop-database -q /usr/share/applications 2>/dev/null || true
+    gtk-update-icon-cache -q -t /usr/share/icons/hicolor 2>/dev/null || true
+fi
+exit 0

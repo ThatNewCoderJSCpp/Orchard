@@ -12,6 +12,16 @@
 #include <grove/native.hpp>
 #include <grove/runtime/runtime.hpp>
 
+#if defined(__ANDROID__)
+#ifndef FIZMO
+#define FIZMO
+#endif
+#ifndef FIZMO_GRAPHICS
+#define FIZMO_GRAPHICS
+#endif
+#include <fizmo/includes.hpp>
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -1089,8 +1099,79 @@ const char* usage =
     "  --bundle OUTPUT  write a copy of orchard with the editor window and its compiled script built in\n\n"
     "Set ORCHARD_UI_DIR to load the editor UI from another folder.\n";
 
+#if defined(__ANDROID__)
+int android_error(fizmo::android::App& app, const std::string& message) {
+    fizmo::android::log(fizmo::android::LogLevel::Error, "orchard", message);
+    fizmo::graphics::Renderer renderer(app.surface());
+    renderer.bind();
+    fizmo::android::Event e;
+    while (app.running()) {
+        bool redraw = false;
+        while (app.poll(e, 250)) {
+            if (e.type == fizmo::android::EventType::Back) app.finish();
+            redraw = true;
+        }
+        if (!redraw || !renderer.is_bound()) continue;
+        const float k = app.density();
+        const fizmo::android::Insets in = app.content_insets();
+        const int x = in.left + static_cast<int>(24 * k);
+        const int y = in.top + static_cast<int>(32 * k);
+        const unsigned w = app.surface().width() > static_cast<unsigned>(x * 2) ? app.surface().width() - static_cast<unsigned>(x * 2) : app.surface().width();
+        renderer.begin_frame();
+        renderer.clear(fizmo::colors::Color(30, 30, 36));
+        renderer.draw_text(x, y, w, static_cast<unsigned>(60 * k), std::string("Orchard couldn't start"), fizmo::text::TextStyle(22.0 * k, fizmo::colors::Color(243, 139, 168)));
+        renderer.draw_text(x, y + static_cast<int>(48 * k), w, app.surface().height(), message, fizmo::text::TextStyle(15.0 * k, fizmo::colors::Color(205, 214, 244)));
+        renderer.present();
+    }
+    return 1;
+}
+
+std::string android_home(fizmo::android::App& app) {
+    const std::string data = app.internal_data_path().empty() ? std::string("/data/local/tmp") : app.internal_data_path();
+    std::error_code ec;
+    const fs::path cache = app.cache_path().empty() ? fs::path(data) / "cache" : fs::path(app.cache_path());
+    fs::create_directories(fs::path(data) / "config", ec);
+    fs::create_directories(cache, ec);
+    setenv("HOME", data.c_str(), 1);
+    setenv("XDG_CONFIG_HOME", (fs::path(data) / "config").string().c_str(), 1);
+    setenv("XDG_DATA_HOME", (fs::path(data) / "share").string().c_str(), 1);
+    setenv("XDG_CACHE_HOME", cache.string().c_str(), 1);
+    setenv("TMPDIR", cache.string().c_str(), 1);
+    const fs::path projects = fs::path(data) / "Projects";
+    fs::create_directories(projects, ec);
+    fs::current_path(projects, ec);
+    return data;
+}
+#endif
+
 } // namespace
 
+#if defined(__ANDROID__)
+int fizmo_android_main(fizmo::android::App& app) {
+    fizmo::android::redirect_stdio("orchard");
+    const std::string data = android_home(app);
+
+    const std::optional<std::string> bundle_text = app.assets().read("grove/app.bundle");
+    if (!bundle_text) return android_error(app, "this APK has no grove/app.bundle asset; build it again with grove build");
+    std::optional<grove::Bundle> bundle = grove::parse_bundle(*bundle_text);
+    if (!bundle) return android_error(app, "grove/app.bundle is damaged; build Orchard again");
+
+    grove::AppLoadOptions load;
+    load.root = data;
+    load.cache_dir = app.cache_path();
+    load.module_dir = app.native_library_dir();
+
+    grove::LoadedApp loaded;
+    std::string error;
+    if (!grove::load_app(*bundle, loaded, error, load)) return android_error(app, error);
+
+    auto editor = std::make_unique<Editor>(loaded.project);
+    grove::runtime::RunOptions run;
+    run.window_id = loaded.window_id;
+    run.scripts = true;
+    return grove::runtime::run_android(loaded.project, app, &loaded.scripts, run);
+}
+#else
 int main(int argc, char** argv) {
     bool check = false;
     std::string project_path;
@@ -1197,3 +1278,4 @@ int main(int argc, char** argv) {
     }
     return grove::runtime::run(*ui, options);
 }
+#endif // __ANDROID__
