@@ -124,9 +124,6 @@ jobs:
             -DORCHARD_PLATFORM=linux-${{ matrix.arch }} "-DORCHARD_GENERATORS=TGZ;TXZ;ZIP;DEB;RPM"
           (cd pkg && cpack)
 
-      - name: Make Orchard.app and the disk image
-        run: bash .github/scripts/macos-app.sh stage . ${{ needs.version.outputs.version }} pkg macos-${{ matrix.arch }}
-
       - name: Test the archive
         run: |
           mv build "$RUNNER_TEMP/build-done"
@@ -320,8 +317,11 @@ jobs:
           curl -fL --retry 5 --retry-delay 10 -o walnut.tar.gz "${{ needs.version.outputs.walnut_base }}-macos-${{ matrix.arch }}.tar.gz"
           bash .github/scripts/stage.sh walnut.tar.gz build/bin/orchard . stage macos-lib
           cmake -S Packaging -B pkg -DORCHARD_STAGE="$PWD/stage" -DORCHARD_VERSION=${{ needs.version.outputs.version }} \
-            -DORCHARD_PLATFORM=macos-${{ matrix.arch }} "-DORCHARD_GENERATORS=TGZ;ZIP"
+            -DORCHARD_PLATFORM=macos-${{ matrix.arch }} "-DORCHARD_GENERATORS=TGZ;TXZ;ZIP"
           (cd pkg && cpack)
+
+      - name: Make Orchard.app and the disk image
+        run: bash .github/scripts/macos-app.sh stage . ${{ needs.version.outputs.version }} pkg macos-${{ matrix.arch }}
 
       - name: Test the archive
         run: |
@@ -370,6 +370,7 @@ jobs:
           name: orchard-macos-${{ matrix.arch }}
           path: |
             pkg/Orchard-*.tar.gz
+            pkg/Orchard-*.tar.xz
             pkg/Orchard-*.zip
             pkg/Orchard-*.dmg
           compression-level: 0
