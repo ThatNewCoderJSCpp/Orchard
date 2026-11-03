@@ -351,7 +351,8 @@ void test_script_languages() {
         const orchard::ScriptBuildResult built = runtime.build(*project, fresh);
         check(built.ok, "the new " + std::string(c.language) + " script builds: " + built.log);
     }
-    check(!runtime.create_script(*project, "Scripts/FreshCpp.cpp", orchard::Dimension::three_d), "create_script won't overwrite");
+    check(runtime.create_script(*project, "Scripts/Twice.cpp", orchard::Dimension::three_d, &error), "create_script makes a new file: " + error);
+    check(!runtime.create_script(*project, "Scripts/Twice.cpp", orchard::Dimension::three_d), "create_script won't overwrite");
 
     write("Scripts/broken.lua", "function on_tick(self, dt)\n    self:translate(\nend\n");
     const orchard::ScriptBuildResult broken = runtime.build(*project, "Scripts/broken.lua");

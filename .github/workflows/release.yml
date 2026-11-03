@@ -310,7 +310,9 @@ jobs:
           fi
 
       - name: Build orchard with its window built in
-        run: ORCHARD_UI_DIR="$PWD/UI" build/bin/orchard-host --bundle "$PWD/build/bin/orchard"
+        run: |
+          ln -sfn "$PWD/macos-lib" build/lib
+          ORCHARD_UI_DIR="$PWD/UI" build/bin/orchard-host --bundle "$PWD/build/bin/orchard"
 
       - name: Package
         run: |
