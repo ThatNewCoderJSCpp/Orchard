@@ -597,36 +597,62 @@ jobs:
           Expand-Archive $zip.FullName -DestinationPath bundled
           $app = (Get-ChildItem bundled -Directory | Select-Object -First 1).FullName
           $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+          function Invoke-Orchard([string]$exe, [string[]]$arguments) {
+            $o = New-TemporaryFile
+            $e = New-TemporaryFile
+            $p = Start-Process -FilePath $exe -ArgumentList $arguments -Wait -PassThru -NoNewWindow -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName
+            $text = Get-Content -Raw $o.FullName
+            $err = Get-Content -Raw $e.FullName
+            if ($text) { Write-Host $text }
+            if ($err) { Write-Host $err }
+            if ($p.ExitCode -ne 0) { Write-Error "orchard.exe $arguments exited with $($p.ExitCode)"; exit 1 }
+            return "$text"
+          }
           Set-Location $env:RUNNER_TEMP
-          & "$app\bin\orchard.exe" --version
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          $out = & "$app\bin\orchard.exe" --check
-          $out
-          if (-not ($out -match "built-in window ok, 1 compiled script")) { exit 1 }
-          & "$app\bin\orchard.exe" --new smoke-project --2d --name Smoke
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          & "$app\bin\orchard.exe" --simulate smoke-project 1
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Invoke-Orchard "$app\bin\orchard.exe" @("--version") | Out-Null
+          $out = Invoke-Orchard "$app\bin\orchard.exe" @("--check")
+          if (-not ($out -match "built-in window ok, 1 compiled script")) { Write-Error "--check didn't report the built-in window and its compiled script"; exit 1 }
+          Invoke-Orchard "$app\bin\orchard.exe" @("--new", "smoke-project", "--2d", "--name", "Smoke") | Out-Null
+          Invoke-Orchard "$app\bin\orchard.exe" @("--simulate", "smoke-project", "1") | Out-Null
 
       - name: Run the plain package
         run: |
           $zip = Get-ChildItem packages/Orchard-*.zip | Where-Object { $_.Name -notlike "*-with-compiler.zip" } | Select-Object -First 1
           Expand-Archive $zip.FullName -DestinationPath plain
+          function Invoke-Orchard([string]$exe, [string[]]$arguments) {
+            $o = New-TemporaryFile
+            $e = New-TemporaryFile
+            $p = Start-Process -FilePath $exe -ArgumentList $arguments -Wait -PassThru -NoNewWindow -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName
+            $text = Get-Content -Raw $o.FullName
+            $err = Get-Content -Raw $e.FullName
+            if ($text) { Write-Host $text }
+            if ($err) { Write-Host $err }
+            if ($p.ExitCode -ne 0) { Write-Error "orchard.exe $arguments exited with $($p.ExitCode)"; exit 1 }
+            return "$text"
+          }
           $app = (Get-ChildItem plain -Directory | Select-Object -First 1).FullName
-          & "$app\bin\orchard.exe" --version
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          $out = & "$app\bin\orchard.exe" --check
-          $out
-          if (-not ($out -match "built-in window ok, 1 compiled script")) { exit 1 }
+          Invoke-Orchard "$app\bin\orchard.exe" @("--version") | Out-Null
+          $out = Invoke-Orchard "$app\bin\orchard.exe" @("--check")
+          if (-not ($out -match "built-in window ok, 1 compiled script")) { Write-Error "--check didn't report the built-in window and its compiled script"; exit 1 }
 
       - name: Install and uninstall with the installer
         run: |
+          function Invoke-Orchard([string]$exe, [string[]]$arguments) {
+            $o = New-TemporaryFile
+            $e = New-TemporaryFile
+            $p = Start-Process -FilePath $exe -ArgumentList $arguments -Wait -PassThru -NoNewWindow -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName
+            $text = Get-Content -Raw $o.FullName
+            $err = Get-Content -Raw $e.FullName
+            if ($text) { Write-Host $text }
+            if ($err) { Write-Host $err }
+            if ($p.ExitCode -ne 0) { Write-Error "orchard.exe $arguments exited with $($p.ExitCode)"; exit 1 }
+            return "$text"
+          }
           $exe = Get-ChildItem packages/Orchard-*.exe | Where-Object { $_.Name -notlike "*-with-compiler.exe" } | Select-Object -First 1
           $dir = "$env:RUNNER_TEMP\OrchardInstall"
           Start-Process -FilePath $exe.FullName -ArgumentList "/S", "/D=$dir" -Wait
           if (-not (Test-Path "$dir\bin\orchard.exe")) { Write-Error "the installer didn't put orchard.exe in $dir\bin"; exit 1 }
-          & "$dir\bin\orchard.exe" --version
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Invoke-Orchard "$dir\bin\orchard.exe" @("--version") | Out-Null
           $open = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\Orchard.Project\shell\open\command").'(default)'
           Write-Output "project.orchard opens with: $open"
           if ($open -notlike "*orchard.exe*") { Write-Error "the installer didn't register .orchard files"; exit 1 }
