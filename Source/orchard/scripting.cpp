@@ -452,11 +452,20 @@ const char* const k_script_headers[] = {
     "orchard/script/orchard.h",
 };
 
+std::vector<std::string> module_link_flags() {
+#if defined(_WIN32)
+    return {"-static"};
+#else
+    return {};
+#endif
+}
+
 std::uint64_t header_hash(const ScriptToolchain& tools) {
     std::uint64_t h = fnv(fnv_start(), std::to_string(ORCHARD_SCRIPT_API_VERSION));
     const fs::path inc(tools.include_dir);
     for (const char* f : k_script_headers) h = fnv(h, read_text(inc / f));
     for (const std::string& f : tools.cxx_flags) h = fnv(h, f);
+    for (const std::string& f : module_link_flags()) h = fnv(h, f);
     return h;
 }
 
@@ -573,6 +582,7 @@ public:
             link.push_back(obj.string());
         }
         link.insert(link.end(), {reg.string(), glue_obj, "-o", module.string()});
+        for (const std::string& f : module_link_flags()) link.push_back(f);
         if (run(link, step_log, tools.verbose, runtime) != 0 || !fs::is_regular_file(module, ec)) return fail("couldn't build " + script);
         prune_cache(cache, stem, hex(h), runtime.loaded_modules());
         result.ok = true;
@@ -1021,6 +1031,7 @@ ScriptBuildResult ScriptRuntime::build_walnut(const Project& project, const std:
     for (const char* f : {"-fPIC", "-shared", "-Dmain=orchard_walnut_main"}) w.insert(w.end(), {"--cxx-flag", f});
     w.insert(w.end(), {"--cxx-flag", "-I" + inc.string()});
     for (const std::string& f : m_tools.cxx_flags) w.insert(w.end(), {"--cxx-flag", f});
+    for (const std::string& f : module_link_flags()) w.insert(w.end(), {"--cxx-flag", f});
     const int status = run(w, step_log, m_tools.verbose, *this);
     std::string log = read_text(step_log);
     log = replace_all(log, generated.string(), script);
