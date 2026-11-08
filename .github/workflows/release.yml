@@ -447,7 +447,7 @@ jobs:
 
       - name: Build
         timeout-minutes: 120
-        run: cmake --build build -j 4 --target orchard-host orchard_tests xylem_tests
+        run: cmake --build build -j 4 --target orchard-host orchard_tests xylem_tests chlorophyll_tests
 
       - name: Test under Wine
         if: matrix.wine
