@@ -76,6 +76,9 @@ Mat4 trs(Vec3 t, Quat r, Vec3 s);
 Mat4 look_at(Vec3 eye, Vec3 target, Vec3 up);
 Mat4 perspective(float fov_y_degrees, float aspect, float near_plane, float far_plane);
 Mat4 orthographic(float left, float right, float bottom, float top, float near_plane, float far_plane);
+bool invert(const Mat4& m, Mat4& out);
+Vec3 mul_point(const Mat4& m, Vec3 p);
+Vec3 mul_direction(const Mat4& m, Vec3 d);
 
 } // namespace orchard
 

@@ -107,6 +107,99 @@
                         <button id="add-entity" class="small">+ Add</button>
                     </row>
                     <column id="tree" class="scroll tree" tabindex="0"></column>
+                </column>
+
+                <column class="center">
+                    <row class="viewbar">
+                        <button id="tool-select" class="seg tool on" title="Click something to select it and see its details. Drag empty space to orbit.">&#10148; Select</button>
+                        <button id="tool-move" class="seg tool" title="Drag something to slide it along the ground. Drag one of its arrows to move along that axis. Shift-drag moves it up and down. (G)">&#10021; Move</button>
+                        <button id="tool-orbit" class="seg tool" title="Drag anywhere to orbit around the view's center">&#10227; Orbit</button>
+                        <button id="tool-pan" class="seg tool" title="Drag anywhere to slide the view">&#9995; Pan</button>
+                        <div class="grow"></div>
+                        <text class="hint">W A S D or arrows: move &#183; Q / E: down / up &#183; Shift: faster</text>
+                    </row>
+                    <gpu_canvas id="viewport" tabindex="0"></gpu_canvas>
+                    <text class="hint overlay">Click: select &#183; Right-click: options &#183; Drag: orbit &#183; Right drag: pan &#183; Wheel: zoom &#183; Keys go to scripts while playing</text>
+                </column>
+
+                <column class="side right">
+                    <column class="inspector-panel">
+                        <div class="card-title">INSPECTOR</div>
+                        <column id="inspector" class="scroll inspector hidden">
+                            <input_string id="ins-name" />
+                            <div class="sub-title">Position</div>
+                            <row class="xyz">
+                                <input_float id="px" step="0.1" /><input_float id="py" step="0.1" /><input_float id="pz" step="0.1" />
+                            </row>
+                            <div class="sub-title">Rotation</div>
+                            <row class="xyz">
+                                <input_float id="rx" step="1" /><input_float id="ry" step="1" /><input_float id="rz" step="1" />
+                            </row>
+                            <div class="sub-title">Scale</div>
+                            <row class="xyz">
+                                <input_float id="sx" step="0.1" /><input_float id="sy" step="0.1" /><input_float id="sz" step="0.1" />
+                            </row>
+                            <div class="sub-title">Script</div>
+                            <input_select id="ins-script" value="" placeholder="No script">
+                                <option value="">No script</option>
+                            </input_select>
+                            <input_select id="new-script" value="" placeholder="New script...">
+                                <option value="">New script...</option>
+                                <option value=".wal">Walnut</option>
+                                <option value=".cpp">C++</option>
+                                <option value=".c">C</option>
+                                <option value=".cs">C#</option>
+                                <option value=".java">Java</option>
+                                <option value=".lua">Lua</option>
+                            </input_select>
+                            <hr />
+                            <div class="section-title">PHYSICS</div>
+                            <text id="ins-owner" class="muted hidden"></text>
+                            <row class="kv">
+                                <text class="k">Body</text>
+                                <input_bool id="ins-body" />
+                            </row>
+                            <column id="body-box" class="body-box hidden">
+                                <row class="kv">
+                                    <text class="k">Type</text>
+                                    <input_select id="ins-body-type" value="dynamic">
+                                        <option value="dynamic">Dynamic</option>
+                                        <option value="static">Static</option>
+                                        <option value="kinematic">Kinematic</option>
+                                    </input_select>
+                                </row>
+                                <row class="kv">
+                                    <text class="k">Enabled</text>
+                                    <input_bool id="ins-body-enabled" />
+                                </row>
+                                <column id="body-nums" class="nums"></column>
+                                <column id="flags" class="flags"></column>
+                                <row class="side-head">
+                                    <div class="sub-title grow">All fizmo flags</div>
+                                    <button id="aflags-toggle" class="small ghost">Show</button>
+                                </row>
+                                <column id="aflags" class="flags hidden"></column>
+                            </column>
+                            <row class="side-head">
+                                <div class="sub-title grow">Colliders</div>
+                                <input_select id="collider-kind" value="box" class="add-kind">
+                                    <option value="box">Box</option>
+                                    <option value="sphere">Sphere</option>
+                                    <option value="capsule">Capsule</option>
+                                    <option value="cylinder">Cylinder</option>
+                                    <option value="cone">Cone</option>
+                                    <option value="rounded-box">Rounded box</option>
+                                </input_select>
+                                <button id="add-collider" class="small">+ Collider</button>
+                            </row>
+                            <column id="colliders" class="colliders"></column>
+                            <row class="actions">
+                                <button id="add-child" class="ghost">Add child</button>
+                                <button id="delete-entity" class="danger">Delete</button>
+                            </row>
+                        </column>
+                        <text id="inspector-empty" class="muted">Select something in the scene.</text>
+                    </column>
                     <column id="details-box" class="details-box">
                         <row class="side-head">
                             <div class="card-title grow">DETAILS</div>
@@ -114,89 +207,6 @@
                         </row>
                         <column id="details" class="scroll details"></column>
                     </column>
-                </column>
-
-                <column class="center">
-                    <gpu_canvas id="viewport" tabindex="0"></gpu_canvas>
-                    <text class="hint overlay">Left drag: orbit (3D) or pan (2D) &#183; Right drag or Shift: pan &#183; Wheel: zoom &#183; Click: select &#183; Keys go to scripts while playing</text>
-                </column>
-
-                <column class="side right">
-                    <div class="card-title">INSPECTOR</div>
-                    <column id="inspector" class="scroll inspector hidden">
-                        <input_string id="ins-name" />
-                        <div class="sub-title">Position</div>
-                        <row class="xyz">
-                            <input_float id="px" step="0.1" /><input_float id="py" step="0.1" /><input_float id="pz" step="0.1" />
-                        </row>
-                        <div class="sub-title">Rotation</div>
-                        <row class="xyz">
-                            <input_float id="rx" step="1" /><input_float id="ry" step="1" /><input_float id="rz" step="1" />
-                        </row>
-                        <div class="sub-title">Scale</div>
-                        <row class="xyz">
-                            <input_float id="sx" step="0.1" /><input_float id="sy" step="0.1" /><input_float id="sz" step="0.1" />
-                        </row>
-                        <div class="sub-title">Script</div>
-                        <input_select id="ins-script" value="" placeholder="No script">
-                            <option value="">No script</option>
-                        </input_select>
-                        <input_select id="new-script" value="" placeholder="New script...">
-                            <option value="">New script...</option>
-                            <option value=".wal">Walnut</option>
-                            <option value=".cpp">C++</option>
-                            <option value=".c">C</option>
-                            <option value=".cs">C#</option>
-                            <option value=".java">Java</option>
-                            <option value=".lua">Lua</option>
-                        </input_select>
-                        <hr />
-                        <div class="section-title">PHYSICS</div>
-                        <text id="ins-owner" class="muted hidden"></text>
-                        <row class="kv">
-                            <text class="k">Body</text>
-                            <input_bool id="ins-body" />
-                        </row>
-                        <column id="body-box" class="body-box hidden">
-                            <row class="kv">
-                                <text class="k">Type</text>
-                                <input_select id="ins-body-type" value="dynamic">
-                                    <option value="dynamic">Dynamic</option>
-                                    <option value="static">Static</option>
-                                    <option value="kinematic">Kinematic</option>
-                                </input_select>
-                            </row>
-                            <row class="kv">
-                                <text class="k">Enabled</text>
-                                <input_bool id="ins-body-enabled" />
-                            </row>
-                            <column id="body-nums" class="nums"></column>
-                            <column id="flags" class="flags"></column>
-                            <row class="side-head">
-                                <div class="sub-title grow">All fizmo flags</div>
-                                <button id="aflags-toggle" class="small ghost">Show</button>
-                            </row>
-                            <column id="aflags" class="flags hidden"></column>
-                        </column>
-                        <row class="side-head">
-                            <div class="sub-title grow">Colliders</div>
-                            <input_select id="collider-kind" value="box" class="add-kind">
-                                <option value="box">Box</option>
-                                <option value="sphere">Sphere</option>
-                                <option value="capsule">Capsule</option>
-                                <option value="cylinder">Cylinder</option>
-                                <option value="cone">Cone</option>
-                                <option value="rounded-box">Rounded box</option>
-                            </input_select>
-                            <button id="add-collider" class="small">+ Collider</button>
-                        </row>
-                        <column id="colliders" class="colliders"></column>
-                        <row class="actions">
-                            <button id="add-child" class="ghost">Add child</button>
-                            <button id="delete-entity" class="danger">Delete</button>
-                        </row>
-                    </column>
-                    <text id="inspector-empty" class="muted">Select something in the scene.</text>
                 </column>
             </row>
 

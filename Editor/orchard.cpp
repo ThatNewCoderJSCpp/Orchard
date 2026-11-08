@@ -39,6 +39,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -383,6 +384,7 @@ private:
 
     void frame(grove::GpuCanvasFrame& f) {
         m_session.poll();
+        if (!m_fly_keys.empty()) fly_step(f.dt);
         if (m_session.playing()) {
             m_session.advance(f.dt);
             if (!m_scene.alive(m_selected)) m_selected = orchard::Entity{};
@@ -395,15 +397,175 @@ private:
             chlorophyll::World& lw = light_world();
             if (m_session.playing() || seconds > 0.0) lw.animate(m_scene, seconds);
             const fizmo::lighting::LightingSettings s = chlorophyll::settings_for(m_project->info(), trace == "photon" ? orchard::LightingLevel::photon : orchard::LightingLevel::path_traced);
-            if (m_gpu.draw_traced(f, lw.lighting_scene(), s, lw.camera_for(m_view, f.viewport_width, f.viewport_height))) return;
+            fizmo::lighting::LightingSettings preview = s;
+            if (preview.firefly_clamp <= 0.0f) preview.firefly_clamp = 8.0f;
+            const bool settling = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_view_moved).count() < 0.2 || m_drag || !m_fly_keys.empty();
+            draw_editor_view(f, seconds);
+            if (!settling) m_gpu.draw_traced_over(f, lw.lighting_scene(), preview, lw.camera_for(m_view, f.viewport_width, f.viewport_height), 12u);
+            return;
         }
+        draw_editor_view(f, seconds);
+    }
+
+    void draw_editor_view(grove::GpuCanvasFrame& f, double seconds) {
         orchard::editor::GpuViewOptions view_options;
         view_options.culling = pref("viewport.cull", "1") == "1";
         view_options.occlusion = view_options.culling;
         view_options.shadows = pref("viewport.shadows", "1") == "1";
+        view_options.move_gizmo = m_tool == "move" && !m_session.playing();
+        view_options.hot_axis = m_move_entity.valid() ? m_move_axis : -1;
         m_gpu.set_options(view_options);
         m_gpu.draw(f, m_scene, m_selected, m_view, m_session.playing(), seconds);
     }
+
+    void moved_view() {
+        m_view_moved = std::chrono::steady_clock::now();
+    }
+
+    void fly_step(double dt) {
+        if (m_session.playing()) {
+            m_fly_keys.clear();
+            return;
+        }
+        auto held = [this](std::initializer_list<const char*> names) {
+            for (const char* n : names) {
+                if (m_fly_keys.count(n)) return true;
+            }
+            return false;
+        };
+        const float step = static_cast<float>(std::clamp(dt, 0.0, 0.1));
+        const bool fast = held({"Shift", "LeftShift", "RightShift", "ShiftLeft", "ShiftRight"});
+        float up = 0.0f, level_forward = 0.0f, level_right = 0.0f;
+        if (held({"E", "PageUp"})) up += 1.0f;
+        if (held({"Q", "PageDown"})) up -= 1.0f;
+        if (held({"W", "UpArrow", "Up", "ArrowUp"})) level_forward += 1.0f;
+        if (held({"S", "DownArrow", "Down", "ArrowDown"})) level_forward -= 1.0f;
+        if (held({"D", "RightArrow", "Right", "ArrowRight"})) level_right += 1.0f;
+        if (held({"A", "LeftArrow", "Left", "ArrowLeft"})) level_right -= 1.0f;
+        if (up == 0.0f && level_forward == 0.0f && level_right == 0.0f) return;
+        float speed = 0.0f;
+        if (m_view.dimension() == orchard::Dimension::three_d) speed = std::max(1.5f, m_view.orbit_camera().distance * 0.6f);
+        else speed = 360.0f / std::max(m_view.pan_camera().pixels_per_unit, 1e-3f);
+        if (fast) speed *= 3.0f;
+        const float d = speed * step;
+        if (up != 0.0f) m_view.fly(0.0f, 0.0f, up * d);
+        if (level_forward != 0.0f || level_right != 0.0f) m_view.fly_level(level_forward * d, level_right * d);
+        moved_view();
+    }
+
+    orchard::Vec3 world_up() const {
+        if (m_view.dimension() == orchard::Dimension::two_d) return {0.0f, 1.0f, 0.0f};
+        return m_view.axis_system().up();
+    }
+
+    float gizmo_length(orchard::Vec3 at) const {
+        return m_view.units_per_pixel(at) * 90.0f;
+    }
+
+    int gizmo_axis_at(float x, float y) const {
+        if (!m_scene.alive(m_selected) || m_view.dimension() == orchard::Dimension::two_d) return -1;
+        const orchard::Vec3 at = xylem::world_position(m_scene, m_selected);
+        const float len = gizmo_length(at);
+        float x0, y0;
+        if (!m_view.project(at, x0, y0)) return -1;
+        if (std::hypot(x - x0, y - y0) < 18.0f) return -1;
+        int best = -1;
+        float best_d = 9.0f;
+        for (int i = 0; i < 3; ++i) {
+            orchard::Vec3 dir{};
+            (i == 0 ? dir.x : i == 1 ? dir.y : dir.z) = 1.0f;
+            float x1, y1;
+            if (!m_view.project(at + dir * len, x1, y1)) continue;
+            const float vx = x1 - x0, vy = y1 - y0;
+            const float l2 = vx * vx + vy * vy;
+            if (l2 < 4.0f) continue;
+            const float t = std::clamp(((x - x0) * vx + (y - y0) * vy) / l2, 0.15f, 1.1f);
+            const float d = std::hypot(x - (x0 + vx * t), y - (y0 + vy * t));
+            if (d < best_d) {
+                best_d = d;
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    void set_world_position(orchard::Entity e, orchard::Vec3 world) {
+        orchard::Transform* t = m_scene.transform(e);
+        if (!t) return;
+        const orchard::Entity parent = m_scene.parent(e);
+        if (parent.valid() && m_scene.alive(parent)) {
+            orchard::Mat4 inv;
+            if (orchard::invert(m_scene.world_matrix(parent), inv)) world = orchard::mul_point(inv, world);
+        }
+        if (m_view.dimension() == orchard::Dimension::two_d) world.z = t->position.z;
+        t->position = world;
+    }
+
+    bool begin_move(float x, float y, bool vertical) {
+        if (m_session.playing() || m_session.building()) return false;
+        int axis = gizmo_axis_at(x, y);
+        orchard::Entity hit = axis >= 0 ? m_selected : m_view.pick(m_scene, x, y);
+        if (!m_scene.alive(hit)) return false;
+        if (axis < 0 && vertical) axis = 3;
+        m_selected = hit;
+        m_move_entity = hit;
+        m_move_axis = axis;
+        m_move_start = xylem::world_position(m_scene, hit);
+        m_move_moved = false;
+        orchard::Vec3 origin, dir;
+        m_move_grab = m_move_start;
+        if (axis < 0 && m_view.ray(x, y, origin, dir)) {
+            const orchard::Vec3 n = world_up();
+            const float denom = orchard::dot(dir, n);
+            if (std::fabs(denom) > 0.08f) {
+                const float t = orchard::dot(m_move_start - origin, n) / denom;
+                if (t > 0.0f) m_move_grab = origin + dir * t;
+            }
+        }
+        m_move_press_x = x;
+        m_move_press_y = y;
+        redraw();
+        return true;
+    }
+
+    void continue_move(float x, float y) {
+        if (!m_scene.alive(m_move_entity)) return;
+        orchard::Vec3 target = m_move_start;
+        if (m_move_axis >= 0) {
+            orchard::Vec3 dir{};
+            if (m_move_axis == 3) dir = world_up();
+            else (m_move_axis == 0 ? dir.x : m_move_axis == 1 ? dir.y : dir.z) = 1.0f;
+            const float len = gizmo_length(m_move_start);
+            float x0, y0, x1, y1;
+            if (!m_view.project(m_move_start, x0, y0) || !m_view.project(m_move_start + dir * len, x1, y1)) return;
+            const float vx = x1 - x0, vy = y1 - y0;
+            const float l2 = vx * vx + vy * vy;
+            if (l2 < 1.0f) return;
+            const float amount = ((x - m_move_press_x) * vx + (y - m_move_press_y) * vy) / l2 * len;
+            target = m_move_start + dir * amount;
+        } else {
+            orchard::Vec3 origin, dir;
+            if (!m_view.ray(x, y, origin, dir)) return;
+            if (m_view.dimension() == orchard::Dimension::two_d) {
+                orchard::Vec3 o0, d0;
+                if (!m_view.ray(m_move_press_x, m_move_press_y, o0, d0)) return;
+                target = m_move_start + orchard::Vec3{origin.x - o0.x, origin.y - o0.y, 0.0f};
+            } else {
+                const orchard::Vec3 n = world_up();
+                const float denom = orchard::dot(dir, n);
+                if (std::fabs(denom) < 0.02f) return;
+                const float t = orchard::dot(m_move_grab - origin, n) / denom;
+                if (t <= 0.0f || t > 20000.0f) return;
+                target = m_move_start + (origin + dir * t - m_move_grab);
+            }
+        }
+        set_world_position(m_move_entity, target);
+        m_move_moved = true;
+        m_light_dirty = true;
+        m_dirty = true;
+        redraw();
+    }
+
 
     void touched() {
         m_dirty = true;
@@ -416,7 +578,7 @@ private:
     }
 
     bool wants_animation() const {
-        return m_session.playing() || m_session.building() || pref("preview_effects", "0") == "1" || pref("viewport.trace", "off") != "off";
+        return m_session.playing() || m_session.building() || !m_fly_keys.empty() || pref("preview_effects", "0") == "1" || pref("viewport.trace", "off") != "off";
     }
 
     void set_animating(bool on) {
@@ -1129,6 +1291,7 @@ private:
         items.push_back(grove::menu_item("details", "Show details"));
         items.push_back(grove::menu_item("rename", "Rename…", "F2"));
         items.push_back(grove::menu_item("focus", "Look at it", "F"));
+        items.push_back(grove::menu_item("move", "Move it (drag in the view)", "G"));
         items.push_back(grove::menu_separator());
         const orchard::Body* b = m_scene.body(e);
         if (!b) items.push_back(grove::menu_item("body:on", "Make it a rigid body"));
@@ -1173,12 +1336,18 @@ private:
         if (action == "inspect") return "inspect\t" + std::to_string(e.id());
         if (action == "details") return "details\t" + std::to_string(e.id());
         if (action == "rename") return "rename\t" + std::to_string(e.id());
+        if (action == "move") {
+            m_tool = "move";
+            redraw();
+            return "tool\tmove\t" + std::to_string(e.id());
+        }
         if (action == "focus") {
             if (m_scene.dimension() == orchard::Dimension::three_d) m_view.orbit_camera().target = xylem::world_position(m_scene, e);
             else {
                 const orchard::Vec3 p = xylem::world_position(m_scene, e);
                 m_view.pan_camera().center = {p.x, p.y};
             }
+            moved_view();
             redraw();
             return "ok";
         }
@@ -1723,7 +1892,10 @@ private:
             if (!to_canvas(arg(f, 0), arg(f, 1), x, y)) return std::string();
             m_drag = true;
             m_drag_button = std::atoi(arg(f, 2).c_str());
-            m_drag_pan = arg(f, 2) != "1" || arg(f, 3) == "1";
+            const bool shift = arg(f, 3) == "1";
+            m_drag_pan = arg(f, 2) != "1" || (shift && m_tool != "move") || m_tool == "pan";
+            m_move_entity = orchard::Entity{};
+            if (m_drag_button == 1 && m_tool == "move") begin_move(x, y, shift);
             m_last_x = m_start_x = x;
             m_last_y = m_start_y = y;
             return std::string("ok");
@@ -1732,8 +1904,15 @@ private:
         native("viewport_move", [this](const std::vector<std::string>& f) {
             float x, y;
             if (!m_drag || !to_canvas(arg(f, 0), arg(f, 1), x, y)) return std::string();
+            if (m_move_entity.valid()) {
+                continue_move(x, y);
+                m_last_x = x;
+                m_last_y = y;
+                return std::string("ok");
+            }
             if (m_drag_pan) m_view.pan(x - m_last_x, y - m_last_y);
             else m_view.orbit(x - m_last_x, y - m_last_y);
+            moved_view();
             m_last_x = x;
             m_last_y = y;
             redraw();
@@ -1744,6 +1923,18 @@ private:
             float x, y;
             const bool was = m_drag;
             m_drag = false;
+            const orchard::Entity dragged = m_move_entity;
+            const bool dragged_moved = m_move_moved;
+            m_move_entity = orchard::Entity{};
+            m_move_moved = false;
+            if (dragged.valid()) {
+                redraw();
+                if (dragged_moved) {
+                    touched();
+                    return "moved\t" + std::to_string(dragged.id());
+                }
+                return "pick\t" + (m_scene.alive(dragged) ? std::to_string(dragged.id()) : std::string());
+            }
             if (!was || !to_canvas(arg(f, 0), arg(f, 1), x, y)) return std::string();
             const float moved = std::fabs(x - m_start_x) + std::fabs(y - m_start_y);
             if (moved <= 4.0f && m_drag_button == 2) {
@@ -1752,7 +1943,7 @@ private:
                 redraw();
                 return "menu	" + (m_scene.alive(hit) ? std::to_string(hit.id()) : std::string());
             }
-            if (moved > 4.0f || m_drag_pan) return std::string("drag");
+            if (moved > 4.0f || m_drag_pan || m_tool == "orbit") return std::string("drag");
             m_selected = m_view.pick(m_scene, x, y);
             redraw();
             return "pick\t" + (m_scene.alive(m_selected) ? std::to_string(m_selected.id()) : std::string());
@@ -1760,6 +1951,7 @@ private:
 
         native("viewport_zoom", [this](const std::vector<std::string>& f) {
             m_view.zoom(static_cast<float>(std::atof(arg(f, 0).c_str())));
+            moved_view();
             redraw();
             return std::string("ok");
         });
@@ -2024,7 +2216,26 @@ private:
             return flip_letters();
         });
 
+        native("fly_key", [this](const std::vector<std::string>& f) {
+            std::string k = arg(f, 0);
+            if (k.size() == 1) k[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(k[0])));
+            if (arg(f, 1) == "1") m_fly_keys.insert(k);
+            else if (k == "*") m_fly_keys.clear();
+            else m_fly_keys.erase(k);
+            set_animating(!m_fly_keys.empty() || wants_animation());
+            redraw();
+            return std::string("ok");
+        });
+
+        native("set_tool", [this](const std::vector<std::string>& f) {
+            const std::string t = arg(f, 0);
+            if (t == "select" || t == "move" || t == "orbit" || t == "pan") m_tool = t;
+            redraw();
+            return m_tool;
+        });
+
         native("reset_camera", [this](const std::vector<std::string>&) {
+            moved_view();
             m_view.reset_camera();
             redraw();
             return std::string("ok");
@@ -2170,6 +2381,16 @@ private:
     float m_start_y = 0.0f;
     float m_last_x = 0.0f;
     float m_last_y = 0.0f;
+    std::set<std::string> m_fly_keys;
+    std::string m_tool = "select";
+    orchard::Entity m_move_entity;
+    int m_move_axis = -1;
+    bool m_move_moved = false;
+    orchard::Vec3 m_move_start;
+    orchard::Vec3 m_move_grab;
+    float m_move_press_x = 0.0f;
+    float m_move_press_y = 0.0f;
+    std::chrono::steady_clock::time_point m_view_moved = std::chrono::steady_clock::now();
 };
 
 int simulate(const std::string& path, double seconds) {

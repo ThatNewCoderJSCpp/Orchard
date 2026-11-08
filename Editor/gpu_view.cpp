@@ -58,7 +58,9 @@ const Color static_color(128, 134, 124);
 const Color kinematic_color(110, 170, 235);
 const Color loose_color(232, 176, 92);
 const Color sensor_color(242, 201, 109);
-const Color camera_color(139, 213, 202);
+const Color camera_color(80, 220, 255);
+const Color icon_outline(16, 18, 15);
+const Color icon_body(235, 240, 230);
 const Color light_color(242, 201, 109);
 const Color selected_color(247, 180, 72);
 
@@ -68,6 +70,13 @@ bool named(const Scene& scene, Entity e, const char* what) {
 
 Color with_alpha(Color c, std::uint8_t a) {
     return Color(c.red(), c.green(), c.blue(), a);
+}
+
+fizmo::text::TextStyle text_style(float size, Color c) {
+    fizmo::text::TextStyle st;
+    st.set_size(size);
+    st.set_fg_color(c);
+    return st;
 }
 
 fizmo::linalg::Matrix4d to_fizmo(const Mat4& m) {
@@ -313,6 +322,9 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 sun.distance = std::max(1.0, m_options.shadow_distance);
                 fg::SceneLighting3D lighting = fg::SceneLighting3D::daylight(sun);
                 lighting.sun_direction = wv(-0.4f, -1.0f, -0.6f);
+                lighting.atmosphere.sun_position = wv(0.4f, 1.0f, 0.6f);
+                lighting.atmosphere.moon_position = wv(-0.4f, -1.0f, -0.6f);
+                lighting.atmosphere.up = wv(0.0f, 1.0f, 0.0f);
                 r.set_scene_lighting(lighting);
             } else {
                 r.set_scene_lighting(fg::SceneLighting3D::off());
@@ -325,12 +337,30 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
             const float extent = lines * step;
             for (int i = -lines; i <= lines; ++i) {
                 const float x = cx + i * step, z = cz + i * step;
-                const Color cxl = std::fabs(x) < step * 0.5f ? axis_z : (i % 5 == 0 ? grid_major : grid_minor);
-                const Color czl = std::fabs(z) < step * 0.5f ? axis_x : (i % 5 == 0 ? grid_major : grid_minor);
-                r.draw_line_3d(wv(x, 0.0f, cz - extent), wv(x, 0.0f, cz + extent), cxl, 1.0f, true);
-                r.draw_line_3d(wv(cx - extent, 0.0f, z), wv(cx + extent, 0.0f, z), czl, 1.0f, true);
+                const Color line_color = i % 5 == 0 ? grid_major : grid_minor;
+                if (std::fabs(x) >= step * 0.5f) r.draw_line_3d(wv(x, 0.0f, cz - extent), wv(x, 0.0f, cz + extent), line_color, 1.0f, true);
+                if (std::fabs(z) >= step * 0.5f) r.draw_line_3d(wv(cx - extent, 0.0f, z), wv(cx + extent, 0.0f, z), line_color, 1.0f, true);
             }
-            r.draw_line_3d(vector3d{0.0, 0.0, 0.0}, wv(0.0f, step * 2.0f, 0.0f), axis_y, 2.0f, true);
+            {
+                const Vec3 world_x = axes.from_render({1.0f, 0.0f, 0.0f});
+                const Vec3 world_z = axes.from_render({0.0f, 0.0f, 1.0f});
+                const Color render_x = std::fabs(world_x.x) > 0.5f ? axis_x : (std::fabs(world_x.y) > 0.5f ? axis_y : axis_z);
+                const Color render_z = std::fabs(world_z.x) > 0.5f ? axis_x : (std::fabs(world_z.y) > 0.5f ? axis_y : axis_z);
+                const Color render_y = [&] {
+                    const Vec3 u = axes.from_render({0.0f, 1.0f, 0.0f});
+                    return std::fabs(u.x) > 0.5f ? axis_x : (std::fabs(u.y) > 0.5f ? axis_y : axis_z);
+                }();
+                const float lift = step * 0.004f;
+                const float reach = extent * 1.5f;
+                const float height = std::max(step * 3.0f, oc.distance * 0.35f);
+                auto origin_axis = [&](vector3d a, vector3d b, Color c) {
+                    r.draw_line_3d(a, b, with_alpha(c, 70), 2.0f, false);
+                    r.draw_line_3d(a, b, c, 3.0f, true);
+                };
+                origin_axis(wv(-reach, lift, 0.0f), wv(reach, lift, 0.0f), render_x);
+                origin_axis(wv(0.0f, lift, -reach), wv(0.0f, lift, reach), render_z);
+                origin_axis(wv(0.0f, 0.0f, 0.0f), wv(0.0f, height, 0.0f), render_y);
+            }
 
             enum class Kind { cube, sphere, cylinder, cone };
             struct Item {
@@ -340,6 +370,13 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 std::uint64_t key;
             };
             std::vector<Item> items;
+            struct Icon {
+                vector3d at;
+                int kind;
+                Color color;
+                bool selected;
+            };
+            std::vector<Icon> icons;
             for (Entity e : scene.entities()) {
                 const Mat4 world = scene.world_matrix(e);
                 const std::uint64_t base = static_cast<std::uint64_t>(e.id()) << 20;
@@ -371,21 +408,37 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                         }
                     }
                 } else if (named(scene, e, "Camera")) {
+                    if (playing) continue;
                     const vector3d o = point(world, {0, 0, 0});
-                    const Vec3 tip[4] = {{-0.4f, -0.3f, -0.8f}, {0.4f, -0.3f, -0.8f}, {0.4f, 0.3f, -0.8f}, {-0.4f, 0.3f, -0.8f}};
-                    for (int i = 0; i < 4; ++i) {
-                        r.draw_line_3d(o, point(world, tip[i]), camera_color, 1.5f, true);
-                        r.draw_line_3d(point(world, tip[i]), point(world, tip[(i + 1) % 4]), camera_color, 1.5f, true);
+                    const Vec3 tip[4] = {{-0.5f, -0.32f, -0.9f}, {0.5f, -0.32f, -0.9f}, {0.5f, 0.32f, -0.9f}, {-0.5f, 0.32f, -0.9f}};
+                    for (int pass = 0; pass < 2; ++pass) {
+                        const Color c = pass == 0 ? with_alpha(camera_color, 80) : camera_color;
+                        const float lw = pass == 0 ? 1.5f : 2.5f;
+                        for (int i = 0; i < 4; ++i) {
+                            r.draw_line_3d(o, point(world, tip[i]), c, lw, pass == 1);
+                            r.draw_line_3d(point(world, tip[i]), point(world, tip[(i + 1) % 4]), c, lw, pass == 1);
+                        }
+                        r.draw_line_3d(point(world, {-0.18f, 0.36f, -0.9f}), point(world, {0.0f, 0.55f, -0.9f}), c, lw, pass == 1);
+                        r.draw_line_3d(point(world, {0.0f, 0.55f, -0.9f}), point(world, {0.18f, 0.36f, -0.9f}), c, lw, pass == 1);
                     }
+                    icons.push_back({o, 1, camera_color, e == selected});
                 } else if (scene.light(e) || named(scene, e, "Light")) {
                     const vector3d o = point(world, {0, 0, 0});
-                    const Vec3 dirs[6] = {{0.35f, 0, 0}, {-0.35f, 0, 0}, {0, 0.35f, 0}, {0, -0.35f, 0}, {0, 0, 0.35f}, {0, 0, -0.35f}};
                     Color icon = light_color;
                     if (const Light* l = scene.light(e)) icon = light_icon_color(*l, seconds);
-                    for (const Vec3& d : dirs) r.draw_line_3d(o, point(world, d), icon, 2.0f, true);
-                    const Vec3 ow{static_cast<float>(o.x), static_cast<float>(o.y), static_cast<float>(o.z)};
-                    const Vec3 ground = ow - axes.up() * axes.height(ow);
-                    r.draw_line_3d(o, vector3d{ground.x, ground.y, ground.z}, grid_major, 1.0f, true);
+                    if (!playing) {
+                        const Vec3 ow{static_cast<float>(o.x), static_cast<float>(o.y), static_cast<float>(o.z)};
+                        const Vec3 ground = ow - axes.up() * axes.height(ow);
+                        r.draw_line_3d(o, vector3d{ground.x, ground.y, ground.z}, with_alpha(icon, 60), 1.0f, false);
+                        r.draw_line_3d(o, vector3d{ground.x, ground.y, ground.z}, with_alpha(icon, 160), 1.5f, true);
+                        if (const Light* l = scene.light(e)) {
+                            if (l->type == LightType::spot || l->type == LightType::directional) {
+                                const vector3d d = point(world, axes.forward() * 1.2f);
+                                r.draw_line_3d(o, d, with_alpha(icon, 200), 2.0f, false);
+                            }
+                        }
+                        icons.push_back({o, 0, icon, e == selected});
+                    }
                 } else {
                     items.push_back({Kind::cube, world, plain, base | 0xf});
                 }
@@ -546,11 +599,119 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                         if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, selected_color, 2.0f, false);
                         else ring_edges(r, m, selected_color, 2.0f, false);
                     }
-                } else {
+                } else if (!named(scene, selected, "Camera") && !scene.light(selected) && !named(scene, selected, "Light")) {
                     box_edges(r, world * scaling({1.04f, 1.04f, 1.04f}), selected_color, 2.0f, false);
                 }
             }
+            if (m_options.move_gizmo && scene.alive(selected) && !playing) {
+                const Vec4 c4 = scene.world_matrix(selected) * Vec4{0.0f, 0.0f, 0.0f, 1.0f};
+                const Vec3 at{c4.x, c4.y, c4.z};
+                const float len = view.units_per_pixel(at) * 90.0f;
+                const Color colors[3] = {axis_x, axis_y, axis_z};
+                for (int i = 0; i < 3; ++i) {
+                    Vec3 d{};
+                    (i == 0 ? d.x : i == 1 ? d.y : d.z) = 1.0f;
+                    const bool hot = m_options.hot_axis == i || (m_options.hot_axis == 3 && std::fabs(dot(d, axes.up())) > 0.5f);
+                    const Color c = hot ? selected_color : colors[i];
+                    const Vec3 tip = at + d * len;
+                    Vec3 side = cross(d, view.view_direction());
+                    if (length(side) < 1e-4f) side = cross(d, Vec3{0.3f, 0.5f, 0.8f});
+                    side = normalize(side) * (len * 0.09f);
+                    const Vec3 back = tip - d * (len * 0.2f);
+                    r.draw_line_3d(vector3d{at.x, at.y, at.z}, vector3d{tip.x, tip.y, tip.z}, c, hot ? 5.0f : 4.0f, false);
+                    r.draw_line_3d(vector3d{tip.x, tip.y, tip.z}, vector3d{back.x + side.x, back.y + side.y, back.z + side.z}, c, 4.0f, false);
+                    r.draw_line_3d(vector3d{tip.x, tip.y, tip.z}, vector3d{back.x - side.x, back.y - side.y, back.z - side.z}, c, 4.0f, false);
+                }
+            }
             r.end_3d();
+
+            const double sx = f.width / std::max(1u, f.viewport_width);
+            const double sy = f.height / std::max(1u, f.viewport_height);
+            if (m_options.icons) {
+                for (const Icon& ic : icons) {
+                    const fg::ScreenPoint3D sp = cam.world_to_screen(ic.at);
+                    if (!sp.in_front) continue;
+                    const int x = static_cast<int>(std::lround(sp.x * sx));
+                    const int y = static_cast<int>(std::lround(sp.y * sy));
+                    const Color edge = ic.selected ? selected_color : icon_outline;
+                    if (ic.kind == 0) {
+                        for (int k = 0; k < 8; ++k) {
+                            const double a = k * pi / 4.0;
+                            const int x0 = x + static_cast<int>(std::lround(std::cos(a) * 13.0)), y0 = y + static_cast<int>(std::lround(std::sin(a) * 13.0));
+                            const int x1 = x + static_cast<int>(std::lround(std::cos(a) * 20.0)), y1 = y + static_cast<int>(std::lround(std::sin(a) * 20.0));
+                            r.draw_line(x0, y0, x1, y1, fg::Paint::stroke(icon_outline, 5));
+                            r.draw_line(x0, y0, x1, y1, fg::Paint::stroke(ic.color, 3));
+                        }
+                        r.draw_circle(x, y, 11, fg::Paint::fill(edge));
+                        r.draw_circle(x, y, 9, fg::Paint::fill(ic.color));
+                        r.draw_circle(x, y, 4, fg::Paint::fill(Color(255, 255, 240)));
+                    } else {
+                        const int bw = 26, bh = 18;
+                        r.draw_rect(x - bw / 2 - 2, y - bh / 2 - 2, bw + 4, bh + 4, fg::Paint::fill(edge));
+                        r.draw_rect(x - bw / 2, y - bh / 2, bw, bh, fg::Paint::fill(ic.color));
+                        const fg::RenderPoint lens[3] = {fg::RenderPoint(x + bw / 2.0 + 1.0, y), fg::RenderPoint(x + bw / 2.0 + 11.0, y - 9.0), fg::RenderPoint(x + bw / 2.0 + 11.0, y + 9.0)};
+                        const fg::RenderPoint lens_edge[3] = {fg::RenderPoint(x + bw / 2.0 - 1.0, y), fg::RenderPoint(x + bw / 2.0 + 13.0, y - 11.0), fg::RenderPoint(x + bw / 2.0 + 13.0, y + 11.0)};
+                        r.draw_polygon(lens_edge, 3, fg::Paint::fill(edge));
+                        r.draw_polygon(lens, 3, fg::Paint::fill(ic.color));
+                        r.draw_circle(x - 6, y - bh / 2 - 5, 5, fg::Paint::fill(edge));
+                        r.draw_circle(x - 6, y - bh / 2 - 5, 3, fg::Paint::fill(ic.color));
+                        r.draw_circle(x + 5, y - bh / 2 - 5, 5, fg::Paint::fill(edge));
+                        r.draw_circle(x + 5, y - bh / 2 - 5, 3, fg::Paint::fill(ic.color));
+                        r.draw_circle(x, y, 4, fg::Paint::fill(icon_outline));
+                    }
+                }
+            }
+            if (m_options.orientation_gizmo) {
+                const double cx = std::max(1.0, f.width) - 58.0, cy = 58.0, radius = 42.0;
+                r.draw_circle(static_cast<int>(cx), static_cast<int>(cy), static_cast<unsigned>(radius + 6.0), fg::Paint::fill(Color(12, 14, 11, 150)));
+                const Vec3 t = oc.target;
+                const fg::ScreenPoint3D c0 = cam.world_to_screen(vector3d{t.x, t.y, t.z});
+                struct End {
+                    double x, y, depth;
+                    int axis;
+                    bool positive;
+                };
+                std::vector<End> ends;
+                const double probe = std::max(0.01, static_cast<double>(oc.distance) * 0.05);
+                const Color colors[3] = {axis_x, axis_y, axis_z};
+                const char* names[3] = {"X", "Y", "Z"};
+                for (int i = 0; i < 3; ++i) {
+                    for (int sgn = 0; sgn < 2; ++sgn) {
+                        vector3d p{t.x, t.y, t.z};
+                        const double k = sgn == 0 ? probe : -probe;
+                        if (i == 0) p.x += k;
+                        else if (i == 1) p.y += k;
+                        else p.z += k;
+                        const fg::ScreenPoint3D sp = cam.world_to_screen(p);
+                        double dx = sp.x - c0.x, dy = sp.y - c0.y;
+                        const double len = std::hypot(dx, dy);
+                        const Vec3 dir = normalize(Vec3{static_cast<float>(p.x - t.x), static_cast<float>(p.y - t.y), static_cast<float>(p.z - t.z)});
+                        const double facing = dot(dir, view.view_direction());
+                        const double scale = std::sqrt(std::max(0.0, 1.0 - facing * facing));
+                        if (len > 1e-9) {
+                            dx = dx / len * scale;
+                            dy = dy / len * scale;
+                        } else {
+                            dx = dy = 0.0;
+                        }
+                        ends.push_back({cx + dx * radius, cy + dy * radius, facing, i, sgn == 0});
+                    }
+                }
+                std::sort(ends.begin(), ends.end(), [](const End& a, const End& b) { return a.depth > b.depth; });
+                for (const End& e : ends) {
+                    const Color c = colors[e.axis];
+                    if (e.positive) {
+                        r.draw_line(static_cast<int>(cx), static_cast<int>(cy), static_cast<int>(std::lround(e.x)), static_cast<int>(std::lround(e.y)), fg::Paint::stroke(c, 3));
+                        r.draw_circle(static_cast<int>(std::lround(e.x)), static_cast<int>(std::lround(e.y)), 10, fg::Paint::fill(c));
+                        const fizmo::text::TextStyle st = text_style(12.0f, Color(16, 18, 15));
+                        const fizmo::text::TextMetrics m = r.measure_text(names[e.axis], st);
+                        r.draw_text(static_cast<int>(std::lround(e.x - m.width * 0.5)), static_cast<int>(std::lround(e.y - m.height * 0.5)), names[e.axis], st);
+                    } else {
+                        r.draw_circle(static_cast<int>(std::lround(e.x)), static_cast<int>(std::lround(e.y)), 7, fg::Paint::fill(with_alpha(c, 110)));
+                        r.draw_circle(static_cast<int>(std::lround(e.x)), static_cast<int>(std::lround(e.y)), 7, fg::Paint::stroke(c, 1));
+                    }
+                }
+            }
         }
         return;
     }
@@ -618,6 +779,24 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
 }
 
 bool GpuView::draw_traced(grove::GpuCanvasFrame& f, fizmo::lighting::Scene& scene, const fizmo::lighting::LightingSettings& settings, const fizmo::lighting::Camera& camera) {
+    if (!prepare_tracer(f, scene, settings, camera)) return false;
+    const unsigned cw = static_cast<unsigned>(std::max(1.0, std::round(f.width)));
+    const unsigned ch = static_cast<unsigned>(std::max(1.0, std::round(f.height)));
+    m_meshes->tracer->draw(f.renderer, 0, 0, cw, ch);
+    return true;
+}
+
+bool GpuView::draw_traced_over(grove::GpuCanvasFrame& f, fizmo::lighting::Scene& scene, const fizmo::lighting::LightingSettings& settings, const fizmo::lighting::Camera& camera, std::uint32_t full_after_samples) {
+    if (!prepare_tracer(f, scene, settings, camera)) return false;
+    const std::uint32_t have = m_meshes->tracer->samples();
+    const float opacity = full_after_samples == 0 ? 1.0f : std::clamp(static_cast<float>(have) / static_cast<float>(full_after_samples), 0.0f, 1.0f);
+    const unsigned cw = static_cast<unsigned>(std::max(1.0, std::round(f.width)));
+    const unsigned ch = static_cast<unsigned>(std::max(1.0, std::round(f.height)));
+    m_meshes->tracer->draw(f.renderer, 0, 0, cw, ch, opacity);
+    return true;
+}
+
+bool GpuView::prepare_tracer(grove::GpuCanvasFrame& f, fizmo::lighting::Scene& scene, const fizmo::lighting::LightingSettings& settings, const fizmo::lighting::Camera& camera) {
     fg::Renderer& r = f.renderer;
     if (!r.gpu_device()) {
         m_meshes->trace_error = "path tracing in the viewport needs a GPU";
@@ -643,7 +822,7 @@ bool GpuView::draw_traced(grove::GpuCanvasFrame& f, fizmo::lighting::Scene& scen
     const unsigned w = static_cast<unsigned>(std::max(1.0, std::round(f.viewport_width)));
     const unsigned h = static_cast<unsigned>(std::max(1.0, std::round(f.viewport_height)));
     m.tracer->resize(w, h);
-    if (settings.quality != m.traced_settings.quality || settings.transport != m.traced_settings.transport || settings.caustics != m.traced_settings.caustics || settings.max_bounces != m.traced_settings.max_bounces || settings.exposure != m.traced_settings.exposure || settings.tone_mapper != m.traced_settings.tone_mapper) {
+    if (settings.quality != m.traced_settings.quality || settings.transport != m.traced_settings.transport || settings.caustics != m.traced_settings.caustics || settings.max_bounces != m.traced_settings.max_bounces || settings.exposure != m.traced_settings.exposure || settings.tone_mapper != m.traced_settings.tone_mapper || settings.firefly_clamp != m.traced_settings.firefly_clamp) {
         m.tracer->set_settings(settings);
         m.traced_settings = settings;
     }
@@ -652,9 +831,6 @@ bool GpuView::draw_traced(grove::GpuCanvasFrame& f, fizmo::lighting::Scene& scen
         m.traced_scene = &scene;
     }
     m.tracer->set_camera(camera);
-    const unsigned cw = static_cast<unsigned>(std::max(1.0, std::round(f.width)));
-    const unsigned ch = static_cast<unsigned>(std::max(1.0, std::round(f.height)));
-    m.tracer->draw(r, 0, 0, cw, ch);
     m.trace_error.clear();
     return true;
 }

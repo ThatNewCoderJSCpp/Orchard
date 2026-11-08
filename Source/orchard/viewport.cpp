@@ -81,6 +81,78 @@ void Viewport::reset_camera() {
     m_pan = PanCamera{};
 }
 
+void Viewport::fly(float forward, float right, float up) {
+    if (m_dimension == Dimension::two_d) {
+        m_pan.center.x += m_flip_x_2d ? -right : right;
+        m_pan.center.y += forward + up;
+        return;
+    }
+    const float yaw = radians(m_orbit.yaw);
+    const float pitch = radians(m_orbit.pitch);
+    const Vec3 look{-std::sin(yaw) * std::cos(pitch), -std::sin(pitch), -std::cos(yaw) * std::cos(pitch)};
+    const Vec3 side{std::cos(yaw), 0.0f, -std::sin(yaw)};
+    m_orbit.target += m_system.from_render(look * forward + side * right + Vec3{0.0f, up, 0.0f});
+}
+
+void Viewport::fly_level(float forward, float right) {
+    if (m_dimension == Dimension::two_d) {
+        fly(forward, right, 0.0f);
+        return;
+    }
+    const float yaw = radians(m_orbit.yaw);
+    const Vec3 ahead{-std::sin(yaw), 0.0f, -std::cos(yaw)};
+    const Vec3 side{std::cos(yaw), 0.0f, -std::sin(yaw)};
+    m_orbit.target += m_system.from_render(ahead * forward + side * right);
+}
+
+Vec3 Viewport::view_direction() const {
+    return normalize(m_orbit.target - eye());
+}
+
+float Viewport::units_per_pixel(Vec3 at) const {
+    if (m_dimension == Dimension::two_d) return 1.0f / std::max(m_pan.pixels_per_unit, 1e-6f);
+    const float d = std::max(length(at - eye()), 0.05f);
+    return 2.0f * d * std::tan(radians(m_orbit.fov) * 0.5f) / std::max(1u, m_height);
+}
+
+bool Viewport::ray(float x, float y, Vec3& origin, Vec3& direction) const {
+    if (m_width == 0 || m_height == 0) return false;
+    if (m_dimension == Dimension::two_d) {
+        const float ux = (x - m_width * 0.5f) / m_pan.pixels_per_unit;
+        const float uy = (y - m_height * 0.5f) / m_pan.pixels_per_unit;
+        origin = {m_pan.center.x + (m_flip_x_2d ? -ux : ux), m_pan.center.y + (m_y_axis == YAxis2D::down ? uy : -uy), 100.0f};
+        direction = {0.0f, 0.0f, -1.0f};
+        return true;
+    }
+    Mat4 inv;
+    if (!invert(view_projection(), inv)) return false;
+    const float nx = x / m_width * 2.0f - 1.0f;
+    const float ny = 1.0f - y / m_height * 2.0f;
+    const Vec3 a = mul_point(inv, {nx, ny, -1.0f});
+    const Vec3 b = mul_point(inv, {nx, ny, 1.0f});
+    origin = eye();
+    direction = normalize(b - a);
+    return length(direction) > 0.0f;
+}
+
+Entity Viewport::pick_icon(const Scene& scene, float x, float y, float radius) const {
+    Entity best;
+    float best_d = radius * radius;
+    for (Entity e : scene.entities()) {
+        const std::vector<Collider>* cs = scene.colliders(e);
+        if (cs && !cs->empty()) continue;
+        const Vec4 o = scene.world_matrix(e) * Vec4{0.0f, 0.0f, 0.0f, 1.0f};
+        float sx, sy;
+        if (!project({o.x, o.y, o.z}, sx, sy)) continue;
+        const float d = (sx - x) * (sx - x) + (sy - y) * (sy - y);
+        if (d < best_d) {
+            best_d = d;
+            best = e;
+        }
+    }
+    return best;
+}
+
 Vec3 Viewport::eye() const {
     const float yaw = radians(m_orbit.yaw);
     const float pitch = radians(m_orbit.pitch);
@@ -299,7 +371,53 @@ const std::vector<std::uint8_t>& Viewport::render(const Scene& scene, Entity sel
 }
 
 Entity Viewport::pick(const Scene& scene, float x, float y) const {
+    const Entity icon = pick_icon(scene, x, y, 22.0f);
+    if (scene.alive(icon)) return icon;
+    Vec3 origin, dir;
     Entity best;
+    if (ray(x, y, origin, dir)) {
+        float best_t = 1e30f;
+        for (Entity e : scene.entities()) {
+            const std::vector<Collider>* cs = scene.colliders(e);
+            if (!cs) continue;
+            const Mat4 world = scene.world_matrix(e);
+            for (const Collider& c : *cs) {
+                Vec3 size = c.size;
+                if (m_dimension == Dimension::two_d) size.z = std::max(size.z, 1.0f);
+                if (c.shape == ColliderShape::sphere) {
+                    const float d = std::max({c.size.x, c.size.y, c.size.z});
+                    size = {d, d, d};
+                }
+                Mat4 inv;
+                if (!invert(world * translation(c.offset) * scaling(size), inv)) continue;
+                const Vec3 o = mul_point(inv, origin);
+                const Vec3 d = mul_direction(inv, dir);
+                float t0 = -1e30f, t1 = 1e30f;
+                bool hit = true;
+                const float po[3] = {o.x, o.y, o.z};
+                const float pd[3] = {d.x, d.y, d.z};
+                for (int k = 0; k < 3 && hit; ++k) {
+                    if (std::fabs(pd[k]) < 1e-12f) {
+                        if (po[k] < -0.5f || po[k] > 0.5f) hit = false;
+                        continue;
+                    }
+                    float a = (-0.5f - po[k]) / pd[k], b = (0.5f - po[k]) / pd[k];
+                    if (a > b) std::swap(a, b);
+                    t0 = std::max(t0, a);
+                    t1 = std::min(t1, b);
+                    if (t0 > t1) hit = false;
+                }
+                if (!hit || t1 < 0.0f) continue;
+                const Vec3 at = mul_point(world * translation(c.offset) * scaling(size), o + d * std::max(t0, 0.0f));
+                const float dist = length(at - origin);
+                if (dist < best_t) {
+                    best_t = dist;
+                    best = e;
+                }
+            }
+        }
+    }
+    if (scene.alive(best)) return best;
     float best_d = 14.0f * 14.0f;
     for (Entity e : scene.entities()) {
         const Vec4 o = scene.world_matrix(e) * Vec4{0.0f, 0.0f, 0.0f, 1.0f};

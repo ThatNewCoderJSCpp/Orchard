@@ -62,6 +62,46 @@ function flip_axis(const string&: axis) -> void;
 function show_axes(const string&: fields) -> void;
 function pick_axes(const string&: style, const string&: flips) -> void;
 function toggle_axes_flip(const string&: axis) -> void;
+function set_tool(const string&: tool) -> void;
+function fly_key(grove::Event&: e, bool: pressed) -> bool;
+
+function set_tool(const string&: tool) -> void {
+    string: now = call("set_tool", tool);
+    grove::get_by_id("tool-select").remove_class("on");
+    grove::get_by_id("tool-move").remove_class("on");
+    grove::get_by_id("tool-orbit").remove_class("on");
+    grove::get_by_id("tool-pan").remove_class("on");
+    grove::get_by_id("tool-" + now).add_class("on");
+} end function set_tool
+
+function fly_key(grove::Event&: e, bool: pressed) -> bool {
+    string: k = e.key();
+    bool: fly = k == "W" || k == "A" || k == "S" || k == "D" || k == "Q" || k == "E";
+    fly = fly || k == "w" || k == "a" || k == "s" || k == "d" || k == "q" || k == "e";
+    fly = fly || k == "UpArrow" || k == "DownArrow" || k == "LeftArrow" || k == "RightArrow";
+    fly = fly || k == "Up" || k == "Down" || k == "Left" || k == "Right";
+    fly = fly || k == "ArrowUp" || k == "ArrowDown" || k == "ArrowLeft" || k == "ArrowRight";
+    bool: shift = k == "Shift" || k == "LeftShift" || k == "RightShift" || k == "ShiftLeft" || k == "ShiftRight";
+    if (!fly && !shift) then {
+        return false;
+    }
+    if (e.ctrl() || e.alt() || e.meta()) then {
+        return false;
+    }
+    string: v = "0";
+    if (pressed) then {
+        v = "1";
+    }
+    call("fly_key", k + "\t" + v);
+    if (!shift) then {
+        string: s = "0";
+        if (e.shift()) then {
+            s = "1";
+        }
+        call("fly_key", "Shift\t" + s);
+    }
+    return fly;
+} end function fly_key
 
 function call(const string&: name, const string&: arg) -> string {
     return grove::call("orchard." + name, arg);
@@ -574,6 +614,12 @@ function handle_menu(const string&: key) -> void {
         open_inspect(f[1], false);
         return;
     }
+    if (f[0] == "tool" && f.size() > 2l) then {
+        set_tool(f[1]);
+        select(f[2]);
+        grove::get_by_id("viewport").focus();
+        return;
+    }
     if (f[0] == "rename" && f.size() > 1l) then {
         open_inspect(f[1], true);
         return;
@@ -605,7 +651,7 @@ function edit_key(grove::Event&: e) -> void {
     } else if (k == "F2") then {
         e.prevent_default();
         open_inspect(selected, true);
-    } else if (k == "F") then {
+    } else if (k == "F" || k == "f") then {
         e.prevent_default();
         menu_target = selected;
         handle_menu("focus");
@@ -613,6 +659,12 @@ function edit_key(grove::Event&: e) -> void {
         e.prevent_default();
         menu_target = selected;
         handle_menu("delete");
+    } else if (k == "G" || k == "g") then {
+        e.prevent_default();
+        set_tool("move");
+    } else if (k == "Escape") then {
+        e.prevent_default();
+        set_tool("select");
     }
 } end function edit_key
 
@@ -693,7 +745,7 @@ function fill_transform() -> void {
     for (long int: i = 0l; i < ids.size(); i += 1l) {
         grove::Element: input = grove::get_by_id(ids[i]);
         if (!input.focused()) then {
-            input.set_value_float(std::io::parse_float<short float>(f[i + 1l]));
+            input.set_attribute("value", f[i + 1l]);
         }
     }
     filling = false;
@@ -1399,6 +1451,7 @@ viewport.on("canvas_resize", [](grove::Event&: e) -> void {
 });
 
 viewport.on("mouse_down", [](grove::Event&: e) -> void {
+    grove::get_by_id("viewport").focus();
     string: shift = "0";
     if (e.shift()) then {
         shift = "1";
@@ -1414,6 +1467,9 @@ viewport.on("mouse_up", [](grove::Event&: e) -> void {
     string: r = call("viewport_release", e.x().to_string() + "\t" + e.y().to_string());
     if (r.starts_with("pick")) then {
         select(reason(r));
+    } else if (r.starts_with("moved")) then {
+        select(reason(r));
+        refresh();
     } else if (r.starts_with("menu")) then {
         string: id = "";
         auto: f = r.split("\t");
@@ -1436,9 +1492,15 @@ viewport.on("key_down", [](grove::Event&: e) -> void {
     if (mode == "playing") then {
         e.prevent_default();
         call("key", e.key() + "\t1");
+    } else if (fly_key(e, true)) then {
+        e.prevent_default();
     } else then {
         edit_key(e);
     }
+});
+
+viewport.on("blur", [](grove::Event&: e) -> void {
+    call("fly_key", "*\t0");
 });
 
 grove::get_by_id("tree").on("key_down", [](grove::Event&: e) -> void {
@@ -1448,8 +1510,15 @@ grove::get_by_id("tree").on("key_down", [](grove::Event&: e) -> void {
 viewport.on("key_up", [](grove::Event&: e) -> void {
     if (mode == "playing") then {
         call("key", e.key() + "\t0");
+    } else then {
+        fly_key(e, false);
     }
 });
+
+grove::get_by_id("tool-select").on("click", [](grove::Event&: e) -> void { set_tool("select"); });
+grove::get_by_id("tool-move").on("click", [](grove::Event&: e) -> void { set_tool("move"); });
+grove::get_by_id("tool-orbit").on("click", [](grove::Event&: e) -> void { set_tool("orbit"); });
+grove::get_by_id("tool-pan").on("click", [](grove::Event&: e) -> void { set_tool("pan"); });
 
 grove::get_by_id("app").on("key_down", [](grove::Event&: e) -> void {
     if (e.ctrl() && e.key() == "S") then {

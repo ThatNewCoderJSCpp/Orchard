@@ -29,6 +29,10 @@ struct GpuViewOptions {
     bool shadows = true;
     double shadow_distance = 48.0;
     double blob_distance = 160.0;
+    bool move_gizmo = false;
+    int hot_axis = -1;
+    bool icons = true;
+    bool orientation_gizmo = true;
 };
 
 struct GpuViewStats {
@@ -52,6 +56,7 @@ public:
     void draw(grove::GpuCanvasFrame& frame, const Scene& scene, Entity selected, Viewport& view, bool playing);
     void draw(grove::GpuCanvasFrame& frame, const Scene& scene, Entity selected, Viewport& view, bool playing, double seconds);
     bool draw_traced(grove::GpuCanvasFrame& frame, fizmo::lighting::Scene& scene, const fizmo::lighting::LightingSettings& settings, const fizmo::lighting::Camera& camera);
+    bool draw_traced_over(grove::GpuCanvasFrame& frame, fizmo::lighting::Scene& scene, const fizmo::lighting::LightingSettings& settings, const fizmo::lighting::Camera& camera, std::uint32_t full_after_samples);
     std::uint32_t traced_samples() const;
     std::string trace_error() const;
     void stop_tracing();
@@ -60,6 +65,8 @@ public:
     const GpuViewStats& stats() const noexcept { return m_stats; }
 
 private:
+    bool prepare_tracer(grove::GpuCanvasFrame& frame, fizmo::lighting::Scene& scene, const fizmo::lighting::LightingSettings& settings, const fizmo::lighting::Camera& camera);
+
     GpuViewOptions m_options;
     GpuViewStats m_stats;
     struct Meshes;

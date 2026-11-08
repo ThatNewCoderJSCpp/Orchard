@@ -53,6 +53,12 @@ public:
     void pan(float dx, float dy);
     void zoom(float steps);
     void reset_camera();
+    void fly(float forward, float right, float up);
+    void fly_level(float forward, float right);
+    Vec3 view_direction() const;
+    float units_per_pixel(Vec3 at) const;
+    bool ray(float x, float y, Vec3& origin, Vec3& direction) const;
+    Entity pick_icon(const Scene& scene, float x, float y, float radius) const;
 
     OrbitCamera& orbit_camera() { return m_orbit; }
     PanCamera& pan_camera() { return m_pan; }

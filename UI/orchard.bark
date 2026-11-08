@@ -228,9 +228,33 @@ input_code {
 }
 
 .side.right {
-    width: 320px;
+    width: 360px;
     border-color: var(--line);
     border-width: 0 0 0 1px;
+}
+
+.inspector-panel {
+    flex: 2;
+    min-height: 0;
+    gap: 8px;
+}
+
+.viewbar {
+    gap: 4px;
+    padding: 4px 8px;
+    align-items: center;
+    background: var(--panel);
+    border-color: var(--line);
+    border-width: 0 0 1px 0;
+}
+
+.viewbar .hint {
+    font-size: 11px;
+}
+
+button.tool {
+    padding: 4px 10px;
+    font-size: 12px;
 }
 
 .side-head {
@@ -673,12 +697,12 @@ button.axes-flip {
 }
 
 .details-box {
-    gap: 4px;
-    flex: 0;
-    height: 220px;
+    gap: 6px;
+    flex: 2;
+    min-height: 150px;
     border-color: var(--line);
     border-width: 1px 0 0 0;
-    padding: 8px 0 0 0;
+    padding: 10px 0 0 0;
 }
 
 .details {
@@ -705,14 +729,14 @@ button.axes-flip {
 }
 
 .detail-k {
-    width: 108px;
+    width: 130px;
     color: var(--muted);
-    font-size: 12px;
+    font-size: 13px;
 }
 
 .detail-v {
     flex: 1;
-    font-size: 12px;
+    font-size: 13px;
 }
 
 .detail-yes {
