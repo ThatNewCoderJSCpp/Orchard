@@ -160,6 +160,50 @@ int e_touching(lua_State* L) {
     return 1;
 }
 
+int e_set_layers(lua_State* L) {
+    const orchard_entity e = check_entity(L, 1);
+    const lua_Integer layer = luaL_checkinteger(L, 2);
+    const lua_Integer mask = luaL_optinteger(L, 3, -1);
+    const orchard_host_api* h = &host();
+    if (ORCHARD_HOST_HAS(h, set_layers)) h->set_layers(e, static_cast<unsigned long long>(layer), static_cast<unsigned long long>(mask));
+    return 0;
+}
+
+int o_raycast(lua_State* L) {
+    double o[3], d[3];
+    read_vec(L, 1, o);
+    read_vec(L, 2, d);
+    const double reach = luaL_optnumber(L, 3, 1000.0);
+    double hit[7] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    const orchard_host_api* h = &host();
+    const orchard_entity e = ORCHARD_HOST_HAS(h, raycast) ? h->raycast(o[0], o[1], o[2], d[0], d[1], d[2], reach, hit) : 0;
+    if (!e) {
+        lua_pushnil(L);
+        return 1;
+    }
+    push_entity(L, e);
+    push_vec(L, hit[0], hit[1], hit[2]);
+    push_vec(L, hit[3], hit[4], hit[5]);
+    lua_pushnumber(L, hit[6]);
+    return 4;
+}
+
+int o_overlap_sphere(lua_State* L) {
+    double c[3];
+    read_vec(L, 1, c);
+    const double r = luaL_checknumber(L, 2);
+    const orchard_host_api* h = &host();
+    lua_newtable(L);
+    if (!ORCHARD_HOST_HAS(h, overlap_sphere)) return 1;
+    orchard_entity found[256];
+    const int n = h->overlap_sphere(c[0], c[1], c[2], r, found, 256);
+    for (int i = 0; i < n && i < 256; ++i) {
+        push_entity(L, found[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
 int e_eq(lua_State* L) {
     lua_pushboolean(L, check_entity(L, 1) == check_entity(L, 2));
     return 1;
@@ -316,7 +360,7 @@ int o_self(lua_State* L) {
 void open_orchard(lua_State* L) {
     static const luaL_Reg methods[] = {
         {"id", e_id}, {"name", e_name}, {"set_name", e_set_name}, {"parent", e_parent},
-        {"exists", e_exists}, {"destroy", e_destroy}, {"has_body", e_has_body}, {"touching", e_touching},
+        {"exists", e_exists}, {"destroy", e_destroy}, {"has_body", e_has_body}, {"touching", e_touching}, {"set_layers", e_set_layers},
         {"position", e_position}, {"set_position", e_set_position}, {"rotation", e_rotation}, {"set_rotation", e_set_rotation},
         {"scale", e_scale}, {"set_scale", e_set_scale}, {"velocity", e_velocity}, {"set_velocity", e_set_velocity},
         {"spin", e_spin}, {"set_spin", e_set_spin}, {"world_position", e_world_position},
@@ -348,7 +392,8 @@ void open_orchard(lua_State* L) {
 
     static const luaL_Reg api[] = {
         {"vec", o_vec}, {"log", o_log}, {"warn", o_warn}, {"time", o_time}, {"dt", o_dt}, {"is_2d", o_is_2d},
-        {"key_down", o_key_down}, {"find", o_find}, {"spawn", o_spawn}, {"self", o_self}, {nullptr, nullptr}};
+        {"key_down", o_key_down}, {"find", o_find}, {"spawn", o_spawn}, {"self", o_self},
+        {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {nullptr, nullptr}};
     luaL_newlib(L, api);
     lua_setglobal(L, "orchard");
     lua_pushcfunction(L, o_log);

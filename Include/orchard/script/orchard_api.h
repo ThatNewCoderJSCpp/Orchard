@@ -45,7 +45,12 @@ typedef struct orchard_host_api {
     int (*has_body)(orchard_entity entity);
     int (*key_down)(const char* key);
     int (*touching)(orchard_entity entity, orchard_entity other);
+    orchard_entity (*raycast)(double ox, double oy, double oz, double dx, double dy, double dz, double max_distance, double* hit);
+    int (*overlap_sphere)(double x, double y, double z, double radius, orchard_entity* out, int capacity);
+    void (*set_layers)(orchard_entity entity, unsigned long long layer, unsigned long long mask);
 } orchard_host_api;
+
+#define ORCHARD_HOST_HAS(host, member) ((host) && (host)->size >= offsetof(orchard_host_api, member) + sizeof((host)->member) && (host)->member)
 
 typedef int (*orchard_module_init_fn)(const orchard_host_api* host);
 typedef int (*orchard_module_hooks_fn)(void);

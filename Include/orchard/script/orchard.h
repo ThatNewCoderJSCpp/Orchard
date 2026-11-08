@@ -40,6 +40,31 @@ static inline orchard_entity orchard_parent(orchard_entity e) { return orchard_h
 static inline int orchard_has_body(orchard_entity e) { return orchard_host()->has_body(e); }
 static inline int orchard_touching(orchard_entity a, orchard_entity b) { return orchard_host()->touching(a, b); }
 
+typedef struct orchard_ray_hit {
+    orchard_entity entity;
+    orchard_vec3 point;
+    orchard_vec3 normal;
+    double distance;
+} orchard_ray_hit;
+
+static inline orchard_ray_hit orchard_raycast(orchard_vec3 origin, orchard_vec3 direction, double max_distance) {
+    orchard_ray_hit r;
+    double hit[7] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    r.entity = ORCHARD_HOST_HAS(orchard_host(), raycast) ? orchard_host()->raycast(origin.x, origin.y, origin.z, direction.x, direction.y, direction.z, max_distance, hit) : 0;
+    r.point = orchard_vec(hit[0], hit[1], hit[2]);
+    r.normal = orchard_vec(hit[3], hit[4], hit[5]);
+    r.distance = hit[6];
+    return r;
+}
+
+static inline int orchard_overlap_sphere(orchard_vec3 center, double radius, orchard_entity* out, int capacity) {
+    return ORCHARD_HOST_HAS(orchard_host(), overlap_sphere) ? orchard_host()->overlap_sphere(center.x, center.y, center.z, radius, out, capacity) : 0;
+}
+
+static inline void orchard_set_layers(orchard_entity e, unsigned long long layer, unsigned long long mask) {
+    if (ORCHARD_HOST_HAS(orchard_host(), set_layers)) orchard_host()->set_layers(e, layer, mask);
+}
+
 static inline orchard_vec3 orchard_get(orchard_entity e, int which) {
     double v[3] = { 0.0, 0.0, 0.0 };
     orchard_host()->get_vec(e, which, v);

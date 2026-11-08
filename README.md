@@ -19,6 +19,7 @@ Orchard is one editor for both 2D and 3D. A project picks 2D or 3D when it's mad
 | `Include/orchard/script` | what scripts see: the C host table every language is built on (`orchard_api.h`), the C++ API (`orchard.hpp`), the C API (`orchard.h`), the C# API (`csharp/`), the Java API (`java/`) and the glue native script modules are built with |
 | `Include/orchard/walnut` | `module.orchard` (`orchard.walh`) for Walnut scripts and graphs |
 | `Include/xylem`, `Source/xylem` | **Xylem**, Orchard's physics: 2D and 3D rigid bodies on top of Fizmo's simulations |
+| `Include/chlorophyll`, `Source/chlorophyll` | **Chlorophyll**, Orchard's lighting: turns a scene's lights, materials and shapes into a `fizmo::lighting` scene and lights it at the quality the project (or the player) picks |
 | `Editor` | the editor program, which hosts the Grove UI and gives its script `orchard.*` functions |
 | `UI` | the editor's window (`orchard.grove`), styles (`orchard.bark`) and script (`orchard.wal`) |
 | `Tests` | Heartwood's tests |
@@ -147,7 +148,7 @@ function on_tick(self, dt)
 end
 ```
 
-C# and Java scripts subclass `Script` (the class named like the file is used); C, C++, Lua and Walnut use `on_start(self)`, `on_tick(self, dt)` and `on_stop(self)`, and any of them can leave out their parameters. The APIs have the same pieces with each language's usual names: position, rotation (degrees), scale, velocity, spin, world position, translate, rotate, impulse/force/torque, `has_body`, `touching`, name, parent, destroy, find, spawn, log, warn, time, dt, `is_2d` and `key_down`.
+C# and Java scripts subclass `Script` (the class named like the file is used); C, C++, Lua and Walnut use `on_start(self)`, `on_tick(self, dt)` and `on_stop(self)`, and any of them can leave out their parameters. The APIs have the same pieces with each language's usual names: position, rotation (degrees), scale, velocity, spin, world position, translate, rotate, impulse/force/torque, `has_body`, `touching`, collision layers (`set_layers`), ray casts and sphere overlaps, name, parent, destroy, find, spawn, log, warn, time, dt, `is_2d` and `key_down`.
 
 Other languages can be added from C++ with `ScriptRuntime::add_language`: a `ScriptLanguage` says which extensions it handles, how to build a file and how to load the result as a `ScriptModule` with `hooks()` and `call()`. The built-in ones are written that way.
 
@@ -177,20 +178,127 @@ Each function can also leave out its parameters (`function on_tick() -> void`). 
 `module.orchard` has:
 
 - `orchard::Entity`: `name()`, `set_name`, `exists()`, `is(other)`, `parent()`, `destroy()`; `x()`, `y()`, `z()`, `set_position(x, y, z)`, `set_x`/`set_y`/`set_z`, `translate(dx, dy, dz)`; `rotation_x()`/`_y()`/`_z()` (degrees), `set_rotation`, `rotate(dx, dy, dz)`; `scale_x()`..., `set_scale`; `world_x()`... for the position in the world.
-- Physics on an entity with a body: `velocity_x()`..., `set_velocity(x, y, z)`, `spin_x()`... and `set_spin` (degrees a second), `push(x, y, z)` (an impulse), `add_force`, `add_torque`, `has_body()` and `touching(other)` (`touching(orchard::find("x"))`, or any contact at all when `other` doesn't exist).
+- Physics on an entity with a body: `velocity_x()`..., `set_velocity(x, y, z)`, `spin_x()`... and `set_spin` (degrees a second), `push(x, y, z)` (an impulse), `add_force`, `add_torque`, `has_body()` and `touching(other)` (`touching(orchard::find("x"))`, or any contact at all when `other` doesn't exist), and `set_layers(layer, mask)`.
+- Queries:
+  - `orchard::raycast(ox, oy, oz, dx, dy, dz, max_distance)` gives a `RayHit` with `entity`, `x`/`y`/`z`, the normal `nx`/`ny`/`nz`, `distance` and `hit()`.
+  - `orchard::overlap_count(x, y, z, radius)` and `orchard::overlap_at(i)` list what touches a sphere.
+  - In other languages: `orchard_raycast` / `orchard_overlap_sphere` / `orchard_set_layers` (C), `World::raycast` / `World::overlap_sphere` (C++), and `orchard.raycast(origin, dir, max)` / `orchard.overlap_sphere(center, r)` (Lua).
 - `orchard::current()`, `orchard::find(name)`, `orchard::spawn(name)`, `orchard::spawn_child(name, parent)`, `orchard::log`, `orchard::warn`, `orchard::dt()`, `orchard::time()`, `orchard::is_2d()` and `orchard::key_down(key)` (key names as Grove gives them: `A`, `Space`, `UpArrow`...).
 
 ## Physics
 
-Any entity can have a **body** (dynamic, static or kinematic) and any number of **colliders** (box, sphere or capsule, each with a size, an offset, density, friction and bounce). A body uses its own colliders plus those of its children that don't have a body of their own, so a few child entities with colliders make one compound body. In the inspector, a body's flags switch gravity, collisions, friction, bouncing, sleeping, continuous collision for fast things, contact events and position and rotation locks on and off, and a collider can be turned off or made a sensor (a trigger that notices things without pushing them).
+Any entity can have a **body** (dynamic, static or kinematic) and any number of **colliders** (box, sphere, capsule, cylinder, cone or rounded box, each with a size, an offset, density, friction and bounce, plus rolling friction, spinning friction and grip along each axis in 3D). A body uses its own colliders plus those of its children that don't have a body of their own, so a few child entities with colliders make one compound body. In the inspector, a body's flags switch gravity, collisions, friction, bouncing, sleeping, continuous collision for fast things, contact events and position and rotation locks on and off, and a collider can be turned off or made a sensor (a trigger that notices things without pushing them).
+
+Every other Fizmo body flag is under **All fizmo flags** in the inspector, grouped by forces, motion, impulses, collision, solver, lifetime, debug, effects and user flags. Each one shows its current value and is stored only when you change it from the default. Numbers have a slider and a number box that stay in step. The box refuses text that isn't a number and keeps values in range. Those numbers are gravity scale, drag, spin drag, speed and spin caps, quality, fast-move checks, iterations, sleep thresholds and delay, and the collision **layer** and **mask** bits.
+
+Layers are the first thing checked for every pair the broadphase finds, before any collision work. A body on layer 0 isn't put in the broadphase at all. Two bodies collide only when each one's layer is in the other's mask.
 
 When two colliders touch, their friction and bounce are mixed into one value. The **Physics** button sets the project's mix for each (`friction-mix:` and `bounce-mix:` in `project.orchard`, geometric mean and maximum by default), and every collider can pick its own in the inspector: average (Unity's and Unreal's default), geometric mean (Box2D), harmonic mean, quadratic mean, minimum, multiply (Bullet), maximum or sum. When two colliders pick different mixes, the one further down that list wins, the same rule Unity, Unreal and PhysX use.
 
 Play builds a Xylem world from the scene with gravity pointing down the project's axes, steps it at 60 Hz, and puts the scene back the way it was when you press Stop. `orchard --simulate PROJECT [SECONDS]` does the same without a window and prints where everything ended up.
 
+### Physics quality
+
+How hard the solver works is a project setting, in a `physics` block after the `project` block:
+
+```css
+physics {
+    quality: high;
+}
+```
+
+| `quality` | Substeps | Solver passes | Continuous collision | For |
+|---|---|---|---|---|
+| `arcade` | 1 | 4 + 1 | off | lots of simple bodies, mobile |
+| `standard` (default) | 1 | 10 + 3 | bodies marked Fast-moving | most games |
+| `high` | 2 | 12 + 4 | bodies marked Fast-moving | tall stacks, vehicles |
+| `realistic` | 4 | 20 + 6 | every moving body | simulations, physics puzzles |
+| `custom` | your numbers | | | |
+
+Any of `substeps`, `velocity-iterations`, `position-iterations`, `continuous`, `continuous-all`, `sleeping`, `warm-starting`, `gyroscopic`, `speculative-distance`, `slop`, `correction` and `world-size` can be set in the block too, on top of the quality's numbers. So can the newer ones:
+
+- `soft-solver`, with `soft-substeps`, `contact-hertz`, `contact-damping`, `joint-hertz` and `push-speed`.
+- `threads`, `wide-solver` (SIMD), `deterministic`, `reuse-contacts` and `spin-aware-ccd`.
+- `octree` (the old broadphase instead of the dynamic tree).
+
+The **Physics** button's dialog has all of them as sliders, number boxes and switches. In C++ it's `orchard::PhysicsSettings::preset(...)`, `xylem::Settings().with_quality(...)`, or `xylem::World::set_physics(...)` to change it while running.
+
+## Lighting
+
+Any entity can have a **light** and a **material**.
+
+A light's `type` is `point`, `spot`, `directional` (sun, moon), `sphere`, `disk`, `rectangle` (windows, TVs, panels) or `tube` (fluorescent, neon, LED strips). It shines along the entity's forward axis; rectangles are `width` along the entity's right and `height` along its up, and tubes run along its right. Every light has a color and a `temperature` in kelvin, an `intensity` in `unitless`, `candela`, `lumens`, `lux`, `nits` or `watts`, a `range` and `falloff` (`physical`, `linear`, `smooth`, `constant`, `custom`), cone angles for spots, an `angular-diameter` for suns (bigger is softer shadows), shadows on or off with a strength, bias and sample count, `diffuse`, `specular`, `indirect` and `volumetric` multipliers, light `channels` (a light only lights materials that share a channel), an optional IES profile, and a `mobility`: `dynamic` (fully live), `stationary` (live light, baked bounces) or `baked`.
+
+A material is metal/roughness PBR with emission (glowing materials light the scene), transmission with an `ior` and an `abbe` number for how much it splits light into colors, thin windows, colored absorption for water and tinted glass, opacity, and whether it casts shadows, is static (for baking) or is visible. Presets: `matte`, `plastic`, `rubber`, `metal`, `gold`, `copper`, `chrome`, `mirror`, `glass`, `frosted-glass`, `flint-glass`, `crystal`, `diamond`, `water`, `ice`, `window` and `glow`. Entities without a material are drawn in a light grey plastic; their colliders are their shape, or a 1 m cube if they have none.
+
+### Strobing and light effects
+
+Every light can have an effect on top of its normal brightness:
+
+| Setting | Scene file | What it does |
+|---|---|---|
+| Effect | `anim` | `strobe` (on and off), `pulse` (smooth breathing), `flicker` (candle, broken bulb), `fade` (bright, then dims) or `none` |
+| Speed | `anim-rate` | flashes or cycles per second |
+| Speed at the end | `anim-rate-end` | the speed ramps to this over the duration, so a strobe can speed up or slow down |
+| Flash length | `anim-on` | how much of each flash is lit, 0 to 1 |
+| Softness | `anim-soft` | 0 is a hard flash, 1 fades in and out |
+| Duration | `anim-duration` | seconds it runs; 0 is forever |
+| Start after | `anim-delay` | seconds to wait first |
+| Repeat | `anim-loop` | start over after the duration, or stay steady |
+| Brightness off, on, at the end | `anim-low`, `anim-high`, `anim-high-end` | multiples of the light's intensity |
+| Color change | `anim-color`, `anim-color-b` | `alternate` swaps to a second color every flash, `blend` fades between them, `rainbow` goes around the hues |
+| Offset | `anim-phase` | 0 to 1, so several lights can chase each other |
+
+`Light::sample(seconds)` gives the brightness and color at a moment, and `chlorophyll::World::animate(scene, seconds)` lights the scene with them. While playing, the editor runs every effect; the outliner's "Preview light effects" switch runs them while editing too. The properties window has quick picks (club strobe, police lights, slow pulse, candle, broken bulb, rainbow, speeding up).
+
+How lights are computed is a project setting too:
+
+```css
+lighting {
+    quality: realistic;
+    editor-quality: shadowed;
+    players-choose: on;
+    sky: physical;
+    fog: on;
+    fog-density: 0.03;
+    shadows: soft;
+    photon.photons: 1000000;
+}
+```
+
+| `quality` | What you get |
+|---|---|
+| `off` | colors as they are |
+| `simple` | lights shine from their centers, only the sun casts shadows, one ray per pixel (Voxelspire's way) |
+| `shadowed` | every object casts soft shadows from every light, sized by the light; ambient occlusion |
+| `realistic` | adds light bouncing off walls (a probe grid that follows moving lights), ray-traced glossy reflections, glass that bends light and casts colored shadows |
+| `path-traced` | exact soft shadows, bounces, reflections and refraction; clears up the longer it renders |
+| `photon` | traces light by wavelength from the lights: glass and water focus light into caustics and prisms and crystals split it into rainbows |
+
+`quality` is what the game starts with and `editor-quality` is what the viewport uses; with `players-choose` on, a game can switch at runtime with `chlorophyll::World::set_level`. Any other line sets one of Fizmo's lighting settings on top of the quality's preset (`shadows`, `shadow-casters`, `shadow-samples`, `gi`, `ambient-occlusion`, `probe-spacing`, `reflections`, `refraction`, `dispersion`, `transport`, `bounces`, `samples`, `caustics`, `photons`, `denoise`, `area-lights`, `emissive-lights`, `fog-*`, `exposure`, `ev100`, `tone-mapper`, `white-balance`, `sky`, `sky-zenith`, ...; `chlorophyll::setting_names()` lists them all). Put a quality and a dot in front to only apply it at that quality, like `photon.photons` above.
+
+`chlorophyll::World` builds the lighting scene from an Orchard scene, `sync` picks up moved lights and objects each frame (only what changed is rebuilt), `render` lights the viewport, `bake` bakes static lighting into lightmaps, vertex light and a probe grid, and `light_level` / `lit_by` answer gameplay questions like "is the player standing in shadow".
+
+## The editor
+
+The **outliner** on the left lists everything in the scene. By default it's split into sections: Rigid Bodies, Containers (walls, floors and anything with a body that never moves, or colliders with no body), Triggers, Lights, Cameras, Scripted, Groups and Empty. You can switch it to the parent/child hierarchy or one A to Z list, filter it by name, kind or tag, fold sections away, sort by name, show empty sections, and move it to the right with the ⇄ button. Its settings are saved per project in `.orchard/editor.prefs`.
+
+- **Left click** something (in the outliner or the viewport) to select it and see its details under the outliner: angles in degrees, world position, scale, mass, speed and spin while playing, its light (with a color swatch, intensity, cone, effect), its material, whether it gives off light, and whether its top is in shadow, which lights reach it and how much light lands there.
+- **Right click** it for a menu: edit properties, rename, look at it, make it a rigid body or a container, add a collider, make it give off light, make it strobe, give it a material, add a child, delete. Right-clicking empty space adds things.
+- **Edit properties** (also double-click, or Edit... under the details) opens one window with everything: name, position, angles and scale, script, physics and every body flag, each collider, the light with a color swatch, its strobe and effects, and the material.
+
 ## The viewport
 
 The viewport is a Grove `<gpu_canvas>`, drawn with Fizmo's renderer on the GPU (lit meshes for colliders, lines for the grid and gizmos), or with its software renderer when there's no GPU. Its camera is a `fizmo::graphics::Camera3D` set to the project's axes, so the grid lies on the floor and up is up whichever preset you use; left-handed presets are drawn mirrored the way Unity and Unreal show them.
+
+The viewport only draws what the camera can see, using Fizmo's `Visibility3D`:
+
+- **Culling:** things outside the view, too small to matter, or fully behind solid boxes (walls, floors, crates) are skipped.
+- **Level of detail:** round shapes use fewer triangles far away.
+- **Batching:** spheres and unrotated boxes with the same color go to the GPU as one instanced draw.
+- **Shadows:** real shadows within 48 m, soft blob shadows out to 160 m, and nothing past that. The sun's shadow map keeps a cached layer of everything that isn't moving and redraws only moving things on top.
+
+Both have switches in the outliner's settings.
 
 ## Building
 
@@ -200,7 +308,7 @@ cmake --build build
 build/bin/orchard
 ```
 
-CMake fetches Fizmo, Grove and Walnut. On Fedora you'll need `libX11-devel libXft-devel libXrender-devel fontconfig-devel freetype-devel openssl-devel pango-devel cairo-devel zlib-devel libjpeg-turbo-devel vulkan-headers mesa-libGL-devel libstdc++-static`. `-DORCHARD_BUILD_EDITOR=OFF -DORCHARD_BUILD_XYLEM=OFF` builds only Heartwood and its tests, which fetches only Lua (`-DORCHARD_WITH_LUA=OFF` fetches nothing). Java scripts are compiled in when CMake finds a JDK's headers (`-DORCHARD_WITH_JAVA=OFF` turns them off); C# needs nothing at build time. The tests build and run a script in every language whose tools are installed and skip the rest; set `ORCHARD_TEST_WALNUT` to a `walnut` compiler to include Walnut.
+CMake fetches Fizmo, Grove and Walnut. On Fedora you'll need `libX11-devel libXft-devel libXrender-devel fontconfig-devel freetype-devel openssl-devel pango-devel cairo-devel zlib-devel libjpeg-turbo-devel vulkan-headers mesa-libGL-devel libstdc++-static`. `-DORCHARD_BUILD_EDITOR=OFF -DORCHARD_BUILD_XYLEM=OFF -DORCHARD_BUILD_CHLOROPHYLL=OFF` builds only Heartwood and its tests, which fetches only Lua (`-DORCHARD_WITH_LUA=OFF` fetches nothing). Java scripts are compiled in when CMake finds a JDK's headers (`-DORCHARD_WITH_JAVA=OFF` turns them off); C# needs nothing at build time. The tests build and run a script in every language whose tools are installed and skip the rest; set `ORCHARD_TEST_WALNUT` to a `walnut` compiler to include Walnut.
 
 ```
 orchard [PROJECT]                                  open the editor, optionally with a project

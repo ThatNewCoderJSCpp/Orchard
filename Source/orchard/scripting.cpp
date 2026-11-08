@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -367,6 +368,36 @@ int host_touching(orchard_entity a, orchard_entity b) {
     return g_runtime && rt().physics() && rt().physics()->touching(entity_of(a), entity_of(b)) ? 1 : 0;
 }
 
+orchard_entity host_raycast(double ox, double oy, double oz, double dx, double dy, double dz, double max_distance, double* hit) {
+    if (!g_runtime || !rt().physics() || !std::isfinite(max_distance) || max_distance <= 0.0) return 0;
+    Vec3 point, normal;
+    float distance = 0.0f;
+    const Entity e = rt().physics()->raycast(Vec3{static_cast<float>(ox), static_cast<float>(oy), static_cast<float>(oz)}, Vec3{static_cast<float>(dx), static_cast<float>(dy), static_cast<float>(dz)}, static_cast<float>(max_distance), &point, &normal, &distance);
+    if (!e.valid()) return 0;
+    if (hit) {
+        hit[0] = point.x;
+        hit[1] = point.y;
+        hit[2] = point.z;
+        hit[3] = normal.x;
+        hit[4] = normal.y;
+        hit[5] = normal.z;
+        hit[6] = distance;
+    }
+    return id_of(e);
+}
+
+int host_overlap_sphere(double x, double y, double z, double radius, orchard_entity* out, int capacity) {
+    if (!g_runtime || !rt().physics() || !std::isfinite(radius) || radius <= 0.0) return 0;
+    const std::vector<Entity> found = rt().physics()->overlap_sphere(Vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)}, static_cast<float>(radius));
+    const int n = static_cast<int>(found.size());
+    for (int i = 0; out && i < n && i < capacity; ++i) out[i] = id_of(found[static_cast<std::size_t>(i)]);
+    return n;
+}
+
+void host_set_layers(orchard_entity e, unsigned long long layer, unsigned long long mask) {
+    if (g_runtime && rt().physics()) rt().physics()->set_layers(entity_of(e), layer, mask);
+}
+
 } // namespace
 
 void set_current_runtime(ScriptRuntime* runtime) {
@@ -394,6 +425,9 @@ const orchard_host_api& host_table() {
         t.has_body = &host_has_body;
         t.key_down = &host_key_down;
         t.touching = &host_touching;
+        t.raycast = &host_raycast;
+        t.overlap_sphere = &host_overlap_sphere;
+        t.set_layers = &host_set_layers;
         return t;
     }();
     return table;

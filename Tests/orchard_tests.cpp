@@ -142,6 +142,37 @@ void test_components() {
         check(again->colliders(wh)->size() == 1 && (*again->colliders(wh))[0].sensor && (*again->colliders(wh))[0].shape == orchard::ColliderShape::sphere, "sensor collider round trip");
         check(again->script(c) == "Scripts/spin.wal", "script round trip");
     }
+    {
+        orchard::Scene m(orchard::Dimension::three_d);
+        const orchard::Entity e = m.create("Tuned");
+        orchard::Body& tb = m.add_body(e);
+        tb.collision_layer = 4;
+        tb.collision_mask = 5;
+        tb.quality = orchard::BodyQuality::high;
+        tb.continuous = orchard::BodyContinuous::on;
+        tb.velocity_iterations = 12;
+        tb.max_speed = 30.0f;
+        tb.sleep_delay = 2.0f;
+        tb.flags_on = 1ull << 50;
+        tb.flags_off = 1ull << 45;
+        orchard::Collider* rc = m.add_collider(e, orchard::ColliderShape::rounded_box);
+        rc->rounding = 0.2f;
+        rc->rolling_friction = 0.05f;
+        rc->grip = {2.0f, 1.0f, 0.5f};
+        m.add_collider(e, orchard::ColliderShape::cone);
+        const std::optional<orchard::Scene> back = orchard::Scene::load(m.save(), &error);
+        check(back.has_value(), "tuned body loads: " + error);
+        if (back) {
+            const orchard::Body* bb = back->body(back->find("Tuned"));
+            check(bb && bb->collision_layer == 4 && bb->collision_mask == 5 && bb->quality == orchard::BodyQuality::high && bb->continuous == orchard::BodyContinuous::on, "layers, quality and fast-move mode round trip");
+            check(bb && bb->velocity_iterations == 12 && near(bb->max_speed, 30.0f) && near(bb->sleep_delay, 2.0f) && bb->flags_on == (1ull << 50) && bb->flags_off == (1ull << 45), "iterations, caps, sleep and flag overrides round trip");
+            const std::vector<orchard::Collider>* cs = back->colliders(back->find("Tuned"));
+            check(cs && cs->size() == 2 && (*cs)[0].shape == orchard::ColliderShape::rounded_box && near((*cs)[0].rounding, 0.2f) && near((*cs)[0].rolling_friction, 0.05f) && near((*cs)[0].grip.x, 2.0f) && near((*cs)[0].grip.z, 0.5f), "rounded box with rolling friction and grip round trips");
+            check(cs && cs->size() == 2 && (*cs)[1].shape == orchard::ColliderShape::cone, "cone collider round trips");
+        }
+        const orchard::Body plain;
+        check(m.save().find("layer:") != std::string::npos && orchard::Scene(orchard::Dimension::three_d).save().find("layer:") == std::string::npos && plain.collision_mask == ~0ull, "only changed settings are written");
+    }
     const std::optional<orchard::Scene> old = orchard::Scene::load("orchard-scene 1 2d\nentity 1 0 0 0 0 0 0 0 1 1 1 Old\n", &error);
     check(old && old->size() == 1, "version 1 scenes still load");
     check(s.remove_collider(wheel, 0) && s.colliders(wheel)->empty(), "removing a collider");
@@ -555,6 +586,163 @@ void test_viewport() {
     check(v.pick(s, 160.0f, 100.0f) == cube, "picking in 2d");
 }
 
+void test_lights_and_materials() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity lamp = s.create("Lamp");
+    orchard::Light& l = s.add_light(lamp, orchard::LightType::rectangle);
+    check(l.type == orchard::LightType::rectangle && l.width == 1.0f, "a new rectangle light starts 1 by 1");
+    l.color = {1.0f, 0.5f, 0.25f};
+    l.temperature = 3200.0f;
+    l.unit = orchard::LightUnit::lumens;
+    l.intensity = 800.0f;
+    l.two_sided = true;
+    l.mobility = orchard::LightMobility::stationary;
+    l.ies = "Assets/My Lights/down light.ies";
+    l.channels = 3u;
+    const orchard::Entity sun = s.create("Sun");
+    s.add_light(sun, orchard::LightType::directional).angular_diameter = 2.0f;
+    const orchard::Entity ball = s.create("Ball");
+    s.add_collider(ball, orchard::ColliderShape::sphere);
+    orchard::Material& m = s.add_material(ball);
+    m = *orchard::Material::named("diamond");
+    m.light_channels = 2u;
+    m.is_static = true;
+    const std::string text = s.save();
+    check(text.find("orchard-scene 3") == 0, "scenes with lights save as version 3");
+    std::string err;
+    const auto back = orchard::Scene::load(text, &err);
+    check(back.has_value(), "the scene loads back " + err);
+    if (!back) return;
+    const orchard::Light* bl = back->light(back->find("Lamp"));
+    check(bl && bl->type == orchard::LightType::rectangle && bl->unit == orchard::LightUnit::lumens && bl->intensity == 800.0f && bl->two_sided && bl->temperature == 3200.0f, "light round trip");
+    check(bl && bl->mobility == orchard::LightMobility::stationary && bl->channels == 3u && near(bl->color.y, 0.5f), "light mobility, channels and color round trip");
+    check(bl && bl->ies == "Assets/My Lights/down light.ies", "paths with spaces survive");
+    const orchard::Light* bs = back->light(back->find("Sun"));
+    check(bs && bs->type == orchard::LightType::directional && bs->angular_diameter == 2.0f, "sun round trip");
+    const orchard::Material* bm = back->material(back->find("Ball"));
+    check(bm && bm->preset == "diamond" && near(bm->ior, 2.417f) && bm->transmission == 1.0f && bm->light_channels == 2u && bm->is_static, "material round trip");
+    check(orchard::Material::named("gold")->metallic == 1.0f && !orchard::Material::named("nonsense"), "material presets");
+    check(orchard::parse_light_type("sun") == orchard::LightType::directional && orchard::parse_light_type("window") == orchard::LightType::rectangle && orchard::parse_light_type("neon") == std::nullopt, "light type names");
+    for (orchard::LightType t : orchard::light_types()) check(orchard::parse_light_type(orchard::to_string(t)) == t, std::string("light type round trip ") + orchard::to_string(t));
+    orchard::Scene copy = *back;
+    check(copy.remove_light(copy.find("Lamp")) && !copy.light(copy.find("Lamp")), "lights can be removed");
+    check(copy.remove_material(copy.find("Ball")) && !copy.material(copy.find("Ball")), "materials can be removed");
+    const auto old = orchard::Scene::load("orchard-scene 2 3d\nentity 1 0 0 0 0 0 0 0 1 1 1 Cube\n", &err);
+    check(old && old->size() == 1, "version 2 scenes still load");
+}
+
+void test_light_animation() {
+    orchard::LightAnimation a = orchard::LightAnimation::strobe(2.0f, 0.25f);
+    check(a.active() && a.mode == orchard::LightAnimationMode::strobe, "strobe: the preset turns the effect on");
+    const orchard::Vec3 white{1.0f, 1.0f, 1.0f};
+    check(near(a.evaluate(0.05, white).brightness, 1.0f) && a.evaluate(0.05, white).on, "strobe: lit at the start of a flash");
+    check(near(a.evaluate(0.3, white).brightness, 0.0f) && !a.evaluate(0.3, white).on, "strobe: dark after the flash length");
+    check(near(a.evaluate(0.55, white).brightness, 1.0f), "strobe: two flashes a second means lit again at 0.55 s");
+    a.low = 0.2f;
+    a.high = 3.0f;
+    check(near(a.evaluate(0.3, white).brightness, 0.2f) && near(a.evaluate(0.05, white).brightness, 3.0f), "strobe: brightness when off and on");
+    orchard::LightAnimation ramp = orchard::LightAnimation::strobe(1.0f, 0.5f);
+    ramp.rate_end = 9.0f;
+    ramp.duration = 2.0f;
+    ramp.loop = false;
+    int flips = 0;
+    bool was = true;
+    for (int i = 0; i < 2000; ++i) {
+        const bool on = ramp.evaluate(i * 0.001, white).on;
+        if (on != was) ++flips;
+        was = on;
+    }
+    check(flips >= 18 && flips <= 22, "strobe: speeding from 1 to 9 flashes a second gives about 10 flashes over 2 s (" + std::to_string(flips / 2) + ")");
+    check(!ramp.evaluate(2.5, white).running && near(ramp.evaluate(2.5, white).brightness, 1.0f), "strobe: after the duration it stays steady when it doesn't loop");
+    ramp.loop = true;
+    check(ramp.evaluate(2.05, white).running, "strobe: a looping effect starts over");
+    orchard::LightAnimation delayed = orchard::LightAnimation::pulse(1.0f, 0.0f);
+    delayed.delay = 1.0f;
+    check(!delayed.evaluate(0.5, white).running && near(delayed.evaluate(1.5, white).brightness, 1.0f) && near(delayed.evaluate(1.0, white).brightness, 0.0f), "pulse: waits for its delay, then breathes");
+    orchard::LightAnimation colors;
+    colors.mode = orchard::LightAnimationMode::strobe;
+    colors.low = 1.0f;
+    colors.color_mode = orchard::LightColorMode::alternate;
+    colors.color_b = {0.0f, 0.0f, 1.0f};
+    colors.rate = colors.rate_end = 1.0f;
+    const orchard::Vec3 red{1.0f, 0.0f, 0.0f};
+    check(near(colors.evaluate(0.2, red).color.x, 1.0f) && near(colors.evaluate(1.2, red).color.z, 1.0f), "color: alternate swaps to the second color every other flash");
+    orchard::LightAnimation flick = orchard::LightAnimation::flicker(10.0f, 0.5f);
+    float lo = 10.0f, hi = -10.0f;
+    for (int i = 0; i < 400; ++i) {
+        const float b = flick.evaluate(i * 0.01, white).brightness;
+        lo = std::min(lo, b);
+        hi = std::max(hi, b);
+    }
+    check(lo >= 0.5f - 1e-4f && hi <= 1.0f + 1e-4f && hi - lo > 0.2f, "flicker: wanders between its low and high brightness");
+    orchard::LightAnimation rainbow;
+    rainbow.color_mode = orchard::LightColorMode::rainbow;
+    rainbow.rate = rainbow.rate_end = 1.0f;
+    check(rainbow.active() && rainbow.evaluate(0.0, white).color.x > rainbow.evaluate(0.0, white).color.z && rainbow.evaluate(0.66, white).color.z > rainbow.evaluate(0.66, white).color.x, "color: rainbow goes around the hues");
+    for (orchard::LightAnimationMode m : orchard::light_animation_modes()) check(orchard::parse_light_animation_mode(orchard::to_string(m)) == m, std::string("animation name round trip ") + orchard::to_string(m));
+    for (orchard::LightColorMode m : orchard::light_color_modes()) check(orchard::parse_light_color_mode(orchard::to_string(m)) == m, std::string("color mode name round trip ") + orchard::to_string(m));
+
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity club = s.create("Club");
+    orchard::Light& l = s.add_light(club, orchard::LightType::spot);
+    l.animation = orchard::LightAnimation::strobe(12.0f, 0.1f);
+    l.animation.rate_end = 3.0f;
+    l.animation.duration = 4.5f;
+    l.animation.delay = 0.25f;
+    l.animation.loop = false;
+    l.animation.low = 0.05f;
+    l.animation.high_end = 2.0f;
+    l.animation.softness = 0.3f;
+    l.animation.color_mode = orchard::LightColorMode::blend;
+    l.animation.color_b = {0.1f, 0.9f, 0.2f};
+    l.animation.phase = 0.5f;
+    l.animation.seed = 7u;
+    const std::string text = s.save();
+    check(text.find("anim:strobe") != std::string::npos && text.find("anim-rate:12") != std::string::npos, "strobe settings are saved on the light line");
+    std::string err;
+    const auto back = orchard::Scene::load(text, &err);
+    const orchard::Light* bl = back ? back->light(back->find("Club")) : nullptr;
+    check(bl && bl->animation.mode == orchard::LightAnimationMode::strobe && near(bl->animation.rate, 12.0f) && near(bl->animation.rate_end, 3.0f) && near(bl->animation.on_fraction, 0.1f), "strobe speed and flash length round trip");
+    check(bl && near(bl->animation.duration, 4.5f) && near(bl->animation.delay, 0.25f) && !bl->animation.loop && near(bl->animation.low, 0.05f) && near(bl->animation.high_end, 2.0f) && near(bl->animation.softness, 0.3f), "strobe duration, delay and brightness round trip");
+    check(bl && bl->animation.color_mode == orchard::LightColorMode::blend && near(bl->animation.color_b.y, 0.9f) && near(bl->animation.phase, 0.5f) && bl->animation.seed == 7u, "strobe colors round trip");
+    orchard::Scene plain(orchard::Dimension::three_d);
+    plain.add_light(plain.create("Lamp"));
+    check(plain.save().find("anim") == std::string::npos, "steady lights don't write any strobe settings");
+}
+
+void test_project_physics_and_lighting() {
+    orchard::ProjectInfo info;
+    info.physics = orchard::PhysicsSettings::preset(orchard::PhysicsQuality::high);
+    info.lighting.quality = orchard::LightingLevel::realistic;
+    info.lighting.editor_quality = orchard::LightingLevel::simple;
+    info.lighting.players_choose = false;
+    info.lighting.set("shadows", "hard");
+    info.lighting.set("sky", "physical");
+    info.lighting.set("photon.photons", "1000000");
+    const std::string text = orchard::Project::write_info(info);
+    check(text.find("physics {") != std::string::npos && text.find("lighting {") != std::string::npos, "project.orchard gets physics and lighting blocks");
+    std::string err;
+    const auto back = orchard::Project::read_info(text, &err);
+    check(back.has_value(), "the blocks read back " + err);
+    if (!back) return;
+    check(back->physics == info.physics && back->physics.substeps == 2, "physics quality round trip");
+    check(back->lighting.quality == orchard::LightingLevel::realistic && back->lighting.editor_quality == orchard::LightingLevel::simple && !back->lighting.players_choose, "lighting quality round trip");
+    check(back->lighting.get("shadows") && *back->lighting.get("shadows") == "hard" && back->lighting.get("photon.photons"), "lighting settings round trip");
+    orchard::ProjectInfo custom;
+    custom.physics.quality = orchard::PhysicsQuality::custom;
+    custom.physics.substeps = 7;
+    custom.physics.continuous_all = true;
+    const auto c = orchard::Project::read_info(orchard::Project::write_info(custom), &err);
+    check(c && c->physics.quality == orchard::PhysicsQuality::custom && c->physics.substeps == 7 && c->physics.continuous_all, "custom physics keeps its own numbers");
+    const auto plain = orchard::Project::read_info("project {\n    name: \"Old\";\n}\n", &err);
+    check(plain && plain->physics == orchard::PhysicsSettings() && plain->lighting.quality == orchard::LightingLevel::shadowed, "old project files get the defaults");
+    check(!orchard::Project::read_info("project {\n}\nphysics {\n    quality: warp;\n}\n", &err) && err.find("physics quality") != std::string::npos, "bad physics quality is reported");
+    check(!orchard::Project::read_info("project {\n}\nphysics {\n    substeps: 0;\n}\n", &err), "substeps must be at least 1");
+    for (orchard::PhysicsQuality q : orchard::physics_qualities()) check(orchard::parse_physics_quality(orchard::to_string(q)) == q, std::string("physics quality name ") + orchard::to_string(q));
+    for (orchard::LightingLevel q : orchard::lighting_levels()) check(orchard::parse_lighting_level(orchard::to_string(q)) == q, std::string("lighting level name ") + orchard::to_string(q));
+    check(orchard::PhysicsSettings::preset(orchard::PhysicsQuality::arcade).velocity_iterations < orchard::PhysicsSettings::preset(orchard::PhysicsQuality::realistic).velocity_iterations, "arcade is cheaper than realistic");
+}
+
 } // namespace
 
 int main() {
@@ -572,6 +760,9 @@ int main() {
     test_remap_scene();
     test_combine_settings();
     test_script_languages();
+    test_lights_and_materials();
+    test_light_animation();
+    test_project_physics_and_lighting();
     std::cout << (checks - failures) << "/" << checks << " checks passed\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

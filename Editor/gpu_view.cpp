@@ -1,5 +1,9 @@
 #include "gpu_view.hpp"
 
+#include <unordered_map>
+
+#include <tuple>
+
 #ifndef FIZMO
 #define FIZMO
 #endif
@@ -77,6 +81,18 @@ fizmo::linalg::Matrix4d to_fizmo(const Mat4& m) {
 vector3d point(const Mat4& m, Vec3 p) {
     const Vec4 v = m * Vec4{p.x, p.y, p.z, 1.0f};
     return vector3d{v.x, v.y, v.z};
+}
+
+Color light_icon_color(const Light& l, double seconds) {
+    if (!l.enabled) return Color(90, 90, 80);
+    const LightAnimationSample a = l.sample(seconds);
+    const float m = std::max({a.color.x, a.color.y, a.color.z, 1e-4f});
+    const float k = std::clamp(0.25f + 0.75f * std::min(a.brightness, 1.0f), 0.0f, 1.0f);
+    auto ch = [&](float c) {
+        const float v = std::pow(std::clamp(c / m, 0.0f, 1.0f), 1.0f / 2.2f) * k;
+        return static_cast<std::uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+    };
+    return Color(ch(a.color.x), ch(a.color.y), ch(a.color.z));
 }
 
 Color body_color(const Scene& scene, Entity e, const Collider& c) {
@@ -168,6 +184,44 @@ fg::Mesh3D make_sphere(int rings, int segments, float stretch) {
     return m;
 }
 
+fg::Mesh3D make_cylinder(int segments, float top) {
+    fg::Mesh3D m;
+    const Color white(255, 255, 255);
+    const float slope = 0.5f - top * 0.5f;
+    const float len = std::sqrt(1.0f + slope * slope);
+    for (int j = 0; j <= segments; ++j) {
+        const float u = static_cast<float>(j) / segments;
+        const float theta = u * 2.0f * pi;
+        const float cx = std::cos(theta), cz = std::sin(theta);
+        const vector3d n{cx / len, slope / len, cz / len};
+        m.add_vertex(fg::Vertex3D(vector3d{cx * 0.5f, -0.5f, cz * 0.5f}, n, white, u, 0.0f));
+        m.add_vertex(fg::Vertex3D(vector3d{cx * 0.5f * top, 0.5f, cz * 0.5f * top}, n, white, u, 1.0f));
+    }
+    for (int j = 0; j < segments; ++j) {
+        const auto a = static_cast<std::uint32_t>(j * 2);
+        m.add_triangle(a, a + 1, a + 2);
+        m.add_triangle(a + 1, a + 3, a + 2);
+    }
+    for (int side = 0; side < 2; ++side) {
+        const float y = side ? 0.5f : -0.5f;
+        const float r = side ? top * 0.5f : 0.5f;
+        if (r <= 0.0f) continue;
+        const vector3d n{0.0f, side ? 1.0f : -1.0f, 0.0f};
+        const auto center = static_cast<std::uint32_t>(m.vertices().size());
+        m.add_vertex(fg::Vertex3D(vector3d{0.0f, y, 0.0f}, n, white, 0.5f, 0.5f));
+        for (int j = 0; j <= segments; ++j) {
+            const float theta = static_cast<float>(j) / segments * 2.0f * pi;
+            m.add_vertex(fg::Vertex3D(vector3d{std::cos(theta) * r, y, std::sin(theta) * r}, n, white, 0.0f, 0.0f));
+        }
+        for (int j = 0; j < segments; ++j) {
+            const auto a = center + 1 + static_cast<std::uint32_t>(j);
+            if (side) m.add_triangle(center, a + 1, a);
+            else m.add_triangle(center, a, a + 1);
+        }
+    }
+    return m;
+}
+
 fg::Material3D tinted(Color c, bool lit) {
     fg::Material3D mat = lit ? fg::Material3D::plastic(0.6f) : fg::Material3D::unlit();
     mat.emissive = c;
@@ -181,7 +235,21 @@ fg::Material3D tinted(Color c, bool lit) {
 struct GpuView::Meshes {
     fg::Mesh3D cube = make_cube();
     fg::Mesh3D sphere = make_sphere(16, 24, 0.0f);
+    fg::Mesh3D cylinder = make_cylinder(24, 1.0f);
+    fg::Mesh3D cone = make_cylinder(24, 0.0f);
+    fg::Mesh3D sphere_lod[2] = {make_sphere(8, 12, 0.0f), make_sphere(5, 8, 0.0f)};
+    fg::Mesh3D cylinder_lod[2] = {make_cylinder(12, 1.0f), make_cylinder(8, 1.0f)};
+    fg::Mesh3D cone_lod[2] = {make_cylinder(12, 0.0f), make_cylinder(8, 0.0f)};
+    fg::Visibility3D vis;
+    std::unordered_map<std::uint64_t, fg::Visibility3D::Handle> handles;
+    std::unordered_map<std::uint64_t, std::uint64_t> seen;
+    std::uint64_t frame = 0;
     std::map<std::pair<const fg::Mesh3D*, std::uint32_t>, fg::Mesh3D> tinted;
+    std::unique_ptr<fg::GpuPathTracer> tracer;
+    fg::Renderer* traced_with = nullptr;
+    const fizmo::lighting::Scene* traced_scene = nullptr;
+    fizmo::lighting::LightingSettings traced_settings;
+    std::string trace_error;
 
     const fg::Mesh3D& tint(const fg::Mesh3D& base, Color c) {
         const std::uint32_t key = fg::Vertex3D::pack(c);
@@ -195,9 +263,15 @@ struct GpuView::Meshes {
 
 GpuView::GpuView() : m_meshes(std::make_unique<Meshes>()) {}
 
-GpuView::~GpuView() = default;
+GpuView::~GpuView() {
+    if (m_meshes && m_meshes->tracer) static_cast<void>(m_meshes->tracer.release());
+}
 
 void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected, Viewport& view, bool playing) {
+    draw(f, scene, selected, view, playing, 0.0);
+}
+
+void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected, Viewport& view, bool playing, double seconds) {
     fg::Renderer& r = f.renderer;
     const unsigned w = static_cast<unsigned>(std::max(1.0, std::round(f.width)));
     const unsigned h = static_cast<unsigned>(std::max(1.0, std::round(f.height)));
@@ -214,6 +288,13 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
         r.draw_mesh(tinted_mesh, to_fizmo(model), mat);
     };
 
+    auto paint_cast = [&](const fg::Mesh3D& mesh, const Mat4& model, Color color, bool cast) {
+        const fg::Mesh3D& tinted_mesh = m_meshes->tint(mesh, color);
+        fg::Material3D mat = tinted(color, true);
+        mat.shadow = cast ? fg::Shadow3D::Cast : fg::Shadow3D::None;
+        r.draw_mesh(tinted_mesh, to_fizmo(model), mat);
+    };
+
     if (view.dimension() == Dimension::three_d) {
         const OrbitCamera& oc = view.orbit_camera();
         const AxisSystem& axes = view.axis_system();
@@ -227,6 +308,15 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
         };
         if (r.begin_3d(cam, f.viewport_x, f.viewport_y, f.viewport_width, f.viewport_height)) {
             r.set_light_3d(fg::Light3D::sun(wv(-0.4f, -1.0f, -0.6f), 0.5f, 0.6f));
+            if (m_options.shadows) {
+                fg::SunShadow3D sun = fg::SunShadow3D::medium();
+                sun.distance = std::max(1.0, m_options.shadow_distance);
+                fg::SceneLighting3D lighting = fg::SceneLighting3D::daylight(sun);
+                lighting.sun_direction = wv(-0.4f, -1.0f, -0.6f);
+                r.set_scene_lighting(lighting);
+            } else {
+                r.set_scene_lighting(fg::SceneLighting3D::off());
+            }
             float step = 1.0f;
             while (oc.distance / step > 40.0f) step *= 10.0f;
             const int lines = 20;
@@ -242,28 +332,42 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
             }
             r.draw_line_3d(vector3d{0.0, 0.0, 0.0}, wv(0.0f, step * 2.0f, 0.0f), axis_y, 2.0f, true);
 
+            enum class Kind { cube, sphere, cylinder, cone };
+            struct Item {
+                Kind kind;
+                Mat4 m;
+                Color color;
+                std::uint64_t key;
+            };
+            std::vector<Item> items;
             for (Entity e : scene.entities()) {
                 const Mat4 world = scene.world_matrix(e);
+                const std::uint64_t base = static_cast<std::uint64_t>(e.id()) << 20;
                 const std::vector<Collider>* cs = scene.colliders(e);
                 if (cs && !cs->empty()) {
-                    for (const Collider& c : *cs) {
+                    for (std::size_t ci = 0; ci < cs->size(); ++ci) {
+                        const Collider& c = (*cs)[ci];
                         const Mat4 m = shape_matrix(world, c);
                         const Color col = body_color(scene, e, c);
+                        const std::uint64_t key = base | (static_cast<std::uint64_t>(ci & 0xffff) << 4);
                         if (c.sensor || !c.enabled) {
-                            if (c.shape == ColliderShape::box) box_edges(r, m, with_alpha(col, c.enabled ? 255 : 110), 1.5f, true);
+                            if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, with_alpha(col, c.enabled ? 255 : 110), 1.5f, true);
                             else ring_edges(r, m, with_alpha(col, c.enabled ? 255 : 110), 1.5f, true);
                             continue;
                         }
-                        if (c.shape == ColliderShape::box) {
-                            paint_mesh(m_meshes->cube, m, col, 255);
+                        if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) {
+                            items.push_back({Kind::cube, m, col, key});
                         } else if (c.shape == ColliderShape::sphere) {
-                            paint_mesh(m_meshes->sphere, m, col, 255);
+                            items.push_back({Kind::sphere, m, col, key});
+                        } else if (c.shape == ColliderShape::cylinder || c.shape == ColliderShape::cone) {
+                            const float rad = std::max(c.size.x, c.size.z);
+                            items.push_back({c.shape == ColliderShape::cone ? Kind::cone : Kind::cylinder, world * translation(c.offset) * scaling({rad, c.size.y, rad}), col, key});
                         } else {
                             const float rad = std::max(c.size.x, c.size.z);
                             const float body_h = std::max(0.0f, c.size.y - rad);
-                            paint_mesh(m_meshes->sphere, world * translation(c.offset + Vec3{0.0f, body_h * 0.5f, 0.0f}) * scaling({rad, rad, rad}), col, 255);
-                            paint_mesh(m_meshes->sphere, world * translation(c.offset - Vec3{0.0f, body_h * 0.5f, 0.0f}) * scaling({rad, rad, rad}), col, 255);
-                            if (body_h > 0.0f) paint_mesh(m_meshes->cube, world * translation(c.offset) * scaling({rad * 0.85f, body_h, rad * 0.85f}), col, 255);
+                            items.push_back({Kind::sphere, world * translation(c.offset + Vec3{0.0f, body_h * 0.5f, 0.0f}) * scaling({rad, rad, rad}), col, key | 1});
+                            items.push_back({Kind::sphere, world * translation(c.offset - Vec3{0.0f, body_h * 0.5f, 0.0f}) * scaling({rad, rad, rad}), col, key | 2});
+                            if (body_h > 0.0f) items.push_back({Kind::cube, world * translation(c.offset) * scaling({rad * 0.85f, body_h, rad * 0.85f}), col, key | 3});
                         }
                     }
                 } else if (named(scene, e, "Camera")) {
@@ -273,15 +377,163 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                         r.draw_line_3d(o, point(world, tip[i]), camera_color, 1.5f, true);
                         r.draw_line_3d(point(world, tip[i]), point(world, tip[(i + 1) % 4]), camera_color, 1.5f, true);
                     }
-                } else if (named(scene, e, "Light")) {
+                } else if (scene.light(e) || named(scene, e, "Light")) {
                     const vector3d o = point(world, {0, 0, 0});
                     const Vec3 dirs[6] = {{0.35f, 0, 0}, {-0.35f, 0, 0}, {0, 0.35f, 0}, {0, -0.35f, 0}, {0, 0, 0.35f}, {0, 0, -0.35f}};
-                    for (const Vec3& d : dirs) r.draw_line_3d(o, point(world, d), light_color, 2.0f, true);
+                    Color icon = light_color;
+                    if (const Light* l = scene.light(e)) icon = light_icon_color(*l, seconds);
+                    for (const Vec3& d : dirs) r.draw_line_3d(o, point(world, d), icon, 2.0f, true);
                     const Vec3 ow{static_cast<float>(o.x), static_cast<float>(o.y), static_cast<float>(o.z)};
                     const Vec3 ground = ow - axes.up() * axes.height(ow);
                     r.draw_line_3d(o, vector3d{ground.x, ground.y, ground.z}, grid_major, 1.0f, true);
                 } else {
-                    paint_mesh(m_meshes->cube, world, plain, 255);
+                    items.push_back({Kind::cube, world, plain, base | 0xf});
+                }
+            }
+
+            auto column = [](const Mat4& m, int c) { return Vec3{m.at(0, c), m.at(1, c), m.at(2, c)}; };
+            auto aligned = [&](const Mat4& m) {
+                for (int c = 0; c < 3; ++c) {
+                    const Vec3 v = column(m, c);
+                    const float big = std::max({std::fabs(v.x), std::fabs(v.y), std::fabs(v.z)});
+                    const float sum = std::fabs(v.x) + std::fabs(v.y) + std::fabs(v.z);
+                    if (sum - big > 1e-4f * std::max(big, 1e-6f)) return false;
+                }
+                return true;
+            };
+            auto uniform_scale = [&](const Mat4& m, float& scale) {
+                const float a = orchard::length(column(m, 0)), b = orchard::length(column(m, 1)), c = orchard::length(column(m, 2));
+                scale = a;
+                return std::fabs(a - b) <= 1e-4f * std::max(a, 1e-6f) && std::fabs(a - c) <= 1e-4f * std::max(a, 1e-6f);
+            };
+            auto bounds_of = [&](const Mat4& m) {
+                vector3d lo{1e30, 1e30, 1e30}, hi{-1e30, -1e30, -1e30};
+                for (int i = 0; i < 8; ++i) {
+                    const vector3d p = point(m, {(i & 1) ? 0.5f : -0.5f, (i & 2) ? 0.5f : -0.5f, (i & 4) ? 0.5f : -0.5f});
+                    lo = vector3d{std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+                    hi = vector3d{std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+                }
+                return fg::VisBox3D(lo, hi);
+            };
+
+            Meshes& mesh = *m_meshes;
+            m_stats = GpuViewStats{};
+            m_stats.items = items.size();
+            std::vector<fg::Visibility3D::Handle> handle(items.size(), fg::Visibility3D::INVALID);
+            const bool culling = m_options.culling;
+            if (culling) {
+                ++mesh.frame;
+                const Vec3 up = axes.up();
+                fg::VisibilitySettings3D vs = mesh.vis.settings();
+                vs.occlusion = m_options.occlusion;
+                vs.up_axis = std::fabs(up.x) > 0.5f ? 0 : (std::fabs(up.z) > 0.5f ? 2 : 1);
+                vs.max_distance = 5000.0;
+                vs.min_screen_pixels = 0.75;
+                vs.shadows.enabled = m_options.shadows;
+                vs.shadows.real_distance = m_options.shadow_distance;
+                vs.shadows.blob_distance = std::max(m_options.blob_distance, m_options.shadow_distance);
+                const int up_axis = vs.up_axis;
+                vs.ground = [up_axis](const vector3d& from, const vector3d&, double reach, vector3d& hit, vector3d& normal) {
+                    const double height = up_axis == 0 ? from.x : (up_axis == 2 ? from.z : from.y);
+                    if (height < -1e-6 || height > reach) return false;
+                    hit = from;
+                    normal = vector3d{0.0, 0.0, 0.0};
+                    if (up_axis == 0) { hit.x = 0.0; normal.x = 1.0; }
+                    else if (up_axis == 2) { hit.z = 0.0; normal.z = 1.0; }
+                    else { hit.y = 0.0; normal.y = 1.0; }
+                    return true;
+                };
+                vs.reuse_move = 0.0;
+                mesh.vis.set_settings(vs);
+                const fg::LodLevels3D lods = m_options.lod ? fg::LodLevels3D::of({40.0, 120.0}) : fg::LodLevels3D::none();
+                for (std::size_t i = 0; i < items.size(); ++i) {
+                    const Item& it = items[i];
+                    const fg::VisBox3D box = bounds_of(it.m);
+                    const bool solid = it.kind == Kind::cube && aligned(it.m);
+                    auto found = mesh.handles.find(it.key);
+                    fg::Visibility3D::Handle h;
+                    if (found == mesh.handles.end()) {
+                        h = mesh.vis.add(box, fg::VIS_CASTER, it.kind == Kind::cube ? fg::LodLevels3D::none() : lods, it.key);
+                        mesh.handles.emplace(it.key, h);
+                    } else {
+                        h = found->second;
+                        mesh.vis.update(h, box);
+                        mesh.vis.set_lods(h, it.kind == Kind::cube ? fg::LodLevels3D::none() : lods);
+                    }
+                    mesh.vis.set_flags(h, fg::VIS_CASTER | (solid ? fg::VIS_OCCLUDER : 0u));
+                    if (solid) mesh.vis.set_occluder_box(h, box);
+                    mesh.seen[it.key] = mesh.frame;
+                    handle[i] = h;
+                }
+                for (auto it = mesh.handles.begin(); it != mesh.handles.end();) {
+                    if (mesh.seen[it->first] != mesh.frame) {
+                        mesh.vis.remove(it->second);
+                        mesh.seen.erase(it->first);
+                        it = mesh.handles.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                mesh.vis.cull(cam);
+                m_stats.occluded = mesh.vis.stats().occluded;
+                m_stats.real_shadows = mesh.vis.stats().real_shadows;
+                m_stats.blob_shadows = mesh.vis.stats().blob_shadows;
+            }
+
+            struct BatchKey {
+                const fg::Mesh3D* mesh;
+                std::uint32_t color;
+                bool cast;
+                bool operator<(const BatchKey& o) const { return std::tie(mesh, color, cast) < std::tie(o.mesh, o.color, o.cast); }
+            };
+            std::map<BatchKey, std::pair<Color, std::vector<fg::Instance3D>>> batches;
+            for (std::size_t i = 0; i < items.size(); ++i) {
+                const Item& it = items[i];
+                int lod = 0;
+                bool cast = true;
+                if (culling) {
+                    if (!mesh.vis.visible(handle[i])) {
+                        ++m_stats.culled;
+                        continue;
+                    }
+                    lod = std::clamp(mesh.vis.lod(handle[i]), 0, 2);
+                    cast = !m_options.shadows || mesh.vis.shadow(handle[i]) == fg::ShadowMode3D::Real;
+                }
+                const fg::Mesh3D* m = &mesh.cube;
+                if (it.kind == Kind::sphere) m = lod == 0 ? &mesh.sphere : &mesh.sphere_lod[lod - 1];
+                else if (it.kind == Kind::cylinder) m = lod == 0 ? &mesh.cylinder : &mesh.cylinder_lod[lod - 1];
+                else if (it.kind == Kind::cone) m = lod == 0 ? &mesh.cone : &mesh.cone_lod[lod - 1];
+                ++m_stats.drawn;
+                float scale = 1.0f;
+                const bool instanceable = m_options.batching && uniform_scale(it.m, scale) && (it.kind == Kind::sphere || (it.kind == Kind::cube && aligned(it.m)));
+                if (instanceable) {
+                    const vector3d c = point(it.m, {0.0f, 0.0f, 0.0f});
+                    auto& batch = batches[{m, fg::Vertex3D::pack(it.color), cast}];
+                    batch.first = it.color;
+                    batch.second.emplace_back(static_cast<float>(c.x), static_cast<float>(c.y), static_cast<float>(c.z), scale, it.color);
+                    ++m_stats.instanced;
+                } else {
+                    paint_cast(*m, it.m, it.color, cast);
+                }
+            }
+            for (const auto& kv : batches) {
+                fg::Material3D mat = tinted(kv.second.first, true);
+                mat.shadow = kv.first.cast ? fg::Shadow3D::Cast : fg::Shadow3D::None;
+                r.draw_instances(*kv.first.mesh, vector3d{0.0, 0.0, 0.0}, kv.second.second, mat);
+                ++m_stats.batches;
+            }
+            if (culling && m_options.shadows) {
+                const Vec3 up = axes.up();
+                for (const fg::BlobShadow3D& b : mesh.vis.blobs()) {
+                    const float d = static_cast<float>(b.radius * 2.0);
+                    const Vec3 size{std::fabs(up.x) > 0.5f ? 0.01f : d, std::fabs(up.y) > 0.5f ? 0.01f : d, std::fabs(up.z) > 0.5f ? 0.01f : d};
+                    const Vec3 at = Vec3{static_cast<float>(b.center.x), static_cast<float>(b.center.y), static_cast<float>(b.center.z)} + up * 0.012f;
+                    fg::Material3D mat = fg::Material3D::unlit();
+                    mat.blend = fg::Blend3D::Alpha;
+                    mat.depth_write = false;
+                    mat.cull = fg::Cull3D::None;
+                    const Color shade(0, 0, 0, static_cast<std::uint8_t>(std::clamp(b.opacity, 0.0f, 1.0f) * 255.0f));
+                    r.draw_mesh(mesh.tint(mesh.sphere_lod[0], shade), to_fizmo(translation(at) * scaling(size)), mat);
                 }
             }
 
@@ -291,7 +543,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 if (cs && !cs->empty()) {
                     for (const Collider& c : *cs) {
                         const Mat4 m = shape_matrix(world, c);
-                        if (c.shape == ColliderShape::box) box_edges(r, m, selected_color, 2.0f, false);
+                        if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, selected_color, 2.0f, false);
                         else ring_edges(r, m, selected_color, 2.0f, false);
                     }
                 } else {
@@ -363,6 +615,63 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
             quad(world, with_alpha(col, 50), sel ? selected_color : col, sel ? 2u : 1u);
         }
     }
+}
+
+bool GpuView::draw_traced(grove::GpuCanvasFrame& f, fizmo::lighting::Scene& scene, const fizmo::lighting::LightingSettings& settings, const fizmo::lighting::Camera& camera) {
+    fg::Renderer& r = f.renderer;
+    if (!r.gpu_device()) {
+        m_meshes->trace_error = "path tracing in the viewport needs a GPU";
+        return false;
+    }
+    Meshes& m = *m_meshes;
+    if (!m.tracer || m.traced_with != &r) {
+        m.tracer = std::make_unique<fg::GpuPathTracer>();
+        m.traced_with = &r;
+        m.traced_scene = nullptr;
+        if (!m.tracer->attach(r, 1, 1)) {
+            m.trace_error = m.tracer->error();
+            m.tracer.reset();
+            return false;
+        }
+        m.tracer->set_settings(settings);
+        m.traced_settings = settings;
+    }
+    if (!m.tracer->supported()) {
+        m.trace_error = m.tracer->error();
+        return false;
+    }
+    const unsigned w = static_cast<unsigned>(std::max(1.0, std::round(f.viewport_width)));
+    const unsigned h = static_cast<unsigned>(std::max(1.0, std::round(f.viewport_height)));
+    m.tracer->resize(w, h);
+    if (settings.quality != m.traced_settings.quality || settings.transport != m.traced_settings.transport || settings.caustics != m.traced_settings.caustics || settings.max_bounces != m.traced_settings.max_bounces || settings.exposure != m.traced_settings.exposure || settings.tone_mapper != m.traced_settings.tone_mapper) {
+        m.tracer->set_settings(settings);
+        m.traced_settings = settings;
+    }
+    if (m.traced_scene != &scene) {
+        m.tracer->set_scene(scene);
+        m.traced_scene = &scene;
+    }
+    m.tracer->set_camera(camera);
+    const unsigned cw = static_cast<unsigned>(std::max(1.0, std::round(f.width)));
+    const unsigned ch = static_cast<unsigned>(std::max(1.0, std::round(f.height)));
+    m.tracer->draw(r, 0, 0, cw, ch);
+    m.trace_error.clear();
+    return true;
+}
+
+std::uint32_t GpuView::traced_samples() const {
+    return m_meshes->tracer ? m_meshes->tracer->samples() : 0u;
+}
+
+std::string GpuView::trace_error() const {
+    return m_meshes->trace_error;
+}
+
+void GpuView::stop_tracing() {
+    if (m_meshes->tracer) m_meshes->tracer->detach();
+    m_meshes->tracer.reset();
+    m_meshes->traced_with = nullptr;
+    m_meshes->traced_scene = nullptr;
 }
 
 } // namespace editor

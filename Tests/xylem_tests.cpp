@@ -34,8 +34,8 @@ orchard::Entity ground(orchard::Scene& s, float width) {
     return g;
 }
 
-void run(xylem::World& w, double seconds) {
-    for (int i = 0; i < static_cast<int>(seconds * 60.0); ++i) w.step(1.0 / 60.0);
+void run(xylem::World& w, float seconds) {
+    for (int i = 0; i < static_cast<int>(seconds * 60.0f); ++i) w.step(1.0f / 60.0f);
 }
 
 void test_falling_3d() {
@@ -188,13 +188,98 @@ void test_friction_mix() {
     check(avg > grip && avg < ice, "friction mix: the project's average is in between (" + str(avg) + ")");
 }
 
+float shoot(orchard::PhysicsQuality quality, bool fast_flag) {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity wall = s.create("Wall");
+    s.transform(wall)->position = {5.0f, 0.0f, 0.0f};
+    s.add_body(wall).type = orchard::BodyType::fixed;
+    s.add_collider(wall)->size = {0.05f, 4.0f, 4.0f};
+    const orchard::Entity ball = s.create("Ball");
+    s.transform(ball)->position = {0.3f, 0.0f, 0.0f};
+    orchard::Body& b = s.add_body(ball);
+    b.set(orchard::body_gravity, false);
+    b.linear_damping = 0.0f;
+    b.set(orchard::body_continuous, fast_flag);
+    s.add_collider(ball, orchard::ColliderShape::sphere)->size = {0.2f, 0.2f, 0.2f};
+    xylem::Settings settings;
+    settings.with_quality(quality);
+    xylem::World w(orchard::Dimension::three_d, settings);
+    w.build(s);
+    w.set_velocity(ball, {300.0f, 0.0f, 0.0f});
+    run(w, 0.5);
+    return s.transform(ball)->position.x;
+}
+
+void test_quality() {
+    const float arcade = shoot(orchard::PhysicsQuality::arcade, true);
+    const float standard_plain = shoot(orchard::PhysicsQuality::standard, false);
+    const float standard_fast = shoot(orchard::PhysicsQuality::standard, true);
+    const float realistic = shoot(orchard::PhysicsQuality::realistic, false);
+    check(arcade > 5.0f, "quality: arcade skips continuous collision, so a bullet tunnels (x = " + str(arcade) + ")");
+    check(standard_plain > 5.0f, "quality: standard only sweeps bodies marked fast-moving (x = " + str(standard_plain) + ")");
+    check(standard_fast < 5.0f, "quality: standard stops a fast-moving body at a thin wall (x = " + str(standard_fast) + ")");
+    check(realistic < 5.0f, "quality: realistic sweeps every body (x = " + str(realistic) + ")");
+    orchard::ProjectInfo info;
+    info.physics = orchard::PhysicsSettings::preset(orchard::PhysicsQuality::high);
+    const xylem::Settings from_project = xylem::Settings::for_project(info);
+    check(from_project.physics.substeps == 2, "quality: Settings::for_project carries the project's physics block");
+    orchard::Scene s(orchard::Dimension::three_d);
+    ground(s, 20.0f);
+    const orchard::Entity box = s.create("Box");
+    s.transform(box)->position = {0.0f, 3.0f, 0.0f};
+    s.add_body(box);
+    s.add_collider(box);
+    xylem::World w(orchard::Dimension::three_d, from_project);
+    w.build(s);
+    run(w, 3.0);
+    check(near(s.transform(box)->position.y, 0.5f, 0.05f), "quality: high still lands boxes on the ground");
+    w.set_physics(orchard::PhysicsSettings::preset(orchard::PhysicsQuality::arcade));
+    check(w.settings().physics.quality == orchard::PhysicsQuality::arcade, "quality: set_physics switches live");
+}
+
+void test_layers_and_flags() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity g = ground(s, 20.0f);
+    s.body(g)->collision_layer = 2;
+    const orchard::Entity ghost = s.create("Ghost");
+    s.transform(ghost)->position = {0.0f, 2.0f, 0.0f};
+    s.add_body(ghost).collision_mask = ~2ull;
+    s.add_collider(ghost);
+    const orchard::Entity solid = s.create("Solid");
+    s.transform(solid)->position = {3.0f, 2.0f, 0.0f};
+    s.add_body(solid);
+    s.add_collider(solid);
+    const orchard::Entity can = s.create("Can");
+    s.transform(can)->position = {-3.0f, 2.0f, 0.0f};
+    s.add_body(can);
+    s.add_collider(can, orchard::ColliderShape::cylinder);
+    xylem::World w(orchard::Dimension::three_d);
+    w.build(s);
+    run(w, 2.0);
+    check(s.transform(ghost)->position.y < -2.0f, "layers: a body that masks out the ground's layer falls through");
+    check(near(s.transform(solid)->position.y, 0.5f, 0.05f), "layers: the plain box still lands");
+    check(near(s.transform(can)->position.y, 0.5f, 0.06f), "shapes: a cylinder collider lands on its end (y = " + str(s.transform(can)->position.y) + ")");
+
+    orchard::Body b;
+    const std::uint64_t bit = xylem::flag_options().front().bit;
+    const bool was = xylem::flag_on(b, bit);
+    xylem::set_flag(b, bit, !was);
+    check(xylem::flag_on(b, bit) != was && (b.flags_on | b.flags_off) == bit, "flags: toggling stores one override");
+    xylem::set_flag(b, bit, was);
+    check(b.flags_on == 0 && b.flags_off == 0, "flags: toggling back clears the override");
+    b.max_speed = 5.0f;
+    check(xylem::base_flags(b) != xylem::base_flags(orchard::Body{}), "flags: a speed cap turns speed clamping on");
+}
+
 int main() {
     test_falling_3d();
     test_falling_2d();
     test_compound_and_sensor();
     test_impulse_and_disabled();
     test_axes();
+    test_layers_and_flags();
     test_friction_mix();
+    test_quality();
     std::cout << (checks - failures) << "/" << checks << " checks passed\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
