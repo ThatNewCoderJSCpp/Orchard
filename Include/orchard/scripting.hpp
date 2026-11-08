@@ -46,6 +46,25 @@ public:
     virtual void torque(Entity e, Vec3 v) = 0;
     virtual void moved(Entity e) = 0;
     virtual bool touching(Entity a, Entity b) const = 0;
+    virtual Entity raycast(Vec3 origin, Vec3 direction, float max_distance, Vec3* point, Vec3* normal, float* distance) const {
+        static_cast<void>(origin);
+        static_cast<void>(direction);
+        static_cast<void>(max_distance);
+        static_cast<void>(point);
+        static_cast<void>(normal);
+        static_cast<void>(distance);
+        return Entity{};
+    }
+    virtual std::vector<Entity> overlap_sphere(Vec3 center, float radius) const {
+        static_cast<void>(center);
+        static_cast<void>(radius);
+        return {};
+    }
+    virtual void set_layers(Entity e, std::uint64_t layer, std::uint64_t mask) {
+        static_cast<void>(e);
+        static_cast<void>(layer);
+        static_cast<void>(mask);
+    }
 };
 
 struct ScriptHooks {

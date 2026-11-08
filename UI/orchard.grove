@@ -51,6 +51,12 @@
                 <button id="view-2d" class="seg">2D</button>
                 <button id="view-3d" class="seg">3D</button>
                 <button id="reset-cam" class="ghost">Reset view</button>
+                <input_select id="render-mode" value="off" class="add-kind" title="Render the viewport with the GPU path tracer">
+                    <option value="off">Editor view</option>
+                    <option value="path">Path traced (GPU)</option>
+                    <option value="photon">Photons (GPU)</option>
+                </input_select>
+                <text id="trace-info" class="muted hidden"></text>
                 <button id="axes-open" class="ghost axes-open" title="Pick which way is up, flip axes and see what it looks like">Axes: y-up</button>
                 <button id="physics-open" class="ghost" title="How friction and bounce mix when two colliders touch">Physics</button>
                 <div class="grow"></div>
@@ -61,19 +67,53 @@
             </row>
 
             <row class="workspace">
-                <column class="side left">
+                <column id="outliner" class="side left outliner">
                     <row class="side-head">
-                        <div class="card-title grow">SCENE</div>
-                        <input_select id="add-kind" value="box" class="add-kind">
+                        <div class="card-title grow">OUTLINER</div>
+                        <button id="outline-options" class="small ghost" title="Outliner options">&#8943;</button>
+                        <button id="outline-side" class="small ghost" title="Move the outliner to the other side">&#8644;</button>
+                    </row>
+                    <row class="side-head">
+                        <input_select id="outline-group" value="sections" class="grow" title="How to sort what's in the scene">
+                            <option value="sections">Sections</option>
+                            <option value="hierarchy">Hierarchy</option>
+                            <option value="flat">A to Z</option>
+                        </input_select>
+                        <input_string id="outline-filter" class="grow filter" placeholder="Filter" />
+                    </row>
+                    <column id="outline-settings" class="outline-settings hidden">
+                        <row class="kv">
+                            <text class="k">Order</text>
+                            <input_select id="outline-sort" value="scene" class="v">
+                                <option value="scene">Scene order</option>
+                                <option value="name">By name</option>
+                            </input_select>
+                        </row>
+                        <input_bool id="outline-empty" switch>Show empty sections</input_bool>
+                        <input_bool id="preview-effects" switch>Preview light effects while editing</input_bool>
+                        <input_bool id="details-open" switch checked>Show details</input_bool>
+                        <input_bool id="view-cull" switch checked>Hide what the camera can't see</input_bool>
+                        <input_bool id="view-shadows" switch checked>Shadows (real near, soft blobs far)</input_bool>
+                    </column>
+                    <row class="side-head">
+                        <input_select id="add-kind" value="box" class="grow">
                             <option value="">Empty</option>
                             <option value="box">Physics box</option>
                             <option value="ball">Physics ball</option>
                             <option value="ground">Ground</option>
                             <option value="trigger">Trigger zone</option>
+                            <option value="light">Light</option>
                         </input_select>
                         <button id="add-entity" class="small">+ Add</button>
                     </row>
-                    <column id="tree" class="scroll tree"></column>
+                    <column id="tree" class="scroll tree" tabindex="0"></column>
+                    <column id="details-box" class="details-box">
+                        <row class="side-head">
+                            <div class="card-title grow">DETAILS</div>
+                            <button id="details-edit" class="small ghost" title="Edit everything about it">Edit&#8230;</button>
+                        </row>
+                        <column id="details" class="scroll details"></column>
+                    </column>
                 </column>
 
                 <column class="center">
@@ -130,19 +170,13 @@
                                 <text class="k">Enabled</text>
                                 <input_bool id="ins-body-enabled" />
                             </row>
-                            <row class="kv">
-                                <text class="k">Gravity scale</text>
-                                <input_float id="ins-gravity" step="0.1" class="v" />
-                            </row>
-                            <row class="kv">
-                                <text class="k">Drag</text>
-                                <input_float id="ins-lin-damp" step="0.05" class="v" />
-                            </row>
-                            <row class="kv">
-                                <text class="k">Spin drag</text>
-                                <input_float id="ins-ang-damp" step="0.05" class="v" />
-                            </row>
+                            <column id="body-nums" class="nums"></column>
                             <column id="flags" class="flags"></column>
+                            <row class="side-head">
+                                <div class="sub-title grow">All fizmo flags</div>
+                                <button id="aflags-toggle" class="small ghost">Show</button>
+                            </row>
+                            <column id="aflags" class="flags hidden"></column>
                         </column>
                         <row class="side-head">
                             <div class="sub-title grow">Colliders</div>
@@ -150,6 +184,9 @@
                                 <option value="box">Box</option>
                                 <option value="sphere">Sphere</option>
                                 <option value="capsule">Capsule</option>
+                                <option value="cylinder">Cylinder</option>
+                                <option value="cone">Cone</option>
+                                <option value="rounded-box">Rounded box</option>
                             </input_select>
                             <button id="add-collider" class="small">+ Collider</button>
                         </row>
@@ -181,9 +218,29 @@
                 </page>
             </column>
         </page>
+        <modal id="inspect-dialog" class="inspect-modal">
+            <column class="inspect-dialog">
+                <row class="axes-head">
+                    <text class="section-title">PROPERTIES</text>
+                    <text id="inspect-title" class="axes-name"></text>
+                    <div class="grow"></div>
+                    <text class="muted">Changes apply right away</text>
+                </row>
+                <column id="inspect-body" class="scroll inspect-body"></column>
+                <row class="axes-actions">
+                    <button id="inspect-delete" class="danger">Delete</button>
+                    <div class="grow"></div>
+                    <button to="close" class="primary">Done</button>
+                </row>
+            </column>
+        </modal>
+
         <modal id="physics-dialog" class="physics-modal">
             <column class="physics-dialog">
                 <text class="section-title">PHYSICS</text>
+                <text class="sub-title">World</text>
+                <column id="world-fields" class="world-fields nums"></column>
+                <text class="sub-title">Mixing</text>
                 <div class="muted">When two colliders touch, their friction and bounce are mixed into one value. These are the project's defaults; each collider can pick its own in the inspector. When two colliders pick different mixes, the one further down the list wins, the same rule Unity, Unreal and PhysX use.</div>
                 <row class="kv">
                     <text class="k">Friction mix</text>

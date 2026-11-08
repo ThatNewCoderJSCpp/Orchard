@@ -6,9 +6,82 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace orchard {
+
+enum class PhysicsQuality {
+    arcade,
+    standard,
+    high,
+    realistic,
+    custom
+};
+
+const char* to_string(PhysicsQuality q);
+std::optional<PhysicsQuality> parse_physics_quality(const std::string& text);
+const std::vector<PhysicsQuality>& physics_qualities();
+const char* physics_quality_label(PhysicsQuality q);
+const char* physics_quality_explanation(PhysicsQuality q);
+
+struct PhysicsSettings {
+    PhysicsQuality quality = PhysicsQuality::standard;
+    int substeps = 1;
+    int velocity_iterations = 10;
+    int position_iterations = 3;
+    bool continuous = true;
+    bool continuous_all = false;
+    bool sleeping = true;
+    bool warm_starting = true;
+    bool gyroscopic = true;
+    float speculative_distance = 0.02f;
+    float slop = 0.002f;
+    float correction = 0.2f;
+    float world_size = 500.0f;
+    bool soft_solver = false;
+    bool octree = false;
+    int threads = 1;
+    bool wide_solver = false;
+    bool deterministic = false;
+    bool reuse_contacts = true;
+    bool spin_aware_ccd = true;
+    int soft_substeps = 4;
+    float contact_hertz = 30.0f;
+    float contact_damping = 10.0f;
+    float joint_hertz = 60.0f;
+    float push_speed = 3.0f;
+
+    static PhysicsSettings preset(PhysicsQuality q);
+    bool operator==(const PhysicsSettings& o) const;
+    bool operator!=(const PhysicsSettings& o) const { return !(*this == o); }
+};
+
+enum class LightingLevel {
+    off,
+    simple,
+    shadowed,
+    realistic,
+    path_traced,
+    photon
+};
+
+const char* to_string(LightingLevel q);
+std::optional<LightingLevel> parse_lighting_level(const std::string& text);
+const std::vector<LightingLevel>& lighting_levels();
+const char* lighting_level_label(LightingLevel q);
+const char* lighting_level_explanation(LightingLevel q);
+
+struct LightingProject {
+    LightingLevel quality = LightingLevel::shadowed;
+    LightingLevel editor_quality = LightingLevel::shadowed;
+    bool players_choose = true;
+    std::vector<std::pair<std::string, std::string>> settings;
+
+    const std::string* get(const std::string& key) const;
+    void set(const std::string& key, const std::string& value);
+    bool erase(const std::string& key);
+};
 
 struct ProjectInfo {
     std::string name = "Untitled";
@@ -22,6 +95,8 @@ struct ProjectInfo {
     AxisFlip axis_flips = AxisFlip::none;
     CombineMode friction_combine = CombineMode::geometric_mean;
     CombineMode bounce_combine = CombineMode::maximum;
+    PhysicsSettings physics;
+    LightingProject lighting;
 
     AxisSystem axis_system() const { return AxisSystem(axes, axis_flips); }
     void set_axis_system(const AxisSystem& s) {

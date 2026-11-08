@@ -6,6 +6,7 @@
 #include <cmath>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace orchard {
 namespace script {
@@ -89,6 +90,9 @@ public:
     void push(int kind, double x, double y, double z) const { if (exists()) detail::host()->push(m_id, kind, x, y, z); }
     bool has_body() const { return exists() && detail::host()->has_body(m_id) != 0; }
     bool touching(const Entity& other) const { return exists() && detail::host()->touching(m_id, other.m_id) != 0; }
+    void set_layers(long long layer, long long mask) const {
+        if (exists() && ORCHARD_HOST_HAS(detail::host(), set_layers)) detail::host()->set_layers(m_id, static_cast<unsigned long long>(layer), static_cast<unsigned long long>(mask));
+    }
 
     Vec3 vec(int which) const {
         double v[3] = { 0.0, 0.0, 0.0 };
@@ -136,6 +140,35 @@ public:
     static Entity find(const std::string& name) { return detail::host() ? Entity(detail::host()->find(name.c_str())) : Entity(); }
     static Entity spawn(const std::string& name) { return detail::host() ? Entity(detail::host()->spawn(name.c_str(), 0)) : Entity(); }
     static Entity spawn_child(const std::string& name, const Entity& parent) { return detail::host() ? Entity(detail::host()->spawn(name.c_str(), parent.id())) : Entity(); }
+
+    static Entity raycast(double ox, double oy, double oz, double dx, double dy, double dz, double max_distance) {
+        double* hit = last_hit();
+        for (int i = 0; i < 7; ++i) hit[i] = 0.0;
+        if (!ORCHARD_HOST_HAS(detail::host(), raycast)) return Entity();
+        return Entity(detail::host()->raycast(ox, oy, oz, dx, dy, dz, max_distance, hit));
+    }
+    static double hit(long long which) { return which >= 0 && which < 7 ? last_hit()[which] : 0.0; }
+    static long long overlap_sphere(double x, double y, double z, double radius) {
+        std::vector<orchard_entity>& found = last_found();
+        found.assign(256, 0);
+        const int n = ORCHARD_HOST_HAS(detail::host(), overlap_sphere) ? detail::host()->overlap_sphere(x, y, z, radius, found.data(), 256) : 0;
+        found.resize(static_cast<std::size_t>(n < 0 ? 0 : (n > 256 ? 256 : n)));
+        return static_cast<long long>(found.size());
+    }
+    static Entity overlap_at(long long i) {
+        const std::vector<orchard_entity>& found = last_found();
+        return i >= 0 && static_cast<std::size_t>(i) < found.size() ? Entity(found[static_cast<std::size_t>(i)]) : Entity();
+    }
+
+private:
+    static double* last_hit() {
+        static double h[7] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        return h;
+    }
+    static std::vector<orchard_entity>& last_found() {
+        static std::vector<orchard_entity> f;
+        return f;
+    }
 };
 
 } // namespace script

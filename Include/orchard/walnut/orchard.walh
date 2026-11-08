@@ -15,6 +15,7 @@ extern "C++" from "<orchard/script/script_api.hpp>" {
         function push(long int: kind, short float: x, short float: y, short float: z) const -> void;
         function has_body() const -> bool;
         function touching(const NativeEntity&: other) const -> bool;
+        function set_layers(long int: layer, long int: mask) const -> void;
     } end class NativeEntity
 
     class NativeWorld as "orchard::script::World" {
@@ -31,6 +32,10 @@ extern "C++" from "<orchard/script/script_api.hpp>" {
         static function find(const string&: name) -> NativeEntity;
         static function spawn(const string&: name) -> NativeEntity;
         static function spawn_child(const string&: name, const NativeEntity&: parent) -> NativeEntity;
+        static function raycast(short float: ox, short float: oy, short float: oz, short float: dx, short float: dy, short float: dz, short float: max_distance) -> NativeEntity;
+        static function hit(long int: which) -> short float;
+        static function overlap_sphere(short float: x, short float: y, short float: z, short float: radius) -> long int;
+        static function overlap_at(long int: index) -> NativeEntity;
     } end class NativeWorld
 } end extern
 
@@ -243,7 +248,50 @@ public:
     function touching(const Entity&: other) const -> bool {
         return raw.touching(other.raw);
     } end function touching
+
+    function set_layers(long int: layer, long int: mask) const -> void {
+        raw.set_layers(layer, mask);
+    } end function set_layers
 } end class Entity
+
+class RayHit {
+public:
+    Entity: entity;
+    short float: x = 0.0;
+    short float: y = 0.0;
+    short float: z = 0.0;
+    short float: nx = 0.0;
+    short float: ny = 0.0;
+    short float: nz = 0.0;
+    short float: distance = 0.0;
+
+    function hit() const -> bool {
+        return entity.exists();
+    } end function hit
+} end class RayHit
+
+function raycast(short float: ox, short float: oy, short float: oz, short float: dx, short float: dy, short float: dz, short float: max_distance) -> RayHit {
+    RayHit: r;
+    r.entity.raw = NativeWorld::raycast(ox, oy, oz, dx, dy, dz, max_distance);
+    r.x = NativeWorld::hit(0l);
+    r.y = NativeWorld::hit(1l);
+    r.z = NativeWorld::hit(2l);
+    r.nx = NativeWorld::hit(3l);
+    r.ny = NativeWorld::hit(4l);
+    r.nz = NativeWorld::hit(5l);
+    r.distance = NativeWorld::hit(6l);
+    return r;
+} end function raycast
+
+function overlap_count(short float: x, short float: y, short float: z, short float: radius) -> long int {
+    return NativeWorld::overlap_sphere(x, y, z, radius);
+} end function overlap_count
+
+function overlap_at(long int: index) -> Entity {
+    Entity: e;
+    e.raw = NativeWorld::overlap_at(index);
+    return e;
+} end function overlap_at
 
 function current() -> Entity {
     Entity: e;
