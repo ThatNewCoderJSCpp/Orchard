@@ -673,6 +673,14 @@ button.axes-flip {
     color: #f2c96d;
 }
 
+.node.cat-fluids .node-icon {
+    color: #6fb6e8;
+}
+
+.node.cat-particles .node-icon {
+    color: #f2a54a;
+}
+
 .node.cat-cameras .node-icon {
     color: #8bd5ca;
 }
@@ -849,4 +857,66 @@ button.axes-flip {
 
 .world-fields .num-k {
     width: 190px;
+}
+
+.template-bar {
+    gap: 10px;
+    padding: 6px 10px;
+    align-items: center;
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    border-width: 0 0 1px 0;
+}
+
+.template-icon {
+    color: var(--accent);
+    font-size: 18px;
+}
+
+.template-name {
+    color: var(--accent);
+    font-weight: bold;
+}
+
+.entities-page {
+    gap: 4px;
+}
+
+.entities-head {
+    gap: 6px;
+    padding: 6px 10px 0 10px;
+    align-items: center;
+}
+
+.entities-help {
+    margin: 0 12px;
+    font-size: 11px;
+}
+
+.template-row {
+    padding: 4px 8px;
+    border-radius: 6px;
+    gap: 8px;
+    align-items: center;
+
+    &:hover {
+        background: var(--raised);
+    }
+}
+
+.template-row.editing {
+    background: var(--accent-dim);
+}
+
+.template-title {
+    font-weight: bold;
+}
+
+.template-count {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.cat-instance {
+    color: var(--accent);
 }

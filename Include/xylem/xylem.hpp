@@ -33,6 +33,37 @@ struct Contact {
     bool sensor = false;
 };
 
+struct FluidDraw {
+    orchard::Entity entity;
+    orchard::FluidLevel level = orchard::FluidLevel::still;
+    orchard::Vec3 color{0.12f, 0.35f, 0.6f};
+    float opacity = 0.7f;
+    orchard::Vec3 origin;
+    orchard::Vec3 axis_u{1.0f, 0.0f, 0.0f};
+    orchard::Vec3 axis_up{0.0f, 1.0f, 0.0f};
+    orchard::Vec3 axis_w{0.0f, 0.0f, 1.0f};
+    orchard::Vec3 size{1.0f, 1.0f, 1.0f};
+    float cell = 0.0f;
+    int nx = 0;
+    int ny = 0;
+    int nz = 0;
+    std::vector<float> values;
+    std::vector<orchard::Vec3> particles;
+    float radius = 0.0f;
+    float level_height = 0.0f;
+    bool flat = false;
+    int image_width = 0;
+    int image_height = 0;
+    std::vector<std::uint8_t> image;
+    orchard::Vec3 image_min;
+    orchard::Vec3 image_max;
+};
+
+enum class FluidBrush { pour = 0, erase = 1, push = 2, explode = 3, sand = 4, wall = 5, heat = 6 };
+
+orchard::FluidLevel fluid_level_for(const orchard::Fluid& f, orchard::FluidLevel project_level);
+void preview_fluids(const orchard::Scene& scene, orchard::FluidLevel project_level, std::vector<FluidDraw>& out);
+
 struct Settings {
     orchard::Vec3 gravity{0.0f, -9.80665f, 0.0f};
     float fixed_dt = 1.0f / 60.0f;
@@ -98,10 +129,19 @@ public:
     void force(orchard::Entity e, orchard::Vec3 v) override;
     void torque(orchard::Entity e, orchard::Vec3 v) override;
     void moved(orchard::Entity e) override;
+    void added(orchard::Entity e) override;
     bool touching(orchard::Entity a, orchard::Entity b) const override;
     orchard::Entity raycast(orchard::Vec3 origin, orchard::Vec3 direction, float max_distance, orchard::Vec3* point, orchard::Vec3* normal, float* distance) const override;
     std::vector<orchard::Entity> overlap_sphere(orchard::Vec3 center, float radius) const override;
     void set_layers(orchard::Entity e, std::uint64_t layer, std::uint64_t mask) override;
+
+    std::size_t fluid_count() const;
+    void fluid_draws(std::vector<FluidDraw>& out) const;
+    float fluid_surface(orchard::Vec3 point) const;
+    float fluid_depth(orchard::Vec3 point) const;
+    orchard::Vec3 fluid_velocity(orchard::Vec3 point) const;
+    std::size_t fluid_brush(FluidBrush brush, orchard::Vec3 point, float radius, orchard::Vec3 velocity, int material = 0);
+    std::size_t fluid_brush(int brush, orchard::Vec3 point, float radius, orchard::Vec3 velocity, int material) override;
 
 private:
     struct Impl;

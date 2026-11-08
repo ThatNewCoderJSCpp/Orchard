@@ -99,7 +99,7 @@ fl::Transform to_transform(const orchard::Mat4& m) {
 bool same_light(const fl::Light& a, const fl::Light& b) {
     return a.enabled == b.enabled && a.shape == b.shape && a.mobility == b.mobility && a.position == b.position && a.direction == b.direction && a.up == b.up
         && a.color == b.color && a.temperature == b.temperature && a.intensity == b.intensity && a.unit == b.unit && a.range == b.range && a.falloff == b.falloff
-        && a.falloff_exponent == b.falloff_exponent && a.radius == b.radius && a.length == b.length && a.width == b.width && a.height == b.height && a.two_sided == b.two_sided
+        && a.falloff_exponent == b.falloff_exponent && a.spread == b.spread && a.spill == b.spill && a.radius == b.radius && a.length == b.length && a.width == b.width && a.height == b.height && a.two_sided == b.two_sided
         && a.inner_cone == b.inner_cone && a.outer_cone == b.outer_cone && a.angular_diameter == b.angular_diameter && a.casts_shadows == b.casts_shadows
         && a.shadow_strength == b.shadow_strength && a.shadow_bias == b.shadow_bias && a.shadow_samples == b.shadow_samples && a.diffuse == b.diffuse && a.specular == b.specular
         && a.indirect == b.indirect && a.volumetric == b.volumetric && a.visible == b.visible && a.channels == b.channels && a.cookie_size == b.cookie_size;
@@ -262,6 +262,12 @@ fl::Light to_light(const orchard::Light& l, const orchard::Mat4& world, const or
     out.intensity = l.intensity;
     out.range = l.range;
     out.falloff_exponent = l.falloff_exponent;
+    out.spread = l.spread == orchard::LightSpread::blob ? fl::LightSpread::blob : fl::LightSpread::natural;
+    out.spill = l.spill;
+    if (l.spread == orchard::LightSpread::blob) {
+        out.falloff = fl::Falloff::smooth;
+        if (out.range <= 0.0f) out.range = std::max(1.0f, std::sqrt(std::max(l.intensity, 0.0f) * 16.0f));
+    }
     out.radius = l.radius;
     out.length = l.length;
     out.width = l.width;
@@ -291,8 +297,8 @@ fl::Material to_material(const orchard::Material& m) {
     out.name = m.preset;
     out.base_color = to_rgb(m.color);
     out.metallic = m.metallic;
-    out.roughness = m.roughness;
-    out.specular = m.specular;
+    out.roughness = m.roughness * (1.0f - std::clamp(m.reflectivity, 0.0f, 1.0f));
+    out.specular = std::max(m.specular, 0.5f + 0.5f * std::clamp(m.reflectivity, 0.0f, 1.0f) * (1.0f - m.metallic));
     out.emission = to_rgb(m.emission);
     out.emission_strength = m.emission_strength;
     out.transmission = m.transmission;
@@ -303,6 +309,42 @@ fl::Material to_material(const orchard::Material& m) {
     out.absorption_distance = m.absorption_distance;
     out.opacity = m.opacity;
     out.double_sided = m.double_sided;
+    return out;
+}
+
+fl::Material to_material(const orchard::Material& m, const TextureLoader& textures) {
+    fl::Material out = to_material(m);
+    if (!textures || !m.has_textures()) return out;
+    auto map = [&](const std::string& path, bool color, int channel) {
+        fl::TextureMap t;
+        if (path.empty()) return t;
+        t.texture = textures(path, color);
+        t.channel = channel;
+        t.filter = m.pixelated ? fl::TextureFilter::nearest : fl::TextureFilter::bilinear;
+        if (m.triplanar) {
+            t.triplanar = true;
+            t.triplanar_scale = 1.0f / std::max(0.01f, m.triplanar_scale);
+        }
+        return t;
+    };
+    out.uv = fl::UvTransform::make({m.tiling_u, m.tiling_v}, {m.offset_u, m.offset_v}, m.uv_rotation * orchard::pi / 180.0f);
+    out.base_color_map = map(m.base_map, true, 0);
+    out.normal_map = map(m.normal_map, false, 0);
+    out.normal_map.triplanar = false;
+    out.normal_map.strength = m.normal_strength;
+    if (!m.orm_map.empty()) {
+        out.roughness_map = map(m.orm_map, false, 1);
+        out.metallic_map = map(m.orm_map, false, 2);
+    } else {
+        out.roughness_map = map(m.roughness_map, false, 0);
+        out.metallic_map = map(m.metallic_map, false, 0);
+    }
+    if (out.roughness_map.valid()) out.roughness = 1.0f - std::clamp(m.reflectivity, 0.0f, 1.0f);
+    if (out.metallic_map.valid()) out.metallic = 1.0f;
+    out.emission_map = map(m.emission_map, true, 0);
+    if (out.emission_map.valid() && out.emission.r <= 0.0f && out.emission.g <= 0.0f && out.emission.b <= 0.0f) out.emission = fl::Rgb(1.0f);
+    out.opacity_map = map(m.opacity_map, false, 0);
+    out.alpha_cutoff = std::clamp(m.alpha_cutoff, 0.0f, 1.0f);
     return out;
 }
 
@@ -594,6 +636,70 @@ void World::set_settings(const fl::LightingSettings& settings) {
     m_renderer.set_settings(settings);
 }
 
+namespace {
+
+fl::Mesh section_mesh(const orchard::Collider& c) {
+    const float d = std::max({ c.size.x, c.size.y, c.size.z, 1e-4f });
+    const float outer = 0.5f;
+    const float inner = c.shell > 0.0f ? std::max(0.0f, outer - c.shell / d) : 0.0f;
+    const float p0 = std::clamp(c.polar_min, 0.0f, 180.0f) * 0.017453293f;
+    const float p1 = std::clamp(c.polar_max, c.polar_min, 180.0f) * 0.017453293f;
+    const float a0 = c.azimuth_min * 0.017453293f;
+    const float a1 = std::min(std::max(c.azimuth_max, c.azimuth_min), c.azimuth_min + 360.0f) * 0.017453293f;
+    const bool full_turn = a1 - a0 >= 6.2831f;
+    const int rings = std::max(2, static_cast<int>(std::ceil((p1 - p0) / 0.1f)));
+    const int segs = std::max(3, static_cast<int>(std::ceil((a1 - a0) / 0.1f)));
+    auto at = [](float r, float t, float a) { return fl::Vec3f{ r * std::sin(t) * std::cos(a), r * std::cos(t), r * std::sin(t) * std::sin(a) }; };
+    fl::Mesh out;
+    auto patch = [&](float r, bool flip) {
+        const auto base = static_cast<std::uint32_t>(out.positions.size());
+        for (int i = 0; i <= rings; ++i) {
+            for (int j = 0; j <= segs; ++j) out.positions.push_back(at(r, p0 + (p1 - p0) * i / rings, a0 + (a1 - a0) * j / segs));
+        }
+        for (int i = 0; i < rings; ++i) {
+            for (int j = 0; j < segs; ++j) {
+                const std::uint32_t q = base + static_cast<std::uint32_t>(i * (segs + 1) + j);
+                const std::uint32_t w = q + static_cast<std::uint32_t>(segs + 1);
+                if (flip) out.indices.insert(out.indices.end(), { q, q + 1, w, q + 1, w + 1, w });
+                else out.indices.insert(out.indices.end(), { q, w, q + 1, q + 1, w, w + 1 });
+            }
+        }
+    };
+    auto strip = [&](const std::vector<fl::Vec3f>& a, const std::vector<fl::Vec3f>& b) {
+        const auto base = static_cast<std::uint32_t>(out.positions.size());
+        for (std::size_t k = 0; k < a.size(); ++k) {
+            out.positions.push_back(a[k]);
+            out.positions.push_back(b[k]);
+        }
+        for (std::uint32_t k = 0; k + 1 < a.size(); ++k) {
+            const std::uint32_t q = base + k * 2;
+            out.indices.insert(out.indices.end(), { q, q + 1, q + 2, q + 2, q + 1, q + 3 });
+        }
+    };
+    patch(outer, false);
+    if (inner > 0.0f) patch(inner, true);
+    auto ring = [&](float r, float t) {
+        std::vector<fl::Vec3f> v;
+        for (int j = 0; j <= segs; ++j) v.push_back(at(r, t, a0 + (a1 - a0) * j / segs));
+        return v;
+    };
+    auto arc = [&](float r, float a) {
+        std::vector<fl::Vec3f> v;
+        for (int i = 0; i <= rings; ++i) v.push_back(at(r, p0 + (p1 - p0) * i / rings, a));
+        return v;
+    };
+    if (p0 > 1e-4f) strip(ring(outer, p0), ring(inner, p0));
+    if (p1 < 3.14159f) strip(ring(inner, p1), ring(outer, p1));
+    if (!full_turn) {
+        strip(arc(inner, a0), arc(outer, a0));
+        strip(arc(outer, a1), arc(inner, a1));
+    }
+    out.compute_normals();
+    return out;
+}
+
+} // namespace
+
 void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info, bool editor) {
     m_info = info;
     m_axes = info.dimension == orchard::Dimension::two_d ? orchard::AxisSystem() : info.axis_system();
@@ -623,10 +729,48 @@ void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info,
             continue;
         }
         if (is_camera(scene, e)) continue;
+        if (const orchard::Fluid* fluid = scene.fluid(e)) {
+            if (fluid->enabled && fluid->fill > 0.0f && info.dimension == orchard::Dimension::three_d) {
+                fl::Material water = fl::Material::water();
+                water.absorption_color = to_rgb(fluid->color);
+                water.absorption_distance = std::max(0.05f, 4.0f * (1.0f - std::clamp(fluid->opacity, 0.0f, 0.99f)));
+                if (fluid->opacity >= 0.99f) {
+                    water.transmission = 0.0f;
+                    water.base_color = to_rgb(fluid->color);
+                    water.roughness = 0.1f;
+                }
+                const std::size_t wm = m_scene.add_material(water);
+                const orchard::Vec4 c4 = scene.world_matrix(e) * orchard::Vec4{ 0.0f, 0.0f, 0.0f, 1.0f };
+                const orchard::Vec3 up = m_axes.up();
+                orchard::Vec3 size = fluid->size;
+                const orchard::Vec3 lo{ c4.x - size.x * 0.5f, c4.y - size.y * 0.5f, c4.z - size.z * 0.5f };
+                const float f = std::clamp(fluid->fill, 0.0f, 1.0f);
+                orchard::Vec3 at = lo;
+                if (std::fabs(up.x) > 0.5f) {
+                    if (up.x < 0.0f) at.x += size.x * (1.0f - f);
+                    size.x *= f;
+                } else if (std::fabs(up.z) > 0.5f) {
+                    if (up.z < 0.0f) at.z += size.z * (1.0f - f);
+                    size.z *= f;
+                } else {
+                    if (up.y < 0.0f) at.y += size.y * (1.0f - f);
+                    size.y *= f;
+                }
+                fl::Instance inst;
+                inst.name = scene.name(e);
+                inst.id = e.id();
+                inst.mesh = box;
+                inst.material = wm;
+                inst.transform = to_transform(to_r * translate_matrix({ at.x + size.x * 0.5f, at.y + size.y * 0.5f, at.z + size.z * 0.5f }) * scale_matrix(size));
+                inst.casts_shadows = false;
+                m_scene.add_instance(inst);
+            }
+            if (!scene.body(e) && (!scene.colliders(e) || scene.colliders(e)->empty())) continue;
+        }
         const orchard::Material* om = scene.material(e);
         if (om && !om->visible) continue;
         const orchard::Material mat = om ? *om : orchard::Material{};
-        const std::size_t material = m_scene.add_material(to_material(mat));
+        const std::size_t material = m_scene.add_material(to_material(mat, m_textures));
         std::vector<std::pair<std::size_t, orchard::Mat4>> parts;
         const std::vector<orchard::Collider>* cs = scene.colliders(e);
         if (cs && !cs->empty()) {
@@ -640,6 +784,9 @@ void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info,
                     parts.emplace_back(ball, offset * scale_matrix({ d, d, d }));
                 } else if (c.shape == orchard::ColliderShape::rounded_box) {
                     parts.emplace_back(box, offset * scale_matrix(c.size));
+                } else if (c.shape == orchard::ColliderShape::sphere_section) {
+                    const float d = std::max({ c.size.x, c.size.y, c.size.z });
+                    parts.emplace_back(m_scene.add_mesh(section_mesh(c)), offset * scale_matrix({ d, d, d }));
                 } else if (c.shape == orchard::ColliderShape::cylinder || c.shape == orchard::ColliderShape::cone) {
                     const bool cone = c.shape == orchard::ColliderShape::cone;
                     const float r = std::max(c.size.x, c.size.z) * 0.5f;

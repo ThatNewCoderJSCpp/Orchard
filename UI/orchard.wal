@@ -64,6 +64,10 @@ function pick_axes(const string&: style, const string&: flips) -> void;
 function toggle_axes_flip(const string&: axis) -> void;
 function set_tool(const string&: tool) -> void;
 function fly_key(grove::Event&: e, bool: pressed) -> bool;
+function build_templates() -> void;
+function update_template_bar() -> void;
+function after_scene_swap() -> void;
+function template_action(const string&: action, const string&: path) -> void;
 
 function set_tool(const string&: tool) -> void {
     string: now = call("set_tool", tool);
@@ -277,6 +281,7 @@ function refresh() -> void {
     }
     show("play", mode == "edit");
     show("stop", mode != "edit");
+    update_template_bar();
 } end function refresh
 
 function build_tree() -> void {
@@ -411,6 +416,12 @@ function inspect_set(const string&: key, const string&: value) -> void {
     string: r = call("inspect_set", inspecting + "\t" + key + "\t" + value);
     if (r.empty()) then {
         say("Couldn't change " + key, true);
+        return;
+    }
+    if (r == "template") then {
+        inspecting = "";
+        grove::get_by_id("inspect-dialog").close_modal();
+        after_scene_swap();
         return;
     }
     if (r == "rebuild") then {
@@ -635,6 +646,22 @@ function handle_menu(const string&: key) -> void {
         select(f[1]);
         return;
     }
+    if (f[0] == "template") then {
+        after_scene_swap();
+        if (f.size() > 1l && !f[1].empty()) then {
+            select(f[1]);
+        }
+        return;
+    }
+    if (f[0] == "templates") then {
+        build_templates();
+        build_files();
+        grove::navigate("entities-page");
+        say("Made an entity from it. Find it in the Entities tab.", false);
+    }
+    if (f[0] == "error" && f.size() > 1l) then {
+        say(f[1], true);
+    }
     build_outliner();
     fill_inspector();
     fill_details();
@@ -702,6 +729,13 @@ function apply_outliner_prefs() -> void {
         grove::get_by_id("view-cull").set_value_bool(f[8] != "0");
         grove::get_by_id("view-shadows").set_value_bool(f[9] != "0");
     }
+    if (f.size() > 11l) then {
+        grove::get_by_id("view-lights").set_value_bool(f[10] != "0");
+        grove::get_by_id("view-materials").set_value_bool(f[11] != "0");
+    }
+    if (f.size() > 12l) then {
+        grove::get_by_id("view-particles").set_value_bool(f[12] != "0");
+    }
     if (f.size() > 7l) then {
         grove::get_by_id("render-mode").set_value_string(f[7]);
         show("trace-info", f[7] != "off");
@@ -711,6 +745,114 @@ function apply_outliner_prefs() -> void {
         place_outliner(f[0]);
     }
 } end function apply_outliner_prefs
+
+function after_scene_swap() -> void {
+    refresh();
+    build_outliner();
+    fill_details();
+    fill_inspector();
+    build_templates();
+    build_files();
+    update_template_bar();
+} end function after_scene_swap
+
+function update_template_bar() -> void {
+    auto: f = call("template_state", "").split("\t");
+    bool: editing = f.size() > 1l && !f[0].empty();
+    show("template-bar", editing);
+    if (editing) then {
+        string: label = "Editing entity: " + f[1];
+        if (f.size() > 2l && f[2] == "1") then {
+            label = label + " (not saved)";
+        }
+        grove::get_by_id("template-name").set_inner_text(label);
+    }
+} end function update_template_bar
+
+function template_action(const string&: action, const string&: path) -> void {
+    string: r = call(action, path);
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    auto: f = r.split("\t");
+    if (action == "edit_template") then {
+        after_scene_swap();
+        if (f.size() > 1l && !f[1].empty()) then {
+            select(f[1]);
+        }
+        say("Editing " + path + ". Save and go back when you're done.", false);
+        return;
+    }
+    if (action == "place_template") then {
+        refresh();
+        build_outliner();
+        if (f.size() > 1l) then {
+            select(f[1]);
+        }
+        build_templates();
+        return;
+    }
+    if (action == "duplicate_template" && f.size() > 1l) then {
+        say("Made " + f[1], false);
+    }
+    if (action == "delete_template") then {
+        say("Deleted " + path, false);
+        after_scene_swap();
+        return;
+    }
+    build_templates();
+    build_files();
+} end function template_action
+
+function build_templates() -> void {
+    grove::Element: box = grove::get_by_id("templates");
+    clear(box);
+    auto: rows = call("templates", "").split("\n");
+    long int: shown = 0l;
+    for (long int: i = 0l; i < rows.size(); i += 1l) {
+        auto: f = rows[i].split("\t");
+        if (f.size() < 5l) then {
+            continue;
+        }
+        string: path = f[0];
+        string: cls = "template-row";
+        if (f[4] == "1") then {
+            cls = "template-row editing";
+        }
+        grove::Element: row = el("row", cls, "");
+        row.append_child(el("text", "cat-instance", "\u25C6"));
+        row.append_child(el("text", "template-title", f[1]));
+        string: count = f[3] + " \u00B7 " + f[2] + " in the scene";
+        row.append_child(el("text", "template-count grow", count));
+        grove::Element: edit = el("button", "small", "Edit");
+        edit.on("click", [path](grove::Event&: e) -> void {
+            template_action("edit_template", path);
+        });
+        row.append_child(edit);
+        grove::Element: place = el("button", "small primary", "Place");
+        place.set_attribute("title", "Drop a copy where the view is looking");
+        place.on("click", [path](grove::Event&: e) -> void {
+            template_action("place_template", path);
+        });
+        row.append_child(place);
+        grove::Element: copy = el("button", "small ghost", "Copy");
+        copy.on("click", [path](grove::Event&: e) -> void {
+            template_action("duplicate_template", path);
+        });
+        row.append_child(copy);
+        grove::Element: gone = el("button", "small ghost danger", "Delete");
+        gone.on("click", [path](grove::Event&: e) -> void {
+            template_action("delete_template", path);
+        });
+        row.append_child(gone);
+        box.append_child(row);
+        shown += 1l;
+    }
+    if (shown == 0l) then {
+        box.append_child(el("text", "muted", "No entities yet. Make one with + New entity, or select something in the scene and press From selected."));
+    }
+} end function build_templates
 
 function build_files() -> void {
     grove::Element: box = grove::get_by_id("files");
@@ -897,6 +1039,8 @@ function fill_world_fields() -> void {
             box.append_child(number_row("world", f[1], f[2], f[3], f[4], f[5], f[6], f[7]));
         } else if (f[0] == "bool" && f.size() >= 4l) then {
             box.append_child(bool_row("world", f[1], f[2], f[3] == "1"));
+        } else if (f[0] == "pick" && f.size() >= 5l) then {
+            box.append_child(pick_row("world", f[1], f[2], f[3], f[4]));
         }
     }
 } end function fill_world_fields
@@ -987,6 +1131,30 @@ function collider_card(const string&: line) -> grove::Element {
             card.append_child(number_row("body", base + "gy", "Y", f[22], "0", "2", "0.01", "slider"));
             card.append_child(number_row("body", base + "gz", "Z", f[23], "0", "2", "0.01", "slider"));
         }
+    }
+    if (f.size() > 29l && f[2] == "sphere-section") then {
+        grove::Element: quick = grove::create_element("input_select");
+        auto: pairs = "|Quick shape...;hemisphere|Hemisphere;dome|Dome (shallow cap);bowl|Bowl (hollow, open top);shell|Hollow ball;wedge|Wedge (90 degrees);quarter|Half dome".split(";");
+        for (long int: q = 0l; q < pairs.size(); q += 1l) {
+            auto: kv = pairs[q].split("|");
+            grove::Element: opt = el("option", "", kv[1]);
+            opt.set_attribute("value", kv[0]);
+            quick.append_child(opt);
+        }
+        quick.set_value_string("");
+        quick.on("change", [base](grove::Event&: e) -> void {
+            if (e.target().value_string().empty()) then {
+                return;
+            }
+            set_component(base + "section", e.target().value_string());
+            fill_components();
+        });
+        card.append_child(quick);
+        card.append_child(number_row("body", base + "pmin", "From (0 = top)", f[25], "0", "180", "1", "slider"));
+        card.append_child(number_row("body", base + "pmax", "To (90 = half, 180 = bottom)", f[26], "0", "180", "1", "slider"));
+        card.append_child(number_row("body", base + "amin", "Around from", f[27], "0", "360", "1", "slider"));
+        card.append_child(number_row("body", base + "amax", "Around to", f[28], "0", "360", "1", "slider"));
+        card.append_child(number_row("body", base + "shell", "Wall thickness (0 = solid)", f[29], "0", "5", "0.01", "box"));
     }
     if (f.size() > 17l) then {
         card.append_child(mix_row("Friction mix", f[14], f[16], base + "friction_mix"));
@@ -1140,6 +1308,8 @@ function enter_editor() -> void {
     build_tree();
     fill_details();
     build_files();
+    build_templates();
+    update_template_bar();
     fill_inspector();
     grove::navigate("editor");
 } end function enter_editor
@@ -1203,6 +1373,62 @@ grove::get_by_id("open-folder").on("change", [](grove::Event&: e) -> void {
         return;
     }
     enter_editor();
+});
+
+grove::get_by_id("template-done").on("click", [](grove::Event&: e) -> void {
+    string: r = call("finish_template", "1");
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    auto: f = r.split("\t");
+    string: n = "0";
+    if (f.size() > 1l) then {
+        n = f[1];
+    }
+    say("Saved the entity and updated " + n + " in the scene", false);
+    after_scene_swap();
+});
+
+grove::get_by_id("template-discard").on("click", [](grove::Event&: e) -> void {
+    string: r = call("finish_template", "0");
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    after_scene_swap();
+});
+
+grove::get_by_id("template-new").on("click", [](grove::Event&: e) -> void {
+    string: name = grove::get_by_id("template-new-name").value_string();
+    string: r = call("new_template", name + "\t0");
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    grove::get_by_id("template-new-name").set_value_string("");
+    auto: f = r.split("\t");
+    build_files();
+    template_action("edit_template", f[1]);
+});
+
+grove::get_by_id("template-from").on("click", [](grove::Event&: e) -> void {
+    if (selected.empty()) then {
+        say("Select something in the scene first", true);
+        return;
+    }
+    string: name = grove::get_by_id("template-new-name").value_string();
+    string: r = call("new_template", name + "\t1");
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    grove::get_by_id("template-new-name").set_value_string("");
+    auto: f = r.split("\t");
+    say("Made " + f[1], false);
+    build_templates();
+    build_files();
+    build_outliner();
 });
 
 grove::get_by_id("save").on("click", [](grove::Event&: e) -> void {
@@ -1521,9 +1747,14 @@ grove::get_by_id("tool-orbit").on("click", [](grove::Event&: e) -> void { set_to
 grove::get_by_id("tool-pan").on("click", [](grove::Event&: e) -> void { set_tool("pan"); });
 
 grove::get_by_id("app").on("key_down", [](grove::Event&: e) -> void {
-    if (e.ctrl() && e.key() == "S") then {
+    if (e.ctrl() && (e.key() == "S" || e.key() == "s")) then {
         e.prevent_default();
         save_project();
+    }
+    if (e.ctrl() && (e.key() == "D" || e.key() == "d") && !selected.empty() && mode == "edit") then {
+        e.prevent_default();
+        menu_target = selected;
+        handle_menu("duplicate");
     }
 });
 
@@ -1631,6 +1862,30 @@ grove::get_by_id("view-shadows").on("change", [](grove::Event&: e) -> void {
         v = "1";
     }
     call("set_pref", "viewport.shadows\t" + v);
+});
+
+grove::get_by_id("view-lights").on("change", [](grove::Event&: e) -> void {
+    string: v = "0";
+    if (e.target().value_bool()) then {
+        v = "1";
+    }
+    call("set_pref", "viewport.lights\t" + v);
+});
+
+grove::get_by_id("view-materials").on("change", [](grove::Event&: e) -> void {
+    string: v = "0";
+    if (e.target().value_bool()) then {
+        v = "1";
+    }
+    call("set_pref", "viewport.materials\t" + v);
+});
+
+grove::get_by_id("view-particles").on("change", [](grove::Event&: e) -> void {
+    string: v = "0";
+    if (e.target().value_bool()) then {
+        v = "1";
+    }
+    call("set_pref", "viewport.particles\t" + v);
 });
 
 grove::get_by_id("details-open").on("change", [](grove::Event&: e) -> void {

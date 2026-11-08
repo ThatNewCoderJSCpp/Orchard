@@ -32,6 +32,9 @@ static inline int orchard_is_2d(void) { return orchard_host()->is_2d(); }
 static inline int orchard_key_down(const char* key) { return orchard_host()->key_down(key); }
 static inline orchard_entity orchard_find(const char* name) { return orchard_host()->find(name); }
 static inline orchard_entity orchard_spawn(const char* name, orchard_entity parent) { return orchard_host()->spawn(name, parent); }
+static inline orchard_entity orchard_instantiate(const char* entity_template, double x, double y, double z, orchard_entity parent) { return ORCHARD_HOST_HAS(orchard_host(), instantiate) ? orchard_host()->instantiate(entity_template, x, y, z, parent) : 0; }
+static inline void orchard_particles(orchard_entity e, int action, int count) { if (ORCHARD_HOST_HAS(orchard_host(), particles)) orchard_host()->particles(e, action, count); }
+static inline int orchard_fluid_brush(int brush, double x, double y, double z, double radius, double vx, double vy, double vz, int material) { return ORCHARD_HOST_HAS(orchard_host(), fluid_brush) ? orchard_host()->fluid_brush(brush, x, y, z, radius, vx, vy, vz, material) : 0; }
 static inline int orchard_exists(orchard_entity e) { return e != 0 && orchard_host()->exists(e); }
 static inline void orchard_destroy(orchard_entity e) { orchard_host()->destroy(e); }
 static inline const char* orchard_name(orchard_entity e) { return orchard_host()->name(e); }

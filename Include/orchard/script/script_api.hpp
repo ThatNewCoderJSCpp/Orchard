@@ -140,6 +140,18 @@ public:
     static Entity find(const std::string& name) { return detail::host() ? Entity(detail::host()->find(name.c_str())) : Entity(); }
     static Entity spawn(const std::string& name) { return detail::host() ? Entity(detail::host()->spawn(name.c_str(), 0)) : Entity(); }
     static Entity spawn_child(const std::string& name, const Entity& parent) { return detail::host() ? Entity(detail::host()->spawn(name.c_str(), parent.id())) : Entity(); }
+    static Entity instantiate(const std::string& entity_template, double x, double y, double z) { return ORCHARD_HOST_HAS(detail::host(), instantiate) ? Entity(detail::host()->instantiate(entity_template.c_str(), x, y, z, 0)) : Entity(); }
+    static Entity instantiate_child(const std::string& entity_template, double x, double y, double z, const Entity& parent) { return ORCHARD_HOST_HAS(detail::host(), instantiate) ? Entity(detail::host()->instantiate(entity_template.c_str(), x, y, z, parent.id())) : Entity(); }
+    static void play_particles(const Entity& e) { if (ORCHARD_HOST_HAS(detail::host(), particles)) detail::host()->particles(e.id(), ORCHARD_PARTICLES_PLAY, 0); }
+    static void stop_particles(const Entity& e) { if (ORCHARD_HOST_HAS(detail::host(), particles)) detail::host()->particles(e.id(), ORCHARD_PARTICLES_STOP, 0); }
+    static void burst_particles(const Entity& e, long long count) { if (ORCHARD_HOST_HAS(detail::host(), particles)) detail::host()->particles(e.id(), ORCHARD_PARTICLES_BURST, static_cast<int>(count)); }
+    static long long fluid_brush(long long brush, double x, double y, double z, double radius, double vx, double vy, double vz, long long material) { return ORCHARD_HOST_HAS(detail::host(), fluid_brush) ? detail::host()->fluid_brush(static_cast<int>(brush), x, y, z, radius, vx, vy, vz, static_cast<int>(material)) : 0; }
+    static long long pour_fluid(double x, double y, double radius) { return fluid_brush(ORCHARD_FLUID_POUR, x, y, 0.0, radius, 0.0, 0.0, 0.0, 0); }
+    static long long erase_fluid(double x, double y, double radius) { return fluid_brush(ORCHARD_FLUID_ERASE, x, y, 0.0, radius, 0.0, 0.0, 0.0, 0); }
+    static long long push_fluid(double x, double y, double radius, double vx, double vy) { return fluid_brush(ORCHARD_FLUID_PUSH, x, y, 0.0, radius, vx, vy, 0.0, 0); }
+    static long long splash_fluid(double x, double y, double radius, double strength) { return fluid_brush(ORCHARD_FLUID_EXPLODE, x, y, 0.0, radius, strength, 0.0, 0.0, 0); }
+    static long long paint_sand(double x, double y, double radius, long long cell) { return fluid_brush(ORCHARD_FLUID_SAND, x, y, 0.0, radius, 0.0, 0.0, 0.0, cell); }
+    static void clear_particles(const Entity& e) { if (ORCHARD_HOST_HAS(detail::host(), particles)) detail::host()->particles(e.id(), ORCHARD_PARTICLES_CLEAR, 0); }
 
     static Entity raycast(double ox, double oy, double oz, double dx, double dy, double dz, double max_distance) {
         double* hit = last_hit();

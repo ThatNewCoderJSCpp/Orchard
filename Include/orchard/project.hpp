@@ -51,6 +51,10 @@ struct PhysicsSettings {
     float contact_damping = 10.0f;
     float joint_hertz = 60.0f;
     float push_speed = 3.0f;
+    FluidLevel fluid_level = FluidLevel::waves;
+    int fluid_quality = 1;
+    int particle_budget = 60000;
+    int particle_quality = 1;
 
     static PhysicsSettings preset(PhysicsQuality q);
     bool operator==(const PhysicsSettings& o) const;
@@ -127,6 +131,10 @@ public:
     static const std::vector<std::string>& script_extensions();
     std::vector<std::string> graphs() const;
     std::vector<std::string> scenes() const;
+    std::vector<std::string> images() const;
+    std::vector<std::string> entity_templates() const;
+    static std::string entity_template_path(const std::string& name);
+    static const std::vector<std::string>& image_extensions();
 
     static std::string write_info(const ProjectInfo& info);
     static std::optional<ProjectInfo> read_info(const std::string& text, std::string* error = nullptr);

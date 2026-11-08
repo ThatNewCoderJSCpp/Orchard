@@ -9,6 +9,7 @@
 #include <fizmo/../lighting.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -22,6 +23,8 @@ fl::LightingQuality to_fizmo(orchard::LightingLevel level);
 fl::Light to_light(const orchard::Light& light, const orchard::Mat4& world, const orchard::AxisSystem& axes);
 fl::Light to_light(const orchard::Light& light, const orchard::Mat4& world, const orchard::AxisSystem& axes, double seconds);
 fl::Material to_material(const orchard::Material& material);
+using TextureLoader = std::function<std::shared_ptr<const fl::Texture>(const std::string& path, bool color)>;
+fl::Material to_material(const orchard::Material& material, const TextureLoader& textures);
 bool apply_setting(fl::LightingSettings& settings, fl::Environment& environment, const std::string& key, const std::string& value, std::string* problem = nullptr);
 const std::vector<std::string>& setting_names();
 fl::LightingSettings settings_for(const orchard::ProjectInfo& info, orchard::LightingLevel level, std::vector<std::string>* problems = nullptr);
@@ -48,6 +51,7 @@ public:
     void set_level(orchard::LightingLevel level);
     orchard::LightingLevel level() const noexcept { return m_level; }
     void set_settings(const fl::LightingSettings& settings);
+    void set_texture_loader(TextureLoader loader) { m_textures = std::move(loader); }
     const fl::LightingSettings& settings() const noexcept { return m_settings; }
     const std::vector<std::string>& problems() const noexcept { return m_problems; }
 
@@ -87,6 +91,7 @@ private:
     std::unordered_map<std::uint64_t, std::vector<orchard::Mat4>> m_parts_of;
     std::vector<std::uint8_t> m_rgba;
     bool m_custom_settings = false;
+    TextureLoader m_textures;
     double m_time = 0.0;
 };
 

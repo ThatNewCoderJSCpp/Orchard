@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <memory>
 #include <set>
 #include <string>
@@ -45,6 +46,15 @@ public:
     virtual void force(Entity e, Vec3 v) = 0;
     virtual void torque(Entity e, Vec3 v) = 0;
     virtual void moved(Entity e) = 0;
+    virtual void added(Entity e) { static_cast<void>(e); }
+    virtual std::size_t fluid_brush(int brush, Vec3 point, float radius, Vec3 velocity, int material) {
+        static_cast<void>(brush);
+        static_cast<void>(point);
+        static_cast<void>(radius);
+        static_cast<void>(velocity);
+        static_cast<void>(material);
+        return 0;
+    }
     virtual bool touching(Entity a, Entity b) const = 0;
     virtual Entity raycast(Vec3 origin, Vec3 direction, float max_distance, Vec3* point, Vec3* normal, float* distance) const {
         static_cast<void>(origin);
@@ -107,6 +117,12 @@ public:
     bool handles(const std::string& path) const;
 };
 
+struct ParticleCommand {
+    Entity entity;
+    int action = 1;
+    int count = 0;
+};
+
 class ScriptRuntime {
 public:
     using Log = std::function<void(const std::string& message, bool error)>;
@@ -148,6 +164,12 @@ public:
     bool key_down(const std::string& key) const { return m_keys.count(key) > 0; }
     void log(const std::string& message, bool error) const;
 
+    static std::string entity_template_file(const std::string& name);
+    const Scene* entity_template(const std::string& name);
+    Entity instantiate(const std::string& entity_template, const Transform& at, Entity parent = Entity{});
+    void particles(Entity e, int action, int count);
+    std::vector<ParticleCommand> take_particle_commands();
+
     static ScriptHooks find_hooks(const std::string& source);
     static std::string with_hooks(const std::string& source, const ScriptHooks& hooks);
     static ScriptHooks find_native_hooks(const std::string& source);
@@ -165,12 +187,19 @@ private:
 
     Module* load(const ScriptBuildResult& built);
     void call(Instance& instance, int hook, double dt);
+    void call_at(std::size_t index, int hook, double dt);
+    void start_pending();
     void unload_all();
 
     ScriptToolchain m_tools;
     Log m_log;
     ScriptPhysics* m_physics = nullptr;
     Scene* m_scene = nullptr;
+    const Project* m_project = nullptr;
+    std::map<std::string, std::optional<Scene>> m_templates;
+    std::vector<ParticleCommand> m_particle_commands;
+    std::vector<std::size_t> m_pending_starts;
+    int m_call_depth = 0;
     std::set<std::string> m_keys;
     std::map<std::string, ScriptBuildResult> m_built;
     std::map<std::string, std::unique_ptr<Module>> m_modules;

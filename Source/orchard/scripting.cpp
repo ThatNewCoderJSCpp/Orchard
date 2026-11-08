@@ -398,6 +398,24 @@ void host_set_layers(orchard_entity e, unsigned long long layer, unsigned long l
     if (g_runtime && rt().physics()) rt().physics()->set_layers(entity_of(e), layer, mask);
 }
 
+orchard_entity host_instantiate(const char* path, double x, double y, double z, orchard_entity parent) {
+    if (!g_runtime || !rt().scene() || !path) return 0;
+    Transform at;
+    at.position = Vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+    return id_of(rt().instantiate(path, at, entity_of(parent)));
+}
+
+int host_fluid_brush(int brush, double x, double y, double z, double radius, double vx, double vy, double vz, int material) {
+    if (!g_runtime || !rt().physics()) return 0;
+    const Vec3 p{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+    const Vec3 v{static_cast<float>(vx), static_cast<float>(vy), static_cast<float>(vz)};
+    return static_cast<int>(std::min<std::size_t>(rt().physics()->fluid_brush(brush, p, static_cast<float>(radius), v, material), 2147483647u));
+}
+
+void host_particles(orchard_entity e, int action, int count) {
+    if (g_runtime) rt().particles(entity_of(e), action, count);
+}
+
 } // namespace
 
 void set_current_runtime(ScriptRuntime* runtime) {
@@ -428,6 +446,9 @@ const orchard_host_api& host_table() {
         t.raycast = &host_raycast;
         t.overlap_sphere = &host_overlap_sphere;
         t.set_layers = &host_set_layers;
+        t.instantiate = &host_instantiate;
+        t.particles = &host_particles;
+        t.fluid_brush = &host_fluid_brush;
         return t;
     }();
     return table;
@@ -1087,6 +1108,12 @@ std::vector<ScriptBuildResult> ScriptRuntime::build_all(const Project& project, 
     for (Entity e : scene.entities()) {
         if (!scene.script(e).empty()) scripts.insert(scene.script(e));
     }
+    for (const std::string& path : project.entity_templates()) {
+        const std::optional<Scene> t = Scene::load_file(project.path_of(path));
+        if (!t) continue;
+        for (Entity e : t->entities())
+            if (!t->script(e).empty()) scripts.insert(t->script(e));
+    }
     std::vector<ScriptBuildResult> out;
     for (const std::string& s : scripts) out.push_back(build(project, s));
     return out;
@@ -1122,16 +1149,111 @@ void ScriptRuntime::call(Instance& instance, int hook, double dt) {
     if (instance.broken || !instance.module || !instance.module->impl || !(instance.module->hooks & hook)) return;
     if (!m_scene || !m_scene->alive(instance.entity)) return;
     std::string why;
-    if (!instance.module->impl->call(hook, instance.entity.id(), dt, why)) {
+    ++m_call_depth;
+    const bool ok = instance.module->impl->call(hook, instance.entity.id(), dt, why);
+    --m_call_depth;
+    if (!ok) {
         instance.broken = true;
         if (why.empty()) why = "unknown error";
         log(instance.module->script + " on " + m_scene->name(instance.entity) + ": " + why + " (stopped for this entity)", true);
     }
 }
 
+void ScriptRuntime::call_at(std::size_t index, int hook, double dt) {
+    if (index >= m_instances.size()) return;
+    Instance copy = m_instances[index];
+    call(copy, hook, dt);
+    if (index < m_instances.size() && m_instances[index].entity == copy.entity) m_instances[index].broken = copy.broken;
+    if (m_call_depth == 0 && !m_pending_starts.empty()) start_pending();
+}
+
+void ScriptRuntime::start_pending() {
+    for (std::size_t guard = 0; !m_pending_starts.empty() && guard < 100000; ++guard) {
+        const std::size_t i = m_pending_starts.front();
+        m_pending_starts.erase(m_pending_starts.begin());
+        if (i >= m_instances.size()) continue;
+        Instance copy = m_instances[i];
+        call(copy, ORCHARD_HOOK_START, 0.0);
+        if (i < m_instances.size() && m_instances[i].entity == copy.entity) m_instances[i].broken = copy.broken;
+    }
+}
+
+std::string ScriptRuntime::entity_template_file(const std::string& name) {
+    std::string p = name;
+    for (char& c : p)
+        if (c == '\\') c = '/';
+    while (!p.empty() && (p.front() == '/' || p.front() == '.')) {
+        if (p.rfind("./", 0) == 0) p.erase(0, 2);
+        else if (p.front() == '/') p.erase(0, 1);
+        else break;
+    }
+    if (p.find('/') == std::string::npos) p = "Entities/" + p;
+    if (p.size() < 7 || p.compare(p.size() - 7, 7, ".entity") != 0) p += ".entity";
+    return p;
+}
+
+const Scene* ScriptRuntime::entity_template(const std::string& name) {
+    if (!m_project) return nullptr;
+    const std::string file = entity_template_file(name);
+    auto found = m_templates.find(file);
+    if (found == m_templates.end()) {
+        std::string error;
+        std::optional<Scene> loaded = Scene::load_file(m_project->path_of(file), &error);
+        if (!loaded) log(file + ": " + (error.empty() ? std::string("can't open this entity template") : error), true);
+        found = m_templates.emplace(file, std::move(loaded)).first;
+    }
+    return found->second ? &*found->second : nullptr;
+}
+
+Entity ScriptRuntime::instantiate(const std::string& name, const Transform& at, Entity parent) {
+    if (!m_scene) return Entity{};
+    const Scene* t = entity_template(name);
+    if (!t) return Entity{};
+    const Entity root = m_scene->instantiate(*t, entity_template_file(name), parent, at);
+    if (!m_scene->alive(root)) return root;
+    if (m_physics) m_physics->added(root);
+    if (!m_running || !m_project) return root;
+    const std::size_t first = m_instances.size();
+    for (Entity e : m_scene->subtree(root)) {
+        const std::string& script = m_scene->script(e);
+        if (script.empty()) continue;
+        auto built = m_built.find(script);
+        ScriptBuildResult result;
+        if (built == m_built.end() || !built->second.ok) {
+            result = build(*m_project, script);
+            if (!result.ok) {
+                log(script + ": " + result.log, true);
+                m_built.erase(script);
+                continue;
+            }
+        } else {
+            result = built->second;
+        }
+        Module* m = load(result);
+        if (m) m_instances.push_back(Instance{e, m, false});
+    }
+    for (std::size_t i = first; i < m_instances.size(); ++i) m_pending_starts.push_back(i);
+    if (m_call_depth == 0) start_pending();
+    return root;
+}
+
+void ScriptRuntime::particles(Entity e, int action, int count) {
+    if (m_particle_commands.size() < 100000) m_particle_commands.push_back(ParticleCommand{e, action, count});
+}
+
+std::vector<ParticleCommand> ScriptRuntime::take_particle_commands() {
+    std::vector<ParticleCommand> out;
+    out.swap(m_particle_commands);
+    return out;
+}
+
 bool ScriptRuntime::start(const Project& project, Scene& scene) {
     stop();
     m_scene = &scene;
+    m_project = &project;
+    m_templates.clear();
+    m_particle_commands.clear();
+    m_pending_starts.clear();
     m_time = 0.0;
     m_instances.clear();
     set_current_runtime(this);
@@ -1161,7 +1283,8 @@ bool ScriptRuntime::start(const Project& project, Scene& scene) {
     }
     m_running = true;
     set_current_runtime(this);
-    for (std::size_t i = 0; i < m_instances.size(); ++i) call(m_instances[i], ORCHARD_HOOK_START, 0.0);
+    const std::size_t starting = m_instances.size();
+    for (std::size_t i = 0; i < starting; ++i) call_at(i, ORCHARD_HOOK_START, 0.0);
     return all_ok;
 }
 
@@ -1169,17 +1292,19 @@ void ScriptRuntime::tick(double dt) {
     if (!m_running) return;
     set_current_runtime(this);
     m_time += dt;
-    for (std::size_t i = 0; i < m_instances.size(); ++i) call(m_instances[i], ORCHARD_HOOK_TICK, dt);
+    for (std::size_t i = 0; i < m_instances.size(); ++i) call_at(i, ORCHARD_HOOK_TICK, dt);
 }
 
 void ScriptRuntime::stop() {
     if (!m_running) return;
     set_current_runtime(this);
-    for (std::size_t i = 0; i < m_instances.size(); ++i) call(m_instances[i], ORCHARD_HOOK_STOP, 0.0);
+    for (std::size_t i = 0; i < m_instances.size(); ++i) call_at(i, ORCHARD_HOOK_STOP, 0.0);
     m_instances.clear();
     m_running = false;
     unload_all();
     m_scene = nullptr;
+    m_project = nullptr;
+    m_templates.clear();
     set_current_runtime(nullptr);
 }
 

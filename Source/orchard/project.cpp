@@ -229,7 +229,8 @@ bool PhysicsSettings::operator==(const PhysicsSettings& o) const {
         && slop == o.slop && correction == o.correction && world_size == o.world_size
         && soft_solver == o.soft_solver && octree == o.octree && threads == o.threads && wide_solver == o.wide_solver && deterministic == o.deterministic
         && reuse_contacts == o.reuse_contacts && spin_aware_ccd == o.spin_aware_ccd && soft_substeps == o.soft_substeps && contact_hertz == o.contact_hertz
-        && contact_damping == o.contact_damping && joint_hertz == o.joint_hertz && push_speed == o.push_speed;
+        && contact_damping == o.contact_damping && joint_hertz == o.joint_hertz && push_speed == o.push_speed
+        && fluid_level == o.fluid_level && fluid_quality == o.fluid_quality && particle_budget == o.particle_budget && particle_quality == o.particle_quality;
 }
 
 const char* to_string(LightingLevel q) {
@@ -361,6 +362,10 @@ std::string Project::write_info(const ProjectInfo& info) {
     num("contact-damping", ph.contact_damping, base.contact_damping, all);
     num("joint-hertz", ph.joint_hertz, base.joint_hertz, all);
     num("push-speed", ph.push_speed, base.push_speed, all);
+    if (ph.fluid_level != base.fluid_level || all) out += "    fluids: " + std::string(to_string(ph.fluid_level)) + ";\n";
+    num("fluid-quality", ph.fluid_quality, base.fluid_quality, all);
+    num("particle-budget", ph.particle_budget, base.particle_budget, all);
+    num("particle-quality", ph.particle_quality, base.particle_quality, all);
     out += "}\n";
     const LightingProject& li = info.lighting;
     out += "\nlighting {\n";
@@ -461,6 +466,16 @@ std::optional<ProjectInfo> Project::read_info(const std::string& text, std::stri
                 ph.joint_hertz = std::max(0.0f, static_cast<float>(std::atof(value.c_str())));
             } else if (key == "push-speed") {
                 ph.push_speed = std::max(0.0f, static_cast<float>(std::atof(value.c_str())));
+            } else if (key == "fluids") {
+                const std::optional<FluidLevel> lv = parse_fluid_level(value);
+                if (!lv || *lv == FluidLevel::project_default) return fail("fluids must be blocky, still, flowing, waves or realistic");
+                ph.fluid_level = *lv;
+            } else if (key == "fluid-quality") {
+                ph.fluid_quality = std::clamp(std::atoi(value.c_str()), 0, 3);
+            } else if (key == "particle-budget") {
+                ph.particle_budget = std::clamp(std::atoi(value.c_str()), 100, 2000000);
+            } else if (key == "particle-quality") {
+                ph.particle_quality = std::clamp(std::atoi(value.c_str()), 0, 3);
             }
             continue;
         }
@@ -535,7 +550,7 @@ std::optional<Project> Project::create(const std::string& folder, const std::str
         if (error) *error = folder + " already has a project";
         return std::nullopt;
     }
-    for (const char* sub : {"Scenes", "Scripts", "Graphs", "Assets"}) {
+    for (const char* sub : {"Scenes", "Scripts", "Graphs", "Assets", "Entities"}) {
         fs::create_directories(root / sub, ec);
         if (ec) {
             if (error) *error = "can't create " + (root / sub).string() + ": " + ec.message();
@@ -641,6 +656,33 @@ std::vector<std::string> Project::graphs() const {
 
 std::vector<std::string> Project::scenes() const {
     return files_with("Scenes", ".scene");
+}
+
+std::vector<std::string> Project::entity_templates() const {
+    return files_with("Entities", ".entity");
+}
+
+std::string Project::entity_template_path(const std::string& name) {
+    std::string clean;
+    for (char c : name) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (std::isalnum(u) || c == '-' || c == '_' || c == ' ') clean += c;
+    }
+    while (!clean.empty() && clean.back() == ' ') clean.pop_back();
+    while (!clean.empty() && clean.front() == ' ') clean.erase(clean.begin());
+    if (clean.empty()) clean = "Entity";
+    return "Entities/" + clean + ".entity";
+}
+
+const std::vector<std::string>& Project::image_extensions() {
+    static const std::vector<std::string> exts = {".png", ".apng", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tga", ".qoi", ".pnm", ".ppm", ".pgm", ".ico", ".tif", ".tiff", ".svg"};
+    return exts;
+}
+
+std::vector<std::string> Project::images() const {
+    std::vector<std::string> out = files_with("Assets", image_extensions());
+    for (const std::string& f : files_with("Textures", image_extensions())) out.push_back(f);
+    return out;
 }
 
 } // namespace orchard

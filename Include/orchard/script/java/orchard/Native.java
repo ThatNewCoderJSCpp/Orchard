@@ -19,6 +19,9 @@ final class Native {
     static native boolean is2d();
     static native long find(String name);
     static native long spawn(String name, long parent);
+    static native long instantiate(String entityTemplate, double x, double y, double z, long parent);
+    static native void particles(long entity, int action, int count);
+    static native int fluid(int brush, double x, double y, double radius, double vx, double vy, int material);
     static native boolean exists(long entity);
     static native void destroy(long entity);
     static native String name(long entity);

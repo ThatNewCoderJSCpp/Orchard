@@ -48,7 +48,8 @@ enum class ColliderShape {
     capsule,
     cylinder,
     cone,
-    rounded_box
+    rounded_box,
+    sphere_section
 };
 
 enum class BodyQuality {
@@ -162,6 +163,11 @@ struct Collider {
     float rolling_friction = 0.0f;
     float spinning_friction = 0.0f;
     Vec3 grip{1.0f, 1.0f, 1.0f};
+    float polar_min = 0.0f;
+    float polar_max = 90.0f;
+    float azimuth_min = 0.0f;
+    float azimuth_max = 360.0f;
+    float shell = 0.0f;
 };
 
 enum class LightType {
@@ -189,6 +195,11 @@ enum class LightUnit {
     watts
 };
 
+enum class LightSpread {
+    natural,
+    blob
+};
+
 enum class LightFalloff {
     physical,
     linear,
@@ -201,10 +212,12 @@ const char* to_string(LightType v);
 const char* to_string(LightMobility v);
 const char* to_string(LightUnit v);
 const char* to_string(LightFalloff v);
+const char* to_string(LightSpread v);
 std::optional<LightType> parse_light_type(const std::string& text);
 std::optional<LightMobility> parse_light_mobility(const std::string& text);
 std::optional<LightUnit> parse_light_unit(const std::string& text);
 std::optional<LightFalloff> parse_light_falloff(const std::string& text);
+std::optional<LightSpread> parse_light_spread(const std::string& text);
 const std::vector<LightType>& light_types();
 const char* light_type_label(LightType v);
 
@@ -274,6 +287,8 @@ struct Light {
     LightUnit unit = LightUnit::unitless;
     float range = 0.0f;
     LightFalloff falloff = LightFalloff::physical;
+    LightSpread spread = LightSpread::natural;
+    float spill = 0.35f;
     float falloff_exponent = 2.0f;
     float radius = 0.0f;
     float length = 1.0f;
@@ -320,13 +335,131 @@ struct Material {
     Vec3 absorption_color{1.0f, 1.0f, 1.0f};
     float absorption_distance = 0.0f;
     float opacity = 1.0f;
+    float reflectivity = 0.0f;
+    std::string base_map;
+    std::string normal_map;
+    std::string orm_map;
+    std::string roughness_map;
+    std::string metallic_map;
+    std::string emission_map;
+    std::string opacity_map;
+    float normal_strength = 1.0f;
+    float alpha_cutoff = 0.0f;
+    float tiling_u = 1.0f;
+    float tiling_v = 1.0f;
+    float offset_u = 0.0f;
+    float offset_v = 0.0f;
+    float uv_rotation = 0.0f;
+    bool pixelated = false;
+    bool triplanar = false;
+    float triplanar_scale = 1.0f;
     bool double_sided = true;
     bool casts_shadows = true;
     bool is_static = false;
     bool visible = true;
     std::uint32_t light_channels = 1u;
 
+    bool has_textures() const;
+    std::vector<std::string> texture_paths() const;
+
     static std::optional<Material> named(const std::string& preset);
+    static const std::vector<std::string>& presets();
+};
+
+bool is_image_file(const std::string& path);
+
+enum class FluidLevel {
+    project_default,
+    blocky,
+    still,
+    flowing,
+    waves,
+    realistic
+};
+
+const char* to_string(FluidLevel v);
+const char* fluid_level_label(FluidLevel v);
+std::optional<FluidLevel> parse_fluid_level(const std::string& text);
+const std::vector<FluidLevel>& fluid_levels();
+
+struct Fluid {
+    FluidLevel level = FluidLevel::project_default;
+    std::string preset = "water";
+    Vec3 size{4.0f, 2.0f, 4.0f};
+    float fill = 0.5f;
+    float density = 1000.0f;
+    float viscosity = 0.001f;
+    float surface_tension = 0.072f;
+    float drag = 1.0f;
+    float quadratic_drag = 1.0f;
+    float angular_drag = 1.0f;
+    float friction = 0.1f;
+    float restitution = 0.1f;
+    Vec3 color{0.12f, 0.35f, 0.6f};
+    float opacity = 0.7f;
+    Vec3 current{0.0f, 0.0f, 0.0f};
+    float wave_height = 0.0f;
+    float resolution = 0.0f;
+    bool infinite = false;
+    bool enabled = true;
+
+    static std::optional<Fluid> named(const std::string& preset);
+    static const std::vector<std::string>& presets();
+};
+
+enum class EmitterShape { point, sphere, hemisphere, cone, box, circle, line };
+const char* to_string(EmitterShape v);
+std::optional<EmitterShape> parse_emitter_shape(const std::string& text);
+const std::vector<EmitterShape>& emitter_shapes();
+
+enum class ParticleBlend { additive, alpha };
+const char* to_string(ParticleBlend v);
+std::optional<ParticleBlend> parse_particle_blend(const std::string& text);
+
+struct Emitter {
+    std::string preset = "sparks";
+    bool enabled = true;
+    bool autoplay = true;
+    bool loop = true;
+    float duration = 0.0f;
+    float rate = 40.0f;
+    int burst = 0;
+    float burst_every = 0.0f;
+    float lifetime = 0.8f;
+    float lifetime_spread = 0.3f;
+    float speed = 4.0f;
+    float speed_spread = 2.0f;
+    Vec3 direction{0.0f, 1.0f, 0.0f};
+    float spread = 35.0f;
+    EmitterShape shape = EmitterShape::point;
+    Vec3 shape_size{0.1f, 0.1f, 0.1f};
+    float gravity = 1.0f;
+    float drag = 0.4f;
+    Vec3 wind{0.0f, 0.0f, 0.0f};
+    float turbulence = 0.0f;
+    float size = 0.06f;
+    float size_end = 0.02f;
+    Vec3 color{1.0f, 0.85f, 0.4f};
+    Vec3 color_end{1.0f, 0.3f, 0.05f};
+    float alpha = 1.0f;
+    float alpha_end = 0.0f;
+    float glow = 2.0f;
+    float stretch = 0.4f;
+    ParticleBlend blend = ParticleBlend::additive;
+    bool lit = false;
+    bool collide = false;
+    float bounce = 0.3f;
+    float friction = 0.2f;
+    bool die_on_hit = false;
+    std::string texture;
+    int frames = 1;
+    int max_particles = 2000;
+    int priority = 1;
+    bool local_space = false;
+    float inherit_velocity = 0.0f;
+    std::string on_death;
+
+    static std::optional<Emitter> named(const std::string& preset);
     static const std::vector<std::string>& presets();
 };
 
@@ -380,6 +513,24 @@ public:
     const Material* material(Entity e) const;
     Material& add_material(Entity e);
     bool remove_material(Entity e);
+    Fluid* fluid(Entity e);
+    const Fluid* fluid(Entity e) const;
+    Fluid& add_fluid(Entity e);
+    bool remove_fluid(Entity e);
+    Emitter* emitter(Entity e);
+    const Emitter* emitter(Entity e) const;
+    Emitter& add_emitter(Entity e);
+    bool remove_emitter(Entity e);
+
+    const std::string& instance_of(Entity e) const;
+    bool set_instance_of(Entity e, const std::string& template_path);
+    std::vector<Entity> instances_of(const std::string& template_path) const;
+    std::vector<Entity> subtree(Entity e) const;
+    Entity copy_from(const Scene& other, Entity source, Entity parent = Entity{});
+    Entity duplicate(Entity e);
+    Scene extract(Entity root, bool keep_position = false) const;
+    Entity instantiate(const Scene& entity_template, const std::string& template_path, Entity parent, const Transform& at);
+    std::size_t refresh_instances(const std::string& template_path, const Scene& entity_template);
 
     std::string save() const;
     static std::optional<Scene> load(const std::string& text, std::string* error = nullptr);
@@ -399,6 +550,9 @@ private:
         std::string script;
         std::optional<Light> light;
         std::optional<Material> material;
+        std::optional<Fluid> fluid;
+        std::optional<Emitter> emitter;
+        std::string instance_of;
     };
 
     Slot* slot(Entity e);

@@ -24,6 +24,33 @@ extern "C" {
 #define ORCHARD_PUSH_FORCE 1
 #define ORCHARD_PUSH_TORQUE 2
 
+#define ORCHARD_PARTICLES_STOP 0
+#define ORCHARD_PARTICLES_PLAY 1
+#define ORCHARD_PARTICLES_BURST 2
+#define ORCHARD_PARTICLES_CLEAR 3
+
+#define ORCHARD_FLUID_POUR 0
+#define ORCHARD_FLUID_ERASE 1
+#define ORCHARD_FLUID_PUSH 2
+#define ORCHARD_FLUID_EXPLODE 3
+#define ORCHARD_FLUID_SAND 4
+#define ORCHARD_FLUID_WALL 5
+#define ORCHARD_FLUID_HEAT 6
+
+#define ORCHARD_SAND_EMPTY 0
+#define ORCHARD_SAND_WALL 1
+#define ORCHARD_SAND_SAND 2
+#define ORCHARD_SAND_WATER 3
+#define ORCHARD_SAND_OIL 4
+#define ORCHARD_SAND_LAVA 5
+#define ORCHARD_SAND_STEAM 6
+#define ORCHARD_SAND_SMOKE 7
+#define ORCHARD_SAND_FIRE 8
+#define ORCHARD_SAND_ICE 9
+#define ORCHARD_SAND_STONE 10
+#define ORCHARD_SAND_WOOD 11
+#define ORCHARD_SAND_ACID 12
+
 typedef unsigned long long orchard_entity;
 
 typedef struct orchard_host_api {
@@ -48,6 +75,9 @@ typedef struct orchard_host_api {
     orchard_entity (*raycast)(double ox, double oy, double oz, double dx, double dy, double dz, double max_distance, double* hit);
     int (*overlap_sphere)(double x, double y, double z, double radius, orchard_entity* out, int capacity);
     void (*set_layers)(orchard_entity entity, unsigned long long layer, unsigned long long mask);
+    orchard_entity (*instantiate)(const char* entity_template, double x, double y, double z, orchard_entity parent);
+    void (*particles)(orchard_entity entity, int action, int count);
+    int (*fluid_brush)(int brush, double x, double y, double z, double radius, double vx, double vy, double vz, int material);
 } orchard_host_api;
 
 #define ORCHARD_HOST_HAS(host, member) ((host) && (host)->size >= offsetof(orchard_host_api, member) + sizeof((host)->member) && (host)->member)

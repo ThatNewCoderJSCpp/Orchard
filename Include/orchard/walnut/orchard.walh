@@ -32,6 +32,17 @@ extern "C++" from "<orchard/script/script_api.hpp>" {
         static function find(const string&: name) -> NativeEntity;
         static function spawn(const string&: name) -> NativeEntity;
         static function spawn_child(const string&: name, const NativeEntity&: parent) -> NativeEntity;
+        static function instantiate(const string&: entity_template, short float: x, short float: y, short float: z) -> NativeEntity;
+        static function instantiate_child(const string&: entity_template, short float: x, short float: y, short float: z, const NativeEntity&: parent) -> NativeEntity;
+        static function play_particles(const NativeEntity&: e) -> void;
+        static function stop_particles(const NativeEntity&: e) -> void;
+        static function burst_particles(const NativeEntity&: e, long int: count) -> void;
+        static function clear_particles(const NativeEntity&: e) -> void;
+        static function pour_fluid(short float: x, short float: y, short float: radius) -> long int;
+        static function erase_fluid(short float: x, short float: y, short float: radius) -> long int;
+        static function push_fluid(short float: x, short float: y, short float: radius, short float: vx, short float: vy) -> long int;
+        static function splash_fluid(short float: x, short float: y, short float: radius, short float: strength) -> long int;
+        static function paint_sand(short float: x, short float: y, short float: radius, long int: cell) -> long int;
         static function raycast(short float: ox, short float: oy, short float: oz, short float: dx, short float: dy, short float: dz, short float: max_distance) -> NativeEntity;
         static function hit(long int: which) -> short float;
         static function overlap_sphere(short float: x, short float: y, short float: z, short float: radius) -> long int;
@@ -316,6 +327,54 @@ function spawn_child(const string&: name, const Entity&: parent) -> Entity {
     e.raw = NativeWorld::spawn_child(name, parent.raw);
     return e;
 } end function spawn_child
+
+function instantiate(const string&: entity_template, short float: x, short float: y, short float: z) -> Entity {
+    Entity: e;
+    e.raw = NativeWorld::instantiate(entity_template, x, y, z);
+    return e;
+} end function instantiate
+
+function instantiate_child(const string&: entity_template, short float: x, short float: y, short float: z, const Entity&: parent) -> Entity {
+    Entity: e;
+    e.raw = NativeWorld::instantiate_child(entity_template, x, y, z, parent.raw);
+    return e;
+} end function instantiate_child
+
+function play_particles(const Entity&: e) -> void {
+    NativeWorld::play_particles(e.raw);
+} end function play_particles
+
+function stop_particles(const Entity&: e) -> void {
+    NativeWorld::stop_particles(e.raw);
+} end function stop_particles
+
+function burst_particles(const Entity&: e, long int: count) -> void {
+    NativeWorld::burst_particles(e.raw, count);
+} end function burst_particles
+
+function clear_particles(const Entity&: e) -> void {
+    NativeWorld::clear_particles(e.raw);
+} end function clear_particles
+
+function pour_fluid(short float: x, short float: y, short float: radius) -> long int {
+    return NativeWorld::pour_fluid(x, y, radius);
+} end function pour_fluid
+
+function erase_fluid(short float: x, short float: y, short float: radius) -> long int {
+    return NativeWorld::erase_fluid(x, y, radius);
+} end function erase_fluid
+
+function push_fluid(short float: x, short float: y, short float: radius, short float: vx, short float: vy) -> long int {
+    return NativeWorld::push_fluid(x, y, radius, vx, vy);
+} end function push_fluid
+
+function splash_fluid(short float: x, short float: y, short float: radius, short float: strength) -> long int {
+    return NativeWorld::splash_fluid(x, y, radius, strength);
+} end function splash_fluid
+
+function paint_sand(short float: x, short float: y, short float: radius, long int: cell) -> long int {
+    return NativeWorld::paint_sand(x, y, radius, cell);
+} end function paint_sand
 
 function log(const string&: message) -> void {
     NativeWorld::log(message);

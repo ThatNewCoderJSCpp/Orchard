@@ -1,6 +1,7 @@
 #include <orchard/scene.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -70,6 +71,7 @@ const char* to_string(ColliderShape shape) {
     case ColliderShape::cylinder: return "cylinder";
     case ColliderShape::cone: return "cone";
     case ColliderShape::rounded_box: return "rounded-box";
+    case ColliderShape::sphere_section: return "sphere-section";
     }
     return "box";
 }
@@ -81,16 +83,17 @@ std::optional<ColliderShape> parse_collider_shape(const std::string& text) {
     if (text == "cylinder") return ColliderShape::cylinder;
     if (text == "cone") return ColliderShape::cone;
     if (text == "rounded-box" || text == "rounded_box" || text == "rounded") return ColliderShape::rounded_box;
+    if (text == "sphere-section" || text == "sphere_section" || text == "hemisphere" || text == "dome" || text == "bowl" || text == "wedge") return ColliderShape::sphere_section;
     return std::nullopt;
 }
 
 const std::vector<ColliderShape>& collider_shapes() {
-    static const std::vector<ColliderShape> all = {ColliderShape::box, ColliderShape::sphere, ColliderShape::capsule, ColliderShape::cylinder, ColliderShape::cone, ColliderShape::rounded_box};
+    static const std::vector<ColliderShape> all = {ColliderShape::box, ColliderShape::sphere, ColliderShape::capsule, ColliderShape::cylinder, ColliderShape::cone, ColliderShape::rounded_box, ColliderShape::sphere_section};
     return all;
 }
 
 bool collider_shape_3d_only(ColliderShape shape) {
-    return shape == ColliderShape::cylinder || shape == ColliderShape::cone;
+    return shape == ColliderShape::cylinder || shape == ColliderShape::cone || shape == ColliderShape::sphere_section;
 }
 
 const char* to_string(BodyQuality q) {
@@ -291,6 +294,21 @@ const char* to_string(LightFalloff v) {
     case LightFalloff::custom: return "custom";
     }
     return "physical";
+}
+
+const char* to_string(LightSpread v) {
+    switch (v) {
+    case LightSpread::natural: return "natural";
+    case LightSpread::blob: return "blob";
+    }
+    return "natural";
+}
+
+std::optional<LightSpread> parse_light_spread(const std::string& text) {
+    const std::string s = lower_dash(text);
+    if (s == "natural" || s == "spill" || s == "realistic" || s == "physical") return LightSpread::natural;
+    if (s == "blob" || s == "pool" || s == "compact") return LightSpread::blob;
+    return std::nullopt;
 }
 
 std::optional<LightType> parse_light_type(const std::string& text) {
@@ -575,6 +593,28 @@ const std::vector<std::string>& Material::presets() {
     return all;
 }
 
+bool Material::has_textures() const {
+    return !base_map.empty() || !normal_map.empty() || !orm_map.empty() || !roughness_map.empty() || !metallic_map.empty() || !emission_map.empty() || !opacity_map.empty();
+}
+
+std::vector<std::string> Material::texture_paths() const {
+    std::vector<std::string> out;
+    for (const std::string* p : {&base_map, &normal_map, &orm_map, &roughness_map, &metallic_map, &emission_map, &opacity_map})
+        if (!p->empty()) out.push_back(*p);
+    return out;
+}
+
+bool is_image_file(const std::string& path) {
+    const std::size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = path.substr(dot + 1);
+    for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    static const char* const known[] = {"png", "apng", "jpg", "jpeg", "bmp", "gif", "webp", "tga", "qoi", "pnm", "ppm", "pgm", "ico", "tif", "tiff", "svg"};
+    for (const char* k : known)
+        if (ext == k) return true;
+    return false;
+}
+
 std::optional<Material> Material::named(const std::string& name) {
     const std::string s = lower_dash(name);
     Material m;
@@ -602,12 +642,14 @@ std::optional<Material> Material::named(const std::string& name) {
         else if (s == "copper") m.color = {0.955f, 0.638f, 0.538f};
         else if (s == "metal") m.color = {0.75f, 0.75f, 0.75f};
         else m.color = {0.97f, 0.97f, 0.97f};
+        m.reflectivity = s == "mirror" ? 1.0f : (s == "chrome" ? 0.85f : 0.35f);
         return m;
     }
     if (s == "glass" || s == "frosted-glass" || s == "flint-glass" || s == "crystal" || s == "diamond" || s == "water" || s == "ice" || s == "window") {
         m.color = {1.0f, 1.0f, 1.0f};
         m.roughness = 0.0f;
         m.transmission = 1.0f;
+        m.reflectivity = 0.25f;
         m.ior = 1.52f;
         m.abbe = 64.0f;
         if (s == "frosted-glass") m.roughness = 0.3f;
@@ -690,6 +732,9 @@ Entity Scene::create(const std::string& name, Entity parent) {
     s.script.clear();
     s.light.reset();
     s.material.reset();
+    s.fluid.reset();
+    s.emitter.reset();
+    s.instance_of.clear();
     ++m_alive;
     return {index, s.generation};
 }
@@ -935,6 +980,455 @@ bool Scene::remove_light(Entity e) {
     return true;
 }
 
+Fluid* Scene::fluid(Entity e) {
+    Slot* s = slot(e);
+    return s && s->fluid ? &*s->fluid : nullptr;
+}
+
+const Fluid* Scene::fluid(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->fluid ? &*s->fluid : nullptr;
+}
+
+Fluid& Scene::add_fluid(Entity e) {
+    static Fluid none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Fluid{};
+        return none;
+    }
+    if (!s->fluid) s->fluid = Fluid{};
+    return *s->fluid;
+}
+
+bool Scene::remove_fluid(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->fluid) return false;
+    s->fluid.reset();
+    return true;
+}
+
+Emitter* Scene::emitter(Entity e) {
+    Slot* s = slot(e);
+    return s && s->emitter ? &*s->emitter : nullptr;
+}
+
+const Emitter* Scene::emitter(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->emitter ? &*s->emitter : nullptr;
+}
+
+Emitter& Scene::add_emitter(Entity e) {
+    static Emitter none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Emitter{};
+        return none;
+    }
+    if (!s->emitter) s->emitter = Emitter{};
+    return *s->emitter;
+}
+
+bool Scene::remove_emitter(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->emitter) return false;
+    s->emitter.reset();
+    return true;
+}
+
+const std::string& Scene::instance_of(Entity e) const {
+    const Slot* s = slot(e);
+    return s ? s->instance_of : empty_name;
+}
+
+bool Scene::set_instance_of(Entity e, const std::string& template_path) {
+    Slot* s = slot(e);
+    if (!s) return false;
+    s->instance_of = template_path;
+    return true;
+}
+
+std::vector<Entity> Scene::instances_of(const std::string& template_path) const {
+    std::vector<Entity> out;
+    if (template_path.empty()) return out;
+    for (std::uint32_t i = 0; i < m_slots.size(); ++i) {
+        const Slot& s = m_slots[i];
+        if (s.used && s.instance_of == template_path) out.push_back({i, s.generation});
+    }
+    return out;
+}
+
+std::vector<Entity> Scene::subtree(Entity e) const {
+    std::vector<Entity> out;
+    if (!alive(e)) return out;
+    out.push_back(e);
+    for (std::size_t i = 0; i < out.size() && out.size() < 1000000; ++i)
+        for (Entity c : children(out[i])) out.push_back(c);
+    return out;
+}
+
+Entity Scene::copy_from(const Scene& other, Entity source, Entity parent) {
+    const Slot* src = other.slot(source);
+    if (!src) return Entity{};
+    const Slot copy = *src;
+    const Entity e = create(copy.name, parent);
+    Slot* dst = slot(e);
+    dst->transform = copy.transform;
+    dst->body = copy.body;
+    dst->colliders = copy.colliders;
+    dst->script = copy.script;
+    dst->light = copy.light;
+    dst->material = copy.material;
+    dst->fluid = copy.fluid;
+    dst->emitter = copy.emitter;
+    dst->instance_of = copy.instance_of;
+    if (&other == this) {
+        const Scene part = other.extract(source, true);
+        const std::vector<Entity> part_roots = part.roots();
+        if (!part_roots.empty())
+            for (Entity c : part.children(part_roots.front())) copy_from(part, c, e);
+        return e;
+    }
+    for (Entity c : other.children(source)) copy_from(other, c, e);
+    return e;
+}
+
+Entity Scene::duplicate(Entity e) {
+    if (!alive(e)) return Entity{};
+    const Scene part = extract(e, true);
+    const std::vector<Entity> part_roots = part.roots();
+    if (part_roots.empty()) return Entity{};
+    const Entity copy = copy_from(part, part_roots.front(), parent(e));
+    set_name(copy, name(e) + " copy");
+    return copy;
+}
+
+Scene Scene::extract(Entity root, bool keep_position) const {
+    Scene out(m_dimension);
+    if (!alive(root)) return out;
+    const Entity r = out.copy_from(*this, root);
+    if (!keep_position) {
+        out.transform(r)->position = Vec3{0.0f, 0.0f, 0.0f};
+        out.set_instance_of(r, std::string());
+    }
+    return out;
+}
+
+Entity Scene::instantiate(const Scene& entity_template, const std::string& template_path, Entity parent, const Transform& at) {
+    const std::vector<Entity> roots = entity_template.roots();
+    if (roots.empty()) return Entity{};
+    Entity root;
+    if (roots.size() == 1) {
+        root = copy_from(entity_template, roots.front(), parent);
+        Transform* t = transform(root);
+        const Transform base = *t;
+        t->position = at.position + rotate(at.rotation, base.position * at.scale);
+        t->rotation = at.rotation * base.rotation;
+        t->scale = base.scale * at.scale;
+    } else {
+        std::string label = template_path;
+        const std::size_t slash = label.find_last_of("/\\");
+        if (slash != std::string::npos) label = label.substr(slash + 1);
+        const std::size_t dot = label.find_last_of('.');
+        if (dot != std::string::npos && dot > 0) label = label.substr(0, dot);
+        root = create(label.empty() ? std::string("Entity") : label, parent);
+        *transform(root) = at;
+        for (Entity r : roots) copy_from(entity_template, r, root);
+    }
+    set_instance_of(root, template_path);
+    return root;
+}
+
+std::size_t Scene::refresh_instances(const std::string& template_path, const Scene& entity_template) {
+    std::size_t n = 0;
+    const std::vector<Entity> roots = entity_template.roots();
+    for (Entity inst : instances_of(template_path)) {
+        if (!alive(inst)) continue;
+        bool nested = false;
+        for (Entity up = parent(inst); alive(up); up = parent(up)) nested = nested || instance_of(up) == template_path;
+        if (nested) continue;
+        const Transform keep = *transform(inst);
+        const std::string keep_name = name(inst);
+        for (Entity c : children(inst)) destroy(c);
+        Slot* dst = slot(inst);
+        if (roots.size() == 1) {
+            const Slot src = *entity_template.slot(roots.front());
+            dst->body = src.body;
+            dst->colliders = src.colliders;
+            dst->script = src.script;
+            dst->light = src.light;
+            dst->material = src.material;
+            dst->fluid = src.fluid;
+            dst->emitter = src.emitter;
+            for (Entity c : entity_template.children(roots.front())) copy_from(entity_template, c, inst);
+        } else {
+            dst->body.reset();
+            dst->colliders.clear();
+            dst->script.clear();
+            dst->light.reset();
+            dst->material.reset();
+            dst->fluid.reset();
+            dst->emitter.reset();
+            for (Entity r : roots) copy_from(entity_template, r, inst);
+        }
+        *transform(inst) = keep;
+        set_name(inst, keep_name);
+        dst->instance_of = template_path;
+        ++n;
+    }
+    return n;
+}
+
+const char* to_string(EmitterShape v) {
+    switch (v) {
+    case EmitterShape::point: return "point";
+    case EmitterShape::sphere: return "sphere";
+    case EmitterShape::hemisphere: return "hemisphere";
+    case EmitterShape::cone: return "cone";
+    case EmitterShape::box: return "box";
+    case EmitterShape::circle: return "circle";
+    case EmitterShape::line: return "line";
+    }
+    return "point";
+}
+
+std::optional<EmitterShape> parse_emitter_shape(const std::string& text) {
+    const std::string s = lower_dash(text);
+    for (EmitterShape v : emitter_shapes())
+        if (s == to_string(v)) return v;
+    if (s == "ball") return EmitterShape::sphere;
+    if (s == "dome") return EmitterShape::hemisphere;
+    if (s == "rect" || s == "cube") return EmitterShape::box;
+    if (s == "ring" || s == "disc" || s == "disk") return EmitterShape::circle;
+    return std::nullopt;
+}
+
+const std::vector<EmitterShape>& emitter_shapes() {
+    static const std::vector<EmitterShape> all = {EmitterShape::point, EmitterShape::sphere, EmitterShape::hemisphere, EmitterShape::cone, EmitterShape::box, EmitterShape::circle, EmitterShape::line};
+    return all;
+}
+
+const char* to_string(ParticleBlend v) {
+    return v == ParticleBlend::alpha ? "alpha" : "additive";
+}
+
+std::optional<ParticleBlend> parse_particle_blend(const std::string& text) {
+    const std::string s = lower_dash(text);
+    if (s == "additive" || s == "add" || s == "glow") return ParticleBlend::additive;
+    if (s == "alpha" || s == "normal" || s == "blend") return ParticleBlend::alpha;
+    return std::nullopt;
+}
+
+const std::vector<std::string>& Emitter::presets() {
+    static const std::vector<std::string> all = {"sparks", "smoke", "fire", "explosion", "dust", "rain", "snow", "magic", "debris", "bubbles", "steam", "embers"};
+    return all;
+}
+
+std::optional<Emitter> Emitter::named(const std::string& preset) {
+    const std::string s = lower_dash(preset);
+    Emitter e;
+    e.preset = s;
+    if (s == "sparks") {
+        e.collide = true;
+        return e;
+    }
+    if (s == "smoke") {
+        e.rate = 14.0f; e.lifetime = 3.5f; e.lifetime_spread = 1.0f; e.speed = 0.8f; e.speed_spread = 0.3f; e.spread = 18.0f;
+        e.gravity = -0.08f; e.drag = 0.6f; e.turbulence = 0.6f; e.size = 0.35f; e.size_end = 1.6f;
+        e.color = {0.35f, 0.35f, 0.37f}; e.color_end = {0.6f, 0.6f, 0.62f}; e.alpha = 0.55f; e.alpha_end = 0.0f;
+        e.glow = 0.0f; e.stretch = 0.0f; e.blend = ParticleBlend::alpha; e.lit = true; e.shape = EmitterShape::circle; e.shape_size = {0.25f, 0.25f, 0.25f};
+        e.max_particles = 400;
+        return e;
+    }
+    if (s == "fire") {
+        e.rate = 60.0f; e.lifetime = 0.9f; e.lifetime_spread = 0.3f; e.speed = 1.4f; e.speed_spread = 0.5f; e.spread = 12.0f;
+        e.gravity = -0.35f; e.drag = 0.8f; e.turbulence = 0.9f; e.size = 0.3f; e.size_end = 0.05f;
+        e.color = {1.0f, 0.75f, 0.25f}; e.color_end = {0.9f, 0.15f, 0.02f}; e.alpha = 0.9f; e.glow = 3.0f; e.stretch = 0.1f;
+        e.shape = EmitterShape::circle; e.shape_size = {0.3f, 0.3f, 0.3f}; e.on_death = "smoke"; e.max_particles = 600;
+        return e;
+    }
+    if (s == "explosion") {
+        e.loop = false; e.rate = 0.0f; e.burst = 160; e.duration = 0.1f; e.lifetime = 1.1f; e.lifetime_spread = 0.5f;
+        e.speed = 9.0f; e.speed_spread = 5.0f; e.spread = 180.0f; e.shape = EmitterShape::sphere; e.shape_size = {0.3f, 0.3f, 0.3f};
+        e.gravity = 0.6f; e.drag = 1.6f; e.size = 0.25f; e.size_end = 0.6f; e.color = {1.0f, 0.85f, 0.45f}; e.color_end = {0.6f, 0.15f, 0.05f};
+        e.glow = 4.0f; e.stretch = 0.2f; e.on_death = "smoke"; e.collide = true; e.max_particles = 400; e.priority = 3;
+        return e;
+    }
+    if (s == "dust") {
+        e.rate = 10.0f; e.lifetime = 4.0f; e.lifetime_spread = 1.5f; e.speed = 0.2f; e.speed_spread = 0.15f; e.spread = 180.0f;
+        e.gravity = 0.02f; e.drag = 1.0f; e.turbulence = 0.3f; e.size = 0.04f; e.size_end = 0.04f;
+        e.color = {0.75f, 0.68f, 0.55f}; e.color_end = e.color; e.alpha = 0.5f; e.glow = 0.0f; e.stretch = 0.0f;
+        e.blend = ParticleBlend::alpha; e.lit = true; e.shape = EmitterShape::box; e.shape_size = {3.0f, 1.0f, 3.0f}; e.max_particles = 300;
+        return e;
+    }
+    if (s == "rain") {
+        e.rate = 600.0f; e.lifetime = 1.4f; e.lifetime_spread = 0.2f; e.speed = 12.0f; e.speed_spread = 2.0f; e.direction = {0.0f, -1.0f, 0.0f}; e.spread = 3.0f;
+        e.gravity = 1.0f; e.drag = 0.1f; e.size = 0.015f; e.size_end = 0.015f; e.color = {0.7f, 0.8f, 0.95f}; e.color_end = e.color;
+        e.alpha = 0.5f; e.alpha_end = 0.5f; e.glow = 0.0f; e.stretch = 1.5f; e.blend = ParticleBlend::alpha; e.shape = EmitterShape::box;
+        e.shape_size = {20.0f, 0.1f, 20.0f}; e.collide = true; e.die_on_hit = true; e.on_death = ""; e.max_particles = 4000; e.priority = 0;
+        return e;
+    }
+    if (s == "snow") {
+        e.rate = 120.0f; e.lifetime = 8.0f; e.lifetime_spread = 2.0f; e.speed = 0.6f; e.speed_spread = 0.2f; e.direction = {0.0f, -1.0f, 0.0f}; e.spread = 20.0f;
+        e.gravity = 0.05f; e.drag = 1.2f; e.turbulence = 0.5f; e.size = 0.04f; e.size_end = 0.04f; e.color = {1.0f, 1.0f, 1.0f}; e.color_end = e.color;
+        e.alpha = 0.9f; e.alpha_end = 0.9f; e.glow = 0.0f; e.stretch = 0.0f; e.blend = ParticleBlend::alpha; e.lit = true;
+        e.shape = EmitterShape::box; e.shape_size = {20.0f, 0.1f, 20.0f}; e.collide = true; e.max_particles = 3000; e.priority = 0;
+        return e;
+    }
+    if (s == "magic") {
+        e.rate = 50.0f; e.lifetime = 1.4f; e.speed = 0.6f; e.speed_spread = 0.4f; e.spread = 180.0f; e.gravity = -0.1f; e.drag = 0.5f; e.turbulence = 1.2f;
+        e.size = 0.05f; e.size_end = 0.0f; e.color = {0.6f, 0.4f, 1.0f}; e.color_end = {0.2f, 0.9f, 1.0f}; e.glow = 3.0f; e.stretch = 0.0f;
+        e.shape = EmitterShape::sphere; e.shape_size = {0.5f, 0.5f, 0.5f}; e.max_particles = 500;
+        return e;
+    }
+    if (s == "debris") {
+        e.loop = false; e.rate = 0.0f; e.burst = 40; e.duration = 0.1f; e.lifetime = 3.0f; e.lifetime_spread = 1.0f; e.speed = 5.0f; e.speed_spread = 2.0f; e.spread = 60.0f;
+        e.gravity = 1.0f; e.drag = 0.1f; e.size = 0.08f; e.size_end = 0.08f; e.color = {0.45f, 0.38f, 0.3f}; e.color_end = e.color; e.alpha_end = 1.0f;
+        e.glow = 0.0f; e.stretch = 0.0f; e.blend = ParticleBlend::alpha; e.lit = true; e.collide = true; e.bounce = 0.35f; e.friction = 0.6f; e.max_particles = 200;
+        return e;
+    }
+    if (s == "bubbles") {
+        e.rate = 12.0f; e.lifetime = 2.5f; e.speed = 0.5f; e.speed_spread = 0.2f; e.spread = 15.0f; e.gravity = -0.25f; e.drag = 1.5f; e.turbulence = 0.4f;
+        e.size = 0.04f; e.size_end = 0.07f; e.color = {0.8f, 0.92f, 1.0f}; e.color_end = e.color; e.alpha = 0.6f; e.alpha_end = 0.3f; e.glow = 0.5f; e.stretch = 0.0f;
+        e.blend = ParticleBlend::alpha; e.max_particles = 200;
+        return e;
+    }
+    if (s == "steam") {
+        Emitter m = *named("smoke");
+        m.preset = s; m.color = {0.92f, 0.94f, 0.96f}; m.color_end = {1.0f, 1.0f, 1.0f}; m.alpha = 0.35f; m.lifetime = 2.0f; m.speed = 1.5f; m.gravity = -0.25f;
+        return m;
+    }
+    if (s == "embers") {
+        e.rate = 8.0f; e.lifetime = 2.5f; e.lifetime_spread = 1.0f; e.speed = 1.2f; e.speed_spread = 0.6f; e.spread = 25.0f; e.gravity = -0.15f; e.drag = 0.4f; e.turbulence = 1.0f;
+        e.size = 0.025f; e.size_end = 0.01f; e.color = {1.0f, 0.6f, 0.2f}; e.color_end = {0.8f, 0.15f, 0.0f}; e.glow = 3.0f; e.stretch = 0.2f; e.shape = EmitterShape::circle;
+        e.shape_size = {0.3f, 0.3f, 0.3f}; e.max_particles = 200;
+        return e;
+    }
+    return std::nullopt;
+}
+
+const char* to_string(FluidLevel v) {
+    switch (v) {
+    case FluidLevel::project_default: return "default";
+    case FluidLevel::blocky: return "blocky";
+    case FluidLevel::still: return "still";
+    case FluidLevel::flowing: return "flowing";
+    case FluidLevel::waves: return "waves";
+    case FluidLevel::realistic: return "realistic";
+    }
+    return "default";
+}
+
+const char* fluid_level_label(FluidLevel v) {
+    switch (v) {
+    case FluidLevel::project_default: return "Project default";
+    case FluidLevel::blocky: return "Blocky (Minecraft)";
+    case FluidLevel::still: return "Still (Garry's Mod, no flow)";
+    case FluidLevel::flowing: return "Flowing (modded Minecraft)";
+    case FluidLevel::waves: return "Waves (flows and ripples, no splashing)";
+    case FluidLevel::realistic: return "Realistic (pours over walls, splashes)";
+    }
+    return "Project default";
+}
+
+std::optional<FluidLevel> parse_fluid_level(const std::string& text) {
+    const std::string s = lower_dash(text);
+    if (s == "default" || s == "project" || s == "project-default") return FluidLevel::project_default;
+    if (s == "blocky" || s == "minecraft" || s == "cells") return FluidLevel::blocky;
+    if (s == "still" || s == "static" || s == "gmod") return FluidLevel::still;
+    if (s == "flowing" || s == "modded" || s == "flow") return FluidLevel::flowing;
+    if (s == "waves" || s == "wave" || s == "somewhat-realistic" || s == "heightfield") return FluidLevel::waves;
+    if (s == "realistic" || s == "super-realistic" || s == "particles" || s == "sph") return FluidLevel::realistic;
+    return std::nullopt;
+}
+
+const std::vector<FluidLevel>& fluid_levels() {
+    static const std::vector<FluidLevel> all = {FluidLevel::project_default, FluidLevel::blocky, FluidLevel::still, FluidLevel::flowing, FluidLevel::waves, FluidLevel::realistic};
+    return all;
+}
+
+const std::vector<std::string>& Fluid::presets() {
+    static const std::vector<std::string> all = {"water", "sea-water", "oil", "honey", "lava", "mud", "mercury", "sand", "acid"};
+    return all;
+}
+
+std::optional<Fluid> Fluid::named(const std::string& preset) {
+    const std::string s = lower_dash(preset);
+    Fluid f;
+    f.preset = s;
+    if (s == "water") return f;
+    if (s == "sea-water") {
+        f.density = 1025.0f;
+        f.color = {0.08f, 0.3f, 0.45f};
+        return f;
+    }
+    if (s == "oil") {
+        f.density = 900.0f;
+        f.viscosity = 0.1f;
+        f.surface_tension = 0.032f;
+        f.color = {0.25f, 0.18f, 0.05f};
+        f.opacity = 0.9f;
+        return f;
+    }
+    if (s == "honey") {
+        f.density = 1420.0f;
+        f.viscosity = 10.0f;
+        f.surface_tension = 0.05f;
+        f.color = {0.85f, 0.55f, 0.1f};
+        f.opacity = 0.85f;
+        f.drag = 4.0f;
+        f.quadratic_drag = 2.0f;
+        return f;
+    }
+    if (s == "lava") {
+        f.density = 2600.0f;
+        f.viscosity = 100.0f;
+        f.surface_tension = 0.4f;
+        f.color = {1.0f, 0.3f, 0.02f};
+        f.opacity = 1.0f;
+        f.drag = 8.0f;
+        f.quadratic_drag = 3.0f;
+        return f;
+    }
+    if (s == "mud") {
+        f.density = 1700.0f;
+        f.viscosity = 5.0f;
+        f.color = {0.3f, 0.2f, 0.1f};
+        f.opacity = 1.0f;
+        f.drag = 5.0f;
+        f.quadratic_drag = 2.0f;
+        f.friction = 0.6f;
+        return f;
+    }
+    if (s == "sand") {
+        f.density = 1600.0f;
+        f.viscosity = 5.0f;
+        f.surface_tension = 0.0f;
+        f.color = {0.86f, 0.74f, 0.45f};
+        f.opacity = 1.0f;
+        f.friction = 0.6f;
+        f.drag = 4.0f;
+        return f;
+    }
+    if (s == "acid") {
+        f.density = 1200.0f;
+        f.viscosity = 0.002f;
+        f.color = {0.45f, 0.95f, 0.2f};
+        f.opacity = 0.8f;
+        return f;
+    }
+    if (s == "mercury") {
+        f.density = 13534.0f;
+        f.viscosity = 0.0015f;
+        f.surface_tension = 0.485f;
+        f.color = {0.8f, 0.8f, 0.82f};
+        f.opacity = 1.0f;
+        f.restitution = 0.3f;
+        return f;
+    }
+    return std::nullopt;
+}
+
 Material* Scene::material(Entity e) {
     Slot* s = slot(e);
     return s && s->material ? &*s->material : nullptr;
@@ -983,6 +1477,8 @@ std::string light_line(std::size_t n, const Light& l) {
     f("range", l.range, d.range);
     if (l.falloff != d.falloff) out += std::string(" falloff:") + to_string(l.falloff);
     f("falloff-exponent", l.falloff_exponent, d.falloff_exponent);
+    if (l.spread != d.spread) out += std::string(" spread:") + to_string(l.spread);
+    f("spill", l.spill, d.spill);
     f("radius", l.radius, d.radius);
     f("length", l.length, d.length);
     f("width", l.width, d.width);
@@ -1024,6 +1520,179 @@ std::string light_line(std::size_t n, const Light& l) {
     return out + "\n";
 }
 
+std::string fluid_line(std::size_t n, const Fluid& v) {
+    const Fluid d;
+    std::string out = "fluid " + std::to_string(n) + " " + to_string(v.level);
+    auto f = [&out](const char* key, float x, float def) {
+        if (x != def) out += std::string(" ") + key + ":" + number(x);
+    };
+    if (!v.preset.empty()) out += " preset:" + escape_token(v.preset);
+    out += " size:" + vec_token(v.size);
+    f("fill", v.fill, d.fill);
+    f("density", v.density, d.density);
+    f("viscosity", v.viscosity, d.viscosity);
+    f("surface-tension", v.surface_tension, d.surface_tension);
+    f("drag", v.drag, d.drag);
+    f("quadratic-drag", v.quadratic_drag, d.quadratic_drag);
+    f("angular-drag", v.angular_drag, d.angular_drag);
+    f("friction", v.friction, d.friction);
+    f("bounce", v.restitution, d.restitution);
+    if (!same(v.color, d.color)) out += " color:" + vec_token(v.color);
+    f("opacity", v.opacity, d.opacity);
+    if (!same(v.current, d.current)) out += " current:" + vec_token(v.current);
+    f("wave-height", v.wave_height, d.wave_height);
+    f("resolution", v.resolution, d.resolution);
+    if (v.infinite) out += " infinite:1";
+    if (!v.enabled) out += " enabled:0";
+    return out + "\n";
+}
+
+std::string emitter_line(std::size_t n, const Emitter& v) {
+    const Emitter d;
+    std::string out = "emitter " + std::to_string(n);
+    auto f = [&out](const char* key, float x, float def) {
+        if (x != def) out += std::string(" ") + key + ":" + number(x);
+    };
+    auto i = [&out](const char* key, int x, int def) {
+        if (x != def) out += std::string(" ") + key + ":" + std::to_string(x);
+    };
+    auto b = [&out](const char* key, bool x, bool def) {
+        if (x != def) out += std::string(" ") + key + ":" + (x ? "1" : "0");
+    };
+    auto v3 = [&out](const char* key, Vec3 x, Vec3 def) {
+        if (!same(x, def)) out += std::string(" ") + key + ":" + vec_token(x);
+    };
+    auto t = [&out](const char* key, const std::string& x) {
+        if (!x.empty()) out += std::string(" ") + key + ":" + escape_token(x);
+    };
+    t("preset", v.preset);
+    b("enabled", v.enabled, d.enabled);
+    b("autoplay", v.autoplay, d.autoplay);
+    b("loop", v.loop, d.loop);
+    f("duration", v.duration, d.duration);
+    f("rate", v.rate, d.rate);
+    i("burst", v.burst, d.burst);
+    f("burst-every", v.burst_every, d.burst_every);
+    f("life", v.lifetime, d.lifetime);
+    f("life-spread", v.lifetime_spread, d.lifetime_spread);
+    f("speed", v.speed, d.speed);
+    f("speed-spread", v.speed_spread, d.speed_spread);
+    v3("direction", v.direction, d.direction);
+    f("spread", v.spread, d.spread);
+    if (v.shape != d.shape) out += std::string(" shape:") + to_string(v.shape);
+    v3("shape-size", v.shape_size, d.shape_size);
+    f("gravity", v.gravity, d.gravity);
+    f("drag", v.drag, d.drag);
+    v3("wind", v.wind, d.wind);
+    f("turbulence", v.turbulence, d.turbulence);
+    f("size", v.size, d.size);
+    f("size-end", v.size_end, d.size_end);
+    v3("color", v.color, d.color);
+    v3("color-end", v.color_end, d.color_end);
+    f("alpha", v.alpha, d.alpha);
+    f("alpha-end", v.alpha_end, d.alpha_end);
+    f("glow", v.glow, d.glow);
+    f("stretch", v.stretch, d.stretch);
+    if (v.blend != d.blend) out += std::string(" blend:") + to_string(v.blend);
+    b("lit", v.lit, d.lit);
+    b("collide", v.collide, d.collide);
+    f("bounce", v.bounce, d.bounce);
+    f("friction", v.friction, d.friction);
+    b("die-on-hit", v.die_on_hit, d.die_on_hit);
+    t("texture", v.texture);
+    i("frames", v.frames, d.frames);
+    i("max", v.max_particles, d.max_particles);
+    i("priority", v.priority, d.priority);
+    b("local", v.local_space, d.local_space);
+    f("inherit", v.inherit_velocity, d.inherit_velocity);
+    if (!v.on_death.empty()) out += " on-death:" + escape_token(v.on_death);
+    else if (v.on_death != d.on_death) out += " on-death:none";
+    return out + "\n";
+}
+
+void read_emitter(std::istringstream& row, Emitter& v) {
+    for (std::string token; row >> token;) {
+        const std::size_t colon = token.find(':');
+        if (colon == std::string::npos) continue;
+        const std::string key = token.substr(0, colon), s = token.substr(colon + 1);
+        const float x = static_cast<float>(std::atof(s.c_str()));
+        const int n = std::atoi(s.c_str());
+        if (key == "preset") v.preset = unescape_token(s);
+        else if (key == "enabled") v.enabled = s != "0";
+        else if (key == "autoplay") v.autoplay = s != "0";
+        else if (key == "loop") v.loop = s != "0";
+        else if (key == "duration") v.duration = std::max(0.0f, x);
+        else if (key == "rate") v.rate = std::max(0.0f, x);
+        else if (key == "burst") v.burst = std::max(0, n);
+        else if (key == "burst-every") v.burst_every = std::max(0.0f, x);
+        else if (key == "life") v.lifetime = std::max(0.01f, x);
+        else if (key == "life-spread") v.lifetime_spread = std::max(0.0f, x);
+        else if (key == "speed") v.speed = x;
+        else if (key == "speed-spread") v.speed_spread = std::max(0.0f, x);
+        else if (key == "direction") parse_vec_token(s, v.direction);
+        else if (key == "spread") v.spread = std::clamp(x, 0.0f, 180.0f);
+        else if (key == "shape") {
+            if (const auto sh = parse_emitter_shape(s)) v.shape = *sh;
+        } else if (key == "shape-size") parse_vec_token(s, v.shape_size);
+        else if (key == "gravity") v.gravity = x;
+        else if (key == "drag") v.drag = std::max(0.0f, x);
+        else if (key == "wind") parse_vec_token(s, v.wind);
+        else if (key == "turbulence") v.turbulence = std::max(0.0f, x);
+        else if (key == "size") v.size = std::max(0.0f, x);
+        else if (key == "size-end") v.size_end = std::max(0.0f, x);
+        else if (key == "color") parse_vec_token(s, v.color);
+        else if (key == "color-end") parse_vec_token(s, v.color_end);
+        else if (key == "alpha") v.alpha = std::clamp(x, 0.0f, 1.0f);
+        else if (key == "alpha-end") v.alpha_end = std::clamp(x, 0.0f, 1.0f);
+        else if (key == "glow") v.glow = std::max(0.0f, x);
+        else if (key == "stretch") v.stretch = std::max(0.0f, x);
+        else if (key == "blend") {
+            if (const auto bl = parse_particle_blend(s)) v.blend = *bl;
+        } else if (key == "lit") v.lit = s != "0";
+        else if (key == "collide") v.collide = s != "0";
+        else if (key == "bounce") v.bounce = std::clamp(x, 0.0f, 1.0f);
+        else if (key == "friction") v.friction = std::max(0.0f, x);
+        else if (key == "die-on-hit") v.die_on_hit = s != "0";
+        else if (key == "texture") v.texture = unescape_token(s);
+        else if (key == "frames") v.frames = std::max(1, n);
+        else if (key == "max") v.max_particles = std::clamp(n, 1, 1000000);
+        else if (key == "priority") v.priority = std::clamp(n, 0, 3);
+        else if (key == "local") v.local_space = s != "0";
+        else if (key == "inherit") v.inherit_velocity = x;
+        else if (key == "on-death") v.on_death = s == "none" ? std::string() : unescape_token(s);
+    }
+}
+
+void read_fluid(std::istringstream& row, Fluid& v) {
+    std::string level;
+    row >> level;
+    if (const auto lv = parse_fluid_level(level)) v.level = *lv;
+    for (std::string token; row >> token;) {
+        const std::size_t colon = token.find(':');
+        if (colon == std::string::npos) continue;
+        const std::string key = token.substr(0, colon), s = token.substr(colon + 1);
+        const float x = static_cast<float>(std::atof(s.c_str()));
+        if (key == "preset") v.preset = unescape_token(s);
+        else if (key == "size") parse_vec_token(s, v.size);
+        else if (key == "fill") v.fill = std::clamp(x, 0.0f, 1.0f);
+        else if (key == "density") v.density = std::max(1.0f, x);
+        else if (key == "viscosity") v.viscosity = std::max(0.0f, x);
+        else if (key == "surface-tension") v.surface_tension = std::max(0.0f, x);
+        else if (key == "drag") v.drag = std::max(0.0f, x);
+        else if (key == "quadratic-drag") v.quadratic_drag = std::max(0.0f, x);
+        else if (key == "angular-drag") v.angular_drag = std::max(0.0f, x);
+        else if (key == "friction") v.friction = std::max(0.0f, x);
+        else if (key == "bounce") v.restitution = std::clamp(x, 0.0f, 1.0f);
+        else if (key == "color") parse_vec_token(s, v.color);
+        else if (key == "opacity") v.opacity = std::clamp(x, 0.0f, 1.0f);
+        else if (key == "current") parse_vec_token(s, v.current);
+        else if (key == "wave-height") v.wave_height = std::max(0.0f, x);
+        else if (key == "resolution") v.resolution = std::max(0.0f, x);
+        else if (key == "infinite") v.infinite = s != "0";
+        else if (key == "enabled") v.enabled = s != "0";
+    }
+}
+
 std::string material_line(std::size_t n, const Material& m) {
     const Material d;
     std::string out = "material " + std::to_string(n);
@@ -1047,6 +1716,27 @@ std::string material_line(std::size_t n, const Material& m) {
     if (!same(m.absorption_color, d.absorption_color)) out += " absorption:" + vec_token(m.absorption_color);
     f("absorption-distance", m.absorption_distance, d.absorption_distance);
     f("opacity", m.opacity, d.opacity);
+    f("reflectivity", m.reflectivity, d.reflectivity);
+    auto t = [&out](const char* key, const std::string& v) {
+        if (!v.empty()) out += std::string(" ") + key + ":" + escape_token(v);
+    };
+    t("base-map", m.base_map);
+    t("normal-map", m.normal_map);
+    t("orm-map", m.orm_map);
+    t("roughness-map", m.roughness_map);
+    t("metallic-map", m.metallic_map);
+    t("emission-map", m.emission_map);
+    t("opacity-map", m.opacity_map);
+    f("normal-strength", m.normal_strength, d.normal_strength);
+    f("alpha-cutoff", m.alpha_cutoff, d.alpha_cutoff);
+    f("tiling-u", m.tiling_u, d.tiling_u);
+    f("tiling-v", m.tiling_v, d.tiling_v);
+    f("offset-u", m.offset_u, d.offset_u);
+    f("offset-v", m.offset_v, d.offset_v);
+    f("uv-rotation", m.uv_rotation, d.uv_rotation);
+    b("pixelated", m.pixelated, d.pixelated);
+    b("triplanar", m.triplanar, d.triplanar);
+    f("triplanar-scale", m.triplanar_scale, d.triplanar_scale);
     b("double-sided", m.double_sided, d.double_sided);
     b("casts-shadows", m.casts_shadows, d.casts_shadows);
     b("static", m.is_static, d.is_static);
@@ -1081,6 +1771,9 @@ bool read_light(std::istringstream& row, Light& l, std::string& bad) {
         else if (key == "falloff") {
             if (const auto fo = parse_light_falloff(v)) l.falloff = *fo;
         } else if (key == "falloff-exponent") l.falloff_exponent = x;
+        else if (key == "spread") {
+            if (const auto sp = parse_light_spread(v)) l.spread = *sp;
+        } else if (key == "spill") l.spill = x;
         else if (key == "radius") l.radius = x;
         else if (key == "length") l.length = x;
         else if (key == "width") l.width = x;
@@ -1143,6 +1836,24 @@ void read_material(std::istringstream& row, Material& m) {
         else if (key == "absorption") parse_vec_token(v, m.absorption_color);
         else if (key == "absorption-distance") m.absorption_distance = x;
         else if (key == "opacity") m.opacity = x;
+        else if (key == "reflectivity") m.reflectivity = x;
+        else if (key == "base-map") m.base_map = unescape_token(v);
+        else if (key == "normal-map") m.normal_map = unescape_token(v);
+        else if (key == "orm-map") m.orm_map = unescape_token(v);
+        else if (key == "roughness-map") m.roughness_map = unescape_token(v);
+        else if (key == "metallic-map") m.metallic_map = unescape_token(v);
+        else if (key == "emission-map") m.emission_map = unescape_token(v);
+        else if (key == "opacity-map") m.opacity_map = unescape_token(v);
+        else if (key == "normal-strength") m.normal_strength = x;
+        else if (key == "alpha-cutoff") m.alpha_cutoff = x;
+        else if (key == "tiling-u") m.tiling_u = x;
+        else if (key == "tiling-v") m.tiling_v = x;
+        else if (key == "offset-u") m.offset_u = x;
+        else if (key == "offset-v") m.offset_v = x;
+        else if (key == "uv-rotation") m.uv_rotation = x;
+        else if (key == "pixelated") m.pixelated = v != "0";
+        else if (key == "triplanar") m.triplanar = v != "0";
+        else if (key == "triplanar-scale") m.triplanar_scale = x;
         else if (key == "double-sided") m.double_sided = v != "0";
         else if (key == "casts-shadows") m.casts_shadows = v != "0";
         else if (key == "static") m.is_static = v != "0";
@@ -1203,10 +1914,15 @@ std::string Scene::save() const {
             if (c.rolling_friction != base.rolling_friction) out << " roll:" << number(c.rolling_friction);
             if (c.spinning_friction != base.spinning_friction) out << " spin:" << number(c.spinning_friction);
             if (c.grip.x != 1.0f || c.grip.y != 1.0f || c.grip.z != 1.0f) out << " grip:" << number(c.grip.x) << "," << number(c.grip.y) << "," << number(c.grip.z);
+            if (c.shape == ColliderShape::sphere_section) out << " arc:" << number(c.polar_min) << "," << number(c.polar_max) << "," << number(c.azimuth_min) << "," << number(c.azimuth_max);
+            if (c.shell != base.shell) out << " shell:" << number(c.shell);
             out << "\n";
         }
         if (s.light) out << light_line(n, *s.light);
         if (s.material) out << material_line(n, *s.material);
+        if (s.fluid) out << fluid_line(n, *s.fluid);
+        if (s.emitter) out << emitter_line(n, *s.emitter);
+        if (!s.instance_of.empty()) out << "instance " << n << " " << s.instance_of << "\n";
     }
     return out.str();
 }
@@ -1238,7 +1954,7 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
         std::string kind;
         std::size_t num = 0, parent = 0;
         row >> kind >> num;
-        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material") {
+        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material" || kind == "fluid" || kind == "emitter" || kind == "instance") {
             const auto owner = by_number.find(num);
             if (!row || owner == by_number.end()) {
                 if (error) *error = "line " + std::to_string(line_no) + ": " + kind + " for an entity that isn't there";
@@ -1252,6 +1968,24 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     return std::nullopt;
                 }
                 scene.add_light(owner->second, l.type) = l;
+                continue;
+            }
+            if (kind == "emitter") {
+                Emitter v;
+                read_emitter(row, v);
+                scene.add_emitter(owner->second) = v;
+                continue;
+            }
+            if (kind == "instance") {
+                std::string path;
+                std::getline(row >> std::ws, path);
+                scene.set_instance_of(owner->second, path);
+                continue;
+            }
+            if (kind == "fluid") {
+                Fluid v;
+                read_fluid(row, v);
+                scene.add_fluid(owner->second) = v;
                 continue;
             }
             if (kind == "material") {
@@ -1315,6 +2049,25 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     if (colon == std::string::npos) continue;
                     const std::string key = extra.substr(0, colon);
                     const std::string val = extra.substr(colon + 1);
+                    if (key == "arc") {
+                        float a[4] = {c.polar_min, c.polar_max, c.azimuth_min, c.azimuth_max};
+                        std::size_t at = 0;
+                        for (int k = 0; k < 4 && at <= val.size(); ++k) {
+                            const std::size_t comma = val.find(',', at);
+                            a[k] = static_cast<float>(std::atof(val.substr(at, comma == std::string::npos ? std::string::npos : comma - at).c_str()));
+                            if (comma == std::string::npos) break;
+                            at = comma + 1;
+                        }
+                        c.polar_min = a[0];
+                        c.polar_max = a[1];
+                        c.azimuth_min = a[2];
+                        c.azimuth_max = a[3];
+                        continue;
+                    }
+                    if (key == "shell") {
+                        c.shell = std::max(0.0f, static_cast<float>(std::atof(val.c_str())));
+                        continue;
+                    }
                     if (key == "rounding") {
                         c.rounding = std::max(0.0f, static_cast<float>(std::atof(val.c_str())));
                         continue;

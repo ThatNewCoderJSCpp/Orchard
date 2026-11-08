@@ -3,10 +3,14 @@
 
 #include <orchard/scene.hpp>
 #include <orchard/viewport.hpp>
+#include <xylem/xylem.hpp>
+
+#include "particle_view.hpp"
 
 #include <grove/canvas.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -15,6 +19,7 @@ namespace lighting {
 class Scene;
 struct LightingSettings;
 struct Camera;
+class Texture;
 } // namespace lighting
 } // namespace fizmo
 
@@ -33,6 +38,12 @@ struct GpuViewOptions {
     int hot_axis = -1;
     bool icons = true;
     bool orientation_gizmo = true;
+    bool scene_lights = true;
+    bool materials = true;
+    bool particles = true;
+    bool particles_running = false;
+    int particle_budget = 60000;
+    int particle_quality = 1;
 };
 
 struct GpuViewStats {
@@ -61,6 +72,11 @@ public:
     std::string trace_error() const;
     void stop_tracing();
     void set_options(const GpuViewOptions& options) { m_options = options; }
+    void set_lights(const fizmo::lighting::Scene* lights);
+    void set_fluids(const std::vector<xylem::FluidDraw>* fluids);
+    void set_texture_folder(const std::string& folder);
+    std::function<std::shared_ptr<const fizmo::lighting::Texture>(const std::string& path, bool color)> lighting_textures();
+    ParticleView& particles() noexcept { return m_particles; }
     const GpuViewOptions& options() const noexcept { return m_options; }
     const GpuViewStats& stats() const noexcept { return m_stats; }
 
@@ -71,6 +87,7 @@ private:
     GpuViewStats m_stats;
     struct Meshes;
     std::unique_ptr<Meshes> m_meshes;
+    ParticleView m_particles;
 };
 
 } // namespace editor

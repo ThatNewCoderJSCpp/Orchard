@@ -72,6 +72,17 @@ jdouble JNICALL n_time(JNIEnv*, jclass) { return host().time(); }
 jboolean JNICALL n_is2d(JNIEnv*, jclass) { return host().is_2d() ? JNI_TRUE : JNI_FALSE; }
 jlong JNICALL n_find(JNIEnv* env, jclass, jstring name) { return static_cast<jlong>(host().find(utf(env, name).c_str())); }
 jlong JNICALL n_spawn(JNIEnv* env, jclass, jstring name, jlong parent) { return static_cast<jlong>(host().spawn(utf(env, name).c_str(), static_cast<orchard_entity>(parent))); }
+jlong JNICALL n_instantiate(JNIEnv* env, jclass, jstring path, jdouble x, jdouble y, jdouble z, jlong parent) {
+    if (!ORCHARD_HOST_HAS(&host(), instantiate)) return 0;
+    return static_cast<jlong>(host().instantiate(utf(env, path).c_str(), x, y, z, static_cast<orchard_entity>(parent)));
+}
+void JNICALL n_particles(JNIEnv*, jclass, jlong e, jint action, jint count) {
+    if (ORCHARD_HOST_HAS(&host(), particles)) host().particles(static_cast<orchard_entity>(e), action, count);
+}
+jint JNICALL n_fluid(JNIEnv*, jclass, jint brush, jdouble x, jdouble y, jdouble radius, jdouble vx, jdouble vy, jint material) {
+    if (!ORCHARD_HOST_HAS(&host(), fluid_brush)) return 0;
+    return host().fluid_brush(brush, x, y, 0.0, radius, vx, vy, 0.0, material);
+}
 jboolean JNICALL n_exists(JNIEnv*, jclass, jlong e) { return host().exists(static_cast<orchard_entity>(e)) ? JNI_TRUE : JNI_FALSE; }
 void JNICALL n_destroy(JNIEnv*, jclass, jlong e) { host().destroy(static_cast<orchard_entity>(e)); }
 jstring JNICALL n_name(JNIEnv* env, jclass, jlong e) {
@@ -193,6 +204,9 @@ JNIEnv* start_jvm(const ScriptToolchain& tools, const std::string& api_dir, std:
         {const_cast<char*>("is2d"), const_cast<char*>("()Z"), reinterpret_cast<void*>(&n_is2d)},
         {const_cast<char*>("find"), const_cast<char*>("(Ljava/lang/String;)J"), reinterpret_cast<void*>(&n_find)},
         {const_cast<char*>("spawn"), const_cast<char*>("(Ljava/lang/String;J)J"), reinterpret_cast<void*>(&n_spawn)},
+        {const_cast<char*>("instantiate"), const_cast<char*>("(Ljava/lang/String;DDDJ)J"), reinterpret_cast<void*>(&n_instantiate)},
+        {const_cast<char*>("particles"), const_cast<char*>("(JII)V"), reinterpret_cast<void*>(&n_particles)},
+        {const_cast<char*>("fluid"), const_cast<char*>("(IDDDDDI)I"), reinterpret_cast<void*>(&n_fluid)},
         {const_cast<char*>("exists"), const_cast<char*>("(J)Z"), reinterpret_cast<void*>(&n_exists)},
         {const_cast<char*>("destroy"), const_cast<char*>("(J)V"), reinterpret_cast<void*>(&n_destroy)},
         {const_cast<char*>("name"), const_cast<char*>("(J)Ljava/lang/String;"), reinterpret_cast<void*>(&n_name)},

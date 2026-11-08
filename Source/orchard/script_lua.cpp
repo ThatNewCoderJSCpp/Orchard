@@ -352,6 +352,41 @@ int o_spawn(lua_State* L) {
     return 1;
 }
 
+int o_instantiate(lua_State* L) {
+    const orchard_host_api& h = host();
+    if (!ORCHARD_HOST_HAS(&h, instantiate)) return 0;
+    push_entity(L, h.instantiate(luaL_checkstring(L, 1), luaL_optnumber(L, 2, 0.0), luaL_optnumber(L, 3, 0.0), luaL_optnumber(L, 4, 0.0), opt_entity(L, 5)));
+    return 1;
+}
+
+int o_particles(lua_State* L) {
+    const orchard_host_api& h = host();
+    if (!ORCHARD_HOST_HAS(&h, particles)) return 0;
+    const orchard_entity e = check_entity(L, 1);
+    const std::string what = luaL_optstring(L, 2, "play");
+    int action = ORCHARD_PARTICLES_PLAY;
+    if (what == "stop") action = ORCHARD_PARTICLES_STOP;
+    else if (what == "burst") action = ORCHARD_PARTICLES_BURST;
+    else if (what == "clear") action = ORCHARD_PARTICLES_CLEAR;
+    h.particles(e, action, static_cast<int>(luaL_optinteger(L, 3, 0)));
+    return 0;
+}
+
+int o_fluid(lua_State* L) {
+    const orchard_host_api& h = host();
+    if (!ORCHARD_HOST_HAS(&h, fluid_brush)) return 0;
+    const std::string what = luaL_checkstring(L, 1);
+    int brush = ORCHARD_FLUID_POUR;
+    if (what == "erase") brush = ORCHARD_FLUID_ERASE;
+    else if (what == "push") brush = ORCHARD_FLUID_PUSH;
+    else if (what == "splash" || what == "explode") brush = ORCHARD_FLUID_EXPLODE;
+    else if (what == "sand" || what == "paint") brush = ORCHARD_FLUID_SAND;
+    else if (what == "wall") brush = ORCHARD_FLUID_WALL;
+    else if (what == "heat") brush = ORCHARD_FLUID_HEAT;
+    lua_pushinteger(L, h.fluid_brush(brush, luaL_checknumber(L, 2), luaL_checknumber(L, 3), 0.0, luaL_optnumber(L, 4, 0.5), luaL_optnumber(L, 5, 0.0), luaL_optnumber(L, 6, 0.0), 0.0, static_cast<int>(luaL_optinteger(L, 7, 0))));
+    return 1;
+}
+
 int o_self(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "orchard.self");
     return 1;
@@ -393,7 +428,7 @@ void open_orchard(lua_State* L) {
     static const luaL_Reg api[] = {
         {"vec", o_vec}, {"log", o_log}, {"warn", o_warn}, {"time", o_time}, {"dt", o_dt}, {"is_2d", o_is_2d},
         {"key_down", o_key_down}, {"find", o_find}, {"spawn", o_spawn}, {"self", o_self},
-        {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {nullptr, nullptr}};
+        {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {"instantiate", o_instantiate}, {"particles", o_particles}, {"fluid", o_fluid}, {nullptr, nullptr}};
     luaL_newlib(L, api);
     lua_setglobal(L, "orchard");
     lua_pushcfunction(L, o_log);

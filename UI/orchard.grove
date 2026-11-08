@@ -94,6 +94,9 @@
                         <input_bool id="details-open" switch checked>Show details</input_bool>
                         <input_bool id="view-cull" switch checked>Hide what the camera can't see</input_bool>
                         <input_bool id="view-shadows" switch checked>Shadows (real near, soft blobs far)</input_bool>
+                        <input_bool id="view-lights" switch checked>Show the scene's lights in the editor view</input_bool>
+                        <input_bool id="view-materials" switch checked>Show materials (colors, glass, mirrors)</input_bool>
+                        <input_bool id="view-particles" switch checked>Show particles</input_bool>
                     </column>
                     <row class="side-head">
                         <input_select id="add-kind" value="box" class="grow">
@@ -103,6 +106,12 @@
                             <option value="ground">Ground</option>
                             <option value="trigger">Trigger zone</option>
                             <option value="light">Light</option>
+                            <option value="water">Water</option>
+                            <option value="pool">Pool (walls and water)</option>
+                            <option value="hemisphere">Hemisphere</option>
+                            <option value="sparks">Sparks</option>
+                            <option value="smoke">Smoke</option>
+                            <option value="fire">Fire</option>
                         </input_select>
                         <button id="add-entity" class="small">+ Add</button>
                     </row>
@@ -110,6 +119,13 @@
                 </column>
 
                 <column class="center">
+                    <row id="template-bar" class="template-bar hidden">
+                        <text class="template-icon">&#9670;</text>
+                        <text id="template-name" class="template-name">Editing an entity template</text>
+                        <text class="muted grow">Every copy in the scene updates when you save. Play tests it on its own.</text>
+                        <button id="template-discard" class="small ghost">Discard changes</button>
+                        <button id="template-done" class="small primary">Save and go back</button>
+                    </row>
                     <row class="viewbar">
                         <button id="tool-select" class="seg tool on" title="Click something to select it and see its details. Drag empty space to orbit.">&#10148; Select</button>
                         <button id="tool-move" class="seg tool" title="Drag something to slide it along the ground. Drag one of its arrows to move along that axis. Shift-drag moves it up and down. (G)">&#10021; Move</button>
@@ -189,6 +205,7 @@
                                     <option value="cylinder">Cylinder</option>
                                     <option value="cone">Cone</option>
                                     <option value="rounded-box">Rounded box</option>
+                                    <option value="hemisphere">Hemisphere / dome / bowl</option>
                                 </input_select>
                                 <button id="add-collider" class="small">+ Collider</button>
                             </row>
@@ -213,12 +230,24 @@
             <column class="bottom">
                 <row class="tabs">
                     <button class="tab" to="files-page">Files</button>
+                    <button class="tab" to="entities-page">Entities</button>
                     <button class="tab" to="code-page">Script</button>
                     <button class="tab" to="console-page">Console</button>
                     <div id="code-title" class="muted code-title">Pick a script or graph in Files. Graphs show the Walnut they turn into.</div>
                 </row>
                 <page id="files-page" current>
                     <column id="files" class="scroll files"></column>
+                </page>
+                <page id="entities-page">
+                    <column class="entities-page">
+                        <row class="entities-head">
+                            <input_string id="template-new-name" class="grow" placeholder="Name for a new entity" />
+                            <button id="template-new" class="small">+ New entity</button>
+                            <button id="template-from" class="small ghost" title="Turn the selected entity and its children into a reusable entity">From selected</button>
+                        </row>
+                        <div class="muted entities-help">Build an entity once (colliders, materials, textures, particles, scripts), then drop copies into the scene. Scripts are shared files, so many entities can use the same one. Scripts can spawn them with instantiate("Name", x, y, z).</div>
+                        <column id="templates" class="scroll files"></column>
+                    </column>
                 </page>
                 <page id="code-page">
                     <input_code id="code" language="walnut" class="code" readonly></input_code>

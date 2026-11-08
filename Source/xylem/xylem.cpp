@@ -66,6 +66,30 @@ orchard::Quat about_z(float radians) {
     return {0.0f, 0.0f, std::sin(radians * 0.5f), std::cos(radians * 0.5f)};
 }
 
+fp::FluidLevel to_fizmo(orchard::FluidLevel level) {
+    switch (level) {
+    case orchard::FluidLevel::blocky: return fp::FluidLevel::blocky;
+    case orchard::FluidLevel::still: return fp::FluidLevel::still;
+    case orchard::FluidLevel::flowing: return fp::FluidLevel::flowing;
+    case orchard::FluidLevel::realistic: return fp::FluidLevel::realistic;
+    case orchard::FluidLevel::waves:
+    case orchard::FluidLevel::project_default: break;
+    }
+    return fp::FluidLevel::waves;
+}
+
+fp::SphereSection3D section_of(const orchard::Collider& c, Real diameter) {
+    fp::SphereSection3D s;
+    s.radius = std::max(0.0005_r, diameter * 0.5_r);
+    s.polar_min = std::clamp(static_cast<Real>(c.polar_min), 0.0_r, 180.0_r);
+    s.polar_max = std::clamp(static_cast<Real>(c.polar_max), s.polar_min, 180.0_r);
+    s.azimuth_min = static_cast<Real>(c.azimuth_min);
+    s.azimuth_max = std::max(static_cast<Real>(c.azimuth_max), s.azimuth_min);
+    if (s.azimuth_max - s.azimuth_min > 360.0_r) s.azimuth_max = s.azimuth_min + 360.0_r;
+    s.inner_radius = c.shell > 0.0f ? std::max(0.0_r, s.radius - static_cast<Real>(c.shell)) : 0.0_r;
+    return s;
+}
+
 fp::BodyQuality to_fizmo(orchard::BodyQuality q) {
     switch (q) {
     case orchard::BodyQuality::project_default: return fp::BodyQuality::Default;
@@ -271,6 +295,12 @@ struct World::Impl {
     std::vector<Contact> contacts;
     std::size_t colliders = 0;
     Real accumulator = 0.0_r;
+    std::unique_ptr<fp::FluidWorld3D> fluids;
+    std::vector<std::pair<orchard::Entity, fp::FluidVolume3D*>> volumes;
+    std::vector<orchard::Fluid> volume_looks;
+    std::unique_ptr<fp::FluidWorld2D> fluids2;
+    std::vector<std::pair<orchard::Entity, fp::FluidVolume2D*>> volumes2;
+    mutable std::vector<fp::FluidRenderer2D> painters2;
 
     static std::pair<std::uint64_t, std::uint64_t> key(orchard::Entity a, orchard::Entity b) {
         const std::uint64_t x = a.id(), y = b.id();
@@ -402,6 +432,7 @@ struct World::Impl {
             if (dimension == orchard::Dimension::two_d) add_2d(e, *b, parts);
             else add_3d(e, *b, parts);
         }
+        build_fluids(s);
     }
 
     void add_2d(orchard::Entity e, const orchard::Body& b, const std::vector<Part>& parts) {
@@ -443,6 +474,7 @@ struct World::Impl {
         for (const Part& p : parts) {
             const orchard::Collider& c = p.collider;
             fp::Shape3D shape;
+            std::vector<fp::Shape3D> extra;
             const Real sx = std::max(0.001_r, static_cast<Real>(c.size.x * p.scale.x));
             const Real sy = std::max(0.001_r, static_cast<Real>(c.size.y * p.scale.y));
             const Real sz = std::max(0.001_r, static_cast<Real>(c.size.z * p.scale.z));
@@ -459,6 +491,20 @@ struct World::Impl {
             } else if (c.shape == orchard::ColliderShape::rounded_box) {
                 const Real r = std::clamp(static_cast<Real>(c.rounding), 0.0_r, std::min({sx, sy, sz}) * 0.5_r - 0.0005_r);
                 shape = fp::Shape3D::make_rounded_box(sx * 0.5_r, sy * 0.5_r, sz * 0.5_r, r);
+            } else if (c.shape == orchard::ColliderShape::sphere_section) {
+                const fp::SphereSection3D section = section_of(c, std::max({sx, sy, sz}));
+                if (section.is_convex() || section.is_full_sphere()) {
+                    shape = fp::Shape3D::make_sphere_section(section);
+                } else {
+                    std::vector<fp::Shape3D> pieces = fp::Shape3D::make_sphere_section_parts(section);
+                    if (!pieces.empty()) {
+                        shape = pieces.back();
+                        pieces.pop_back();
+                        for (const fp::Shape3D& piece : pieces) extra.push_back(piece);
+                    } else {
+                        shape = fp::Shape3D::make_sphere(RVec3{0.0_r, 0.0_r, 0.0_r}, std::max({sx, sy, sz}) * 0.5_r);
+                    }
+                }
             } else {
                 shape = fp::Shape3D::make_box(sx * 0.5_r, sy * 0.5_r, sz * 0.5_r);
             }
@@ -472,6 +518,10 @@ struct World::Impl {
             mat.anisotropic_z = std::max(0.0_r, static_cast<Real>(c.grip.z));
             body.add_collider(shape, mat, fp::Transform3D(v3(p.offset), to_fizmo(p.rotation)), fp::CollisionFilter{}, c.sensor);
             ++colliders;
+            for (const fp::Shape3D& piece : extra) {
+                body.add_collider(piece, mat, fp::Transform3D(v3(p.offset), to_fizmo(p.rotation)), fp::CollisionFilter{}, c.sensor);
+                ++colliders;
+            }
         }
         body.set_gravity_scale(b.gravity_scale);
         body.set_linear_damping(b.linear_damping);
@@ -530,6 +580,140 @@ struct World::Impl {
         }
     }
 
+    static fp::SandCell2D sand_cell_for(const orchard::Fluid& f) {
+        const std::string& p = f.preset;
+        if (p == "oil") return fp::SandCell2D::oil;
+        if (p == "lava") return fp::SandCell2D::lava;
+        if (p == "sand" || p == "mud") return fp::SandCell2D::sand;
+        if (p == "acid") return fp::SandCell2D::acid;
+        return fp::SandCell2D::water;
+    }
+
+    fp::FluidMaterial material_for(const orchard::Fluid& f) const {
+        fp::FluidMaterial mat = fp::FluidMaterial::water();
+        mat.preset = fp::FluidPreset::custom;
+        mat.density = std::max(1.0_r, static_cast<Real>(f.density));
+        mat.viscosity = std::max(0.0_r, static_cast<Real>(f.viscosity));
+        mat.surface_tension = std::max(0.0_r, static_cast<Real>(f.surface_tension));
+        mat.linear_drag = static_cast<Real>(f.drag);
+        mat.quadratic_drag = static_cast<Real>(f.quadratic_drag);
+        mat.angular_drag = static_cast<Real>(f.angular_drag);
+        mat.friction = static_cast<Real>(f.friction);
+        mat.restitution = static_cast<Real>(f.restitution);
+        mat.color = fp::FluidColor{f.color.x, f.color.y, f.color.z, f.opacity};
+        return mat;
+    }
+
+    void build_fluids_2d(const orchard::Scene& s) {
+        for (orchard::Entity e : s.entities()) {
+            const orchard::Fluid* f = s.fluid(e);
+            if (!f || !f->enabled) continue;
+            if (!fluids2) {
+                fp::FluidWorld2D::Config cfg;
+                cfg.gravity = sim2->config().gravity;
+                cfg.fixed_dt = static_cast<Real>(settings.fixed_dt);
+                cfg.default_level = to_fizmo(settings.physics.fluid_level);
+                cfg.quality = static_cast<fp::FluidQuality>(std::clamp(settings.physics.fluid_quality, 0, 3));
+                cfg.threads = std::max(1, settings.physics.threads);
+                fluids2 = std::make_unique<fp::FluidWorld2D>(cfg);
+                fluids2->set_quality(cfg.quality);
+                fluids2->set_threads(cfg.threads);
+            }
+            const orchard::Vec3 c = world_position(s, e);
+            const orchard::Vec3 sc = world_scale(s, e);
+            const Real hx = std::max(0.025_r, static_cast<Real>(std::fabs(f->size.x * sc.x)) * 0.5_r);
+            const Real hy = std::max(0.025_r, static_cast<Real>(std::fabs(f->size.y * sc.y)) * 0.5_r);
+            const fp::FluidLevel level = to_fizmo(fluid_level_for(*f, settings.physics.fluid_level));
+            const fp::AABB box(RVec2{static_cast<Real>(c.x) - hx, static_cast<Real>(c.y) - hy}, RVec2{static_cast<Real>(c.x) + hx, static_cast<Real>(c.y) + hy});
+            fp::FluidVolumeDef2D def = fp::FluidVolumeDef2D::box(level, box, material_for(*f), std::clamp(static_cast<Real>(f->fill), 0.0_r, 1.0_r));
+            def.current = RVec2{static_cast<Real>(f->current.x), static_cast<Real>(f->current.y)};
+            def.waves.swell_amplitude = static_cast<Real>(f->wave_height);
+            def.sand.fill_cell = sand_cell_for(*f);
+            def.flowing.keep_sources_full = f->infinite;
+            const int q = std::clamp(settings.physics.fluid_quality, 0, 3);
+            const Real longest = std::max(hx, hy) * 2.0_r;
+            const Real across[4] = {64.0_r, 128.0_r, 192.0_r, 320.0_r};
+            const Real sand_across[4] = {128.0_r, 256.0_r, 384.0_r, 512.0_r};
+            if (f->resolution > 0.0f) def.cell_size = static_cast<Real>(f->resolution);
+            else if (level == fp::FluidLevel::blocky) def.cell_size = std::max(0.01_r, longest / sand_across[q]);
+            else def.cell_size = std::max(0.01_r, longest / across[q]);
+            fp::FluidVolume2D& v = fluids2->add_volume(def);
+            if (level != fp::FluidLevel::still) v.voxelize(*sim2);
+            if (f->infinite && level == fp::FluidLevel::realistic) {
+                fp::FluidEmitter2D em;
+                em.position = RVec2{static_cast<Real>(c.x), static_cast<Real>(c.y) + hy * 0.8_r};
+                em.radius = std::max(def.cell_size * 2.0_r, hx * 0.1_r);
+                em.rate = 400.0_r;
+                v.add_emitter(em);
+            }
+            volumes2.emplace_back(e, &v);
+            volume_looks.push_back(*f);
+        }
+        painters2.assign(volumes2.size(), fp::FluidRenderer2D{});
+    }
+
+    void build_fluids(const orchard::Scene& s) {
+        fluids.reset();
+        volumes.clear();
+        volume_looks.clear();
+        fluids2.reset();
+        volumes2.clear();
+        painters2.clear();
+        if (sim2) {
+            build_fluids_2d(s);
+            return;
+        }
+        if (!sim3) return;
+        for (orchard::Entity e : s.entities()) {
+            const orchard::Fluid* f = s.fluid(e);
+            if (!f || !f->enabled) continue;
+            if (!fluids) {
+                fp::FluidWorld3D::Config cfg;
+                cfg.gravity = sim3->config().gravity;
+                cfg.fixed_dt = static_cast<Real>(settings.fixed_dt);
+                cfg.default_level = to_fizmo(settings.physics.fluid_level);
+                cfg.quality = static_cast<fp::FluidQuality>(std::clamp(settings.physics.fluid_quality, 0, 3));
+                cfg.threads = std::max(1, settings.physics.threads);
+                fluids = std::make_unique<fp::FluidWorld3D>(cfg);
+                fluids->set_quality(cfg.quality);
+            }
+            const orchard::Vec3 c = world_position(s, e);
+            const orchard::Vec3 sc = world_scale(s, e);
+            const orchard::Vec3 size{std::max(0.05f, std::fabs(f->size.x * sc.x)), std::max(0.05f, std::fabs(f->size.y * sc.y)), std::max(0.05f, std::fabs(f->size.z * sc.z))};
+            const RVec3 half{static_cast<Real>(size.x) * 0.5_r, static_cast<Real>(size.y) * 0.5_r, static_cast<Real>(size.z) * 0.5_r};
+            fp::FluidMaterial mat = fp::FluidMaterial::water();
+            mat.preset = fp::FluidPreset::custom;
+            mat.density = std::max(1.0_r, static_cast<Real>(f->density));
+            mat.viscosity = std::max(0.0_r, static_cast<Real>(f->viscosity));
+            mat.surface_tension = std::max(0.0_r, static_cast<Real>(f->surface_tension));
+            mat.linear_drag = static_cast<Real>(f->drag);
+            mat.quadratic_drag = static_cast<Real>(f->quadratic_drag);
+            mat.angular_drag = static_cast<Real>(f->angular_drag);
+            mat.friction = static_cast<Real>(f->friction);
+            mat.restitution = static_cast<Real>(f->restitution);
+            mat.color = fp::FluidColor{f->color.x, f->color.y, f->color.z, f->opacity};
+            const fp::FluidLevel level = to_fizmo(fluid_level_for(*f, settings.physics.fluid_level));
+            fp::FluidVolumeDef def = fp::FluidVolumeDef::box(level, fp::AABB3D(v3(c) - half, v3(c) + half), mat, std::clamp(static_cast<Real>(f->fill), 0.0_r, 1.0_r));
+            def.current = v3(f->current);
+            def.waves.swell_amplitude = static_cast<Real>(f->wave_height);
+            def.blocky.infinite_sources = f->infinite;
+            def.flowing.keep_sources_full = f->infinite;
+            const Real longest = std::max({half.x, half.y, half.z}) * 2.0_r;
+            if (f->resolution > 0.0f) {
+                def.cell_size = static_cast<Real>(f->resolution);
+                def.particles.radius = static_cast<Real>(f->resolution) * 0.5_r;
+            } else {
+                def.cell_size = std::clamp(longest / 40.0_r, 0.1_r, 1.0_r);
+                def.particles.radius = std::clamp(longest / 80.0_r, 0.04_r, 0.25_r);
+            }
+            if (level == fp::FluidLevel::blocky) def.cell_size = std::max(def.cell_size, 0.5_r);
+            fp::FluidVolume3D& v = fluids->add_volume(def);
+            if (level == fp::FluidLevel::blocky || level == fp::FluidLevel::flowing || level == fp::FluidLevel::waves) v.voxelize(*sim3);
+            volumes.emplace_back(e, &v);
+            volume_looks.push_back(*f);
+        }
+    }
+
     void prune() {
         if (!scene) return;
         if (sim2) {
@@ -558,7 +742,9 @@ struct World::Impl {
 
     void step_once() {
         prune();
+        if (sim2 && fluids2) fluids2->step(*sim2, static_cast<Real>(settings.fixed_dt));
         if (sim2) sim2->step(settings.fixed_dt);
+        if (sim3 && fluids) fluids->step(*sim3, static_cast<Real>(settings.fixed_dt));
         if (sim3) sim3->step(settings.fixed_dt);
         refresh_contacts();
     }
@@ -582,9 +768,224 @@ void World::clear() {
     m->touching.clear();
     m->contacts.clear();
     m->sim2.reset();
+    m->fluids.reset();
+    m->volumes.clear();
+    m->fluids2.reset();
+    m->volumes2.clear();
+    m->painters2.clear();
+    m->volume_looks.clear();
     m->sim3.reset();
     m->scene = nullptr;
     m->colliders = 0;
+}
+
+std::size_t World::fluid_count() const {
+    return m->volumes.size() + m->volumes2.size();
+}
+
+void World::fluid_draws(std::vector<FluidDraw>& out) const {
+    out.clear();
+    for (std::size_t n = 0; n < m->volumes2.size(); ++n) {
+        const fp::FluidVolume2D& v = *m->volumes2[n].second;
+        const orchard::Fluid& look = m->volume_looks[n];
+        FluidDraw d;
+        d.entity = m->volumes2[n].first;
+        d.flat = true;
+        d.color = look.color;
+        d.opacity = look.opacity;
+        const fp::AABB b = v.bounds();
+        d.image_min = orchard::Vec3{static_cast<float>(b.min.x), static_cast<float>(b.min.y), 0.0f};
+        d.image_max = orchard::Vec3{static_cast<float>(b.max.x), static_cast<float>(b.max.y), 0.0f};
+        d.origin = d.image_min;
+        d.size = d.image_max - d.image_min;
+        d.cell = static_cast<float>(v.cell_size());
+        switch (v.level()) {
+        case fp::FluidLevel::still: d.level = orchard::FluidLevel::still; break;
+        case fp::FluidLevel::blocky: d.level = orchard::FluidLevel::blocky; break;
+        case fp::FluidLevel::flowing: d.level = orchard::FluidLevel::flowing; break;
+        case fp::FluidLevel::waves: d.level = orchard::FluidLevel::waves; break;
+        case fp::FluidLevel::realistic: d.level = orchard::FluidLevel::realistic; break;
+        }
+        d.level_height = v.level() == fp::FluidLevel::still ? static_cast<float>(v.still_level()) : d.size.y * std::clamp(look.fill, 0.0f, 1.0f);
+        if (v.level() != fp::FluidLevel::still && n < m->painters2.size()) {
+            fp::FluidImageSettings2D is;
+            const Real w = std::max(1e-3_r, b.max.x - b.min.x), h = std::max(1e-3_r, b.max.y - b.min.y);
+            if (v.level() == fp::FluidLevel::blocky) {
+                is.width = std::max(1, v.cells_x());
+                is.height = std::max(1, v.cells_y());
+            } else {
+                is.width = std::clamp(static_cast<int>(std::ceil(w / std::max(1e-4_r, v.cell_size()) * 2.0_r)), 32, 640);
+                is.height = std::clamp(static_cast<int>(std::ceil(static_cast<Real>(is.width) * h / w)), 16, 640);
+            }
+            is.region = b;
+            is.flip_y = true;
+            is.opacity = static_cast<Real>(std::clamp(look.opacity, 0.05f, 1.0f));
+            const std::vector<std::uint8_t>& rgba = m->painters2[n].render(v, is);
+            d.image_width = m->painters2[n].width();
+            d.image_height = m->painters2[n].height();
+            d.image = rgba;
+        }
+        out.push_back(std::move(d));
+    }
+    for (std::size_t n = 0; n < m->volumes.size(); ++n) {
+        const fp::FluidVolume3D& v = *m->volumes[n].second;
+        const orchard::Fluid& look = m->volume_looks[n];
+        FluidDraw d;
+        d.entity = m->volumes[n].first;
+        d.color = look.color;
+        d.opacity = look.opacity;
+        d.origin = ov(v.origin());
+        d.axis_u = ov(v.world_dir(RVec3{1.0_r, 0.0_r, 0.0_r}));
+        d.axis_up = ov(v.up());
+        d.axis_w = ov(v.world_dir(RVec3{0.0_r, 0.0_r, 1.0_r}));
+        d.size = ov(v.size());
+        switch (v.level()) {
+        case fp::FluidLevel::still:
+            d.level = orchard::FluidLevel::still;
+            d.level_height = static_cast<float>(v.still_level());
+            break;
+        case fp::FluidLevel::blocky:
+        case fp::FluidLevel::flowing: {
+            d.level = v.level() == fp::FluidLevel::blocky ? orchard::FluidLevel::blocky : orchard::FluidLevel::flowing;
+            d.cell = static_cast<float>(v.cell_size());
+            d.nx = v.cells_x();
+            d.ny = v.cells_y();
+            d.nz = v.cells_z();
+            const std::vector<Real>& fill = v.cell_fill();
+            d.values.reserve(fill.size());
+            for (Real x : fill) d.values.push_back(static_cast<float>(x));
+            break;
+        }
+        case fp::FluidLevel::waves: {
+            d.level = orchard::FluidLevel::waves;
+            d.cell = static_cast<float>(v.column_size());
+            d.nx = v.columns_x();
+            d.nz = v.columns_z();
+            const std::vector<Real>& h = v.heights();
+            const std::vector<Real>& depth = v.depths();
+            d.values.reserve(h.size() * 2);
+            for (Real x : h) d.values.push_back(static_cast<float>(x));
+            for (Real x : depth) d.values.push_back(static_cast<float>(x));
+            break;
+        }
+        case fp::FluidLevel::realistic: {
+            d.level = orchard::FluidLevel::realistic;
+            d.radius = static_cast<float>(v.particle_radius());
+            const std::vector<RVec3>& p = v.positions();
+            d.particles.reserve(p.size());
+            for (const RVec3& x : p) d.particles.push_back(ov(x));
+            break;
+        }
+        }
+        out.push_back(std::move(d));
+    }
+}
+
+float World::fluid_surface(orchard::Vec3 point) const {
+    if (m->fluids2) return static_cast<float>(m->fluids2->surface_height(RVec2{static_cast<Real>(point.x), static_cast<Real>(point.y)}));
+    return m->fluids ? static_cast<float>(m->fluids->surface_height(v3(point))) : -1e30f;
+}
+
+float World::fluid_depth(orchard::Vec3 point) const {
+    if (m->fluids2) return static_cast<float>(m->fluids2->depth_at(RVec2{static_cast<Real>(point.x), static_cast<Real>(point.y)}));
+    return m->fluids ? static_cast<float>(m->fluids->depth_at(v3(point))) : 0.0f;
+}
+
+orchard::Vec3 World::fluid_velocity(orchard::Vec3 point) const {
+    if (m->fluids2) {
+        const RVec2 v = m->fluids2->velocity_at(RVec2{static_cast<Real>(point.x), static_cast<Real>(point.y)});
+        return orchard::Vec3{static_cast<float>(v.x), static_cast<float>(v.y), 0.0f};
+    }
+    return m->fluids ? ov(m->fluids->velocity_at(v3(point))) : orchard::Vec3{};
+}
+
+std::size_t World::fluid_brush(int brush, orchard::Vec3 point, float radius, orchard::Vec3 velocity, int material) {
+    return fluid_brush(static_cast<FluidBrush>(std::clamp(brush, 0, 6)), point, radius, velocity, material);
+}
+
+std::size_t World::fluid_brush(FluidBrush brush, orchard::Vec3 point, float radius, orchard::Vec3 velocity, int material) {
+    if (!m->fluids2) return 0;
+    const RVec2 p{static_cast<Real>(point.x), static_cast<Real>(point.y)};
+    const RVec2 vel{static_cast<Real>(velocity.x), static_cast<Real>(velocity.y)};
+    const Real r = std::max(0.001_r, static_cast<Real>(radius));
+    if (brush == FluidBrush::explode) {
+        if (m->sim2) m->fluids2->explode(*m->sim2, p, r, std::max(0.0_r, static_cast<Real>(length(velocity))) + 1.0_r);
+        return 1;
+    }
+    if (brush == FluidBrush::push) {
+        m->fluids2->push(p, r, vel);
+        return 1;
+    }
+    std::size_t changed = 0;
+    for (auto& pair : m->volumes2) {
+        fp::FluidVolume2D& v = *pair.second;
+        const fp::AABB b = v.bounds();
+        if (p.x + r < b.min.x || p.x - r > b.max.x || p.y + r < b.min.y || p.y - r > b.max.y) continue;
+        switch (brush) {
+        case FluidBrush::pour:
+            if (v.level() == fp::FluidLevel::realistic) changed += v.add_fluid_circle(p, r, vel);
+            else if (v.level() == fp::FluidLevel::blocky) changed += v.paint_cells(p, r, v.def().sand.fill_cell, 1.0_r, false);
+            else if (v.level() == fp::FluidLevel::flowing) {
+                v.fill_box(fp::AABB(p - RVec2{r, r}, p + RVec2{r, r}), 1.0_r);
+                ++changed;
+            } else if (v.level() == fp::FluidLevel::waves) {
+                v.disturb(p, r, r);
+                ++changed;
+            }
+            break;
+        case FluidBrush::erase:
+            if (v.level() == fp::FluidLevel::realistic) changed += v.remove_fluid_circle(p, r);
+            else if (v.level() == fp::FluidLevel::blocky) changed += v.erase_cells(p, r);
+            else if (v.level() == fp::FluidLevel::flowing) {
+                v.fill_box(fp::AABB(p - RVec2{r, r}, p + RVec2{r, r}), 0.0_r);
+                ++changed;
+            }
+            break;
+        case FluidBrush::sand:
+            if (v.level() == fp::FluidLevel::blocky) changed += v.paint_cells(p, r, static_cast<fp::SandCell2D>(std::clamp(material, 0, 12)), 1.0_r, true);
+            break;
+        case FluidBrush::wall:
+            v.paint_solid(p, r, material >= 0);
+            ++changed;
+            break;
+        case FluidBrush::heat:
+            if (v.level() == fp::FluidLevel::blocky) {
+                v.add_heat(p, r, static_cast<Real>(velocity.x == 0.0f ? 400.0f : velocity.x));
+                ++changed;
+            }
+            break;
+        default:
+            break;
+        }
+        v.wake();
+    }
+    return changed;
+}
+
+orchard::FluidLevel fluid_level_for(const orchard::Fluid& f, orchard::FluidLevel project_level) {
+    if (f.level != orchard::FluidLevel::project_default) return f.level;
+    return project_level == orchard::FluidLevel::project_default ? orchard::FluidLevel::waves : project_level;
+}
+
+void preview_fluids(const orchard::Scene& scene, orchard::FluidLevel project_level, std::vector<FluidDraw>& out) {
+    out.clear();
+    for (orchard::Entity e : scene.entities()) {
+        const orchard::Fluid* f = scene.fluid(e);
+        if (!f || !f->enabled) continue;
+        const orchard::Vec3 c = world_position(scene, e);
+        const orchard::Vec3 sc = world_scale(scene, e);
+        FluidDraw d;
+        d.entity = e;
+        d.level = orchard::FluidLevel::still;
+        d.color = f->color;
+        d.opacity = f->opacity;
+        d.size = {std::fabs(f->size.x * sc.x), std::fabs(f->size.y * sc.y), std::fabs(f->size.z * sc.z)};
+        d.level = fluid_level_for(*f, project_level);
+        d.cell = -1.0f;
+        d.origin = c - d.size * 0.5f;
+        d.level_height = d.size.y * std::clamp(f->fill, 0.0f, 1.0f);
+        out.push_back(std::move(d));
+    }
 }
 
 int World::step(float dt) {
@@ -699,6 +1100,23 @@ void World::torque(orchard::Entity e, orchard::Vec3 v) {
 
 void World::moved(orchard::Entity e) {
     m->place(e);
+}
+
+void World::added(orchard::Entity e) {
+    if (!m->scene || !m->scene->alive(e)) return;
+    const orchard::Scene& s = *m->scene;
+    for (orchard::Entity at : s.subtree(e)) {
+        const orchard::Body* b = s.body(at);
+        if (!b) continue;
+        if (m->bodies2.count(at.id()) || m->bodies3.count(at.id())) continue;
+        const std::vector<Part> parts = parts_of(s, at);
+        if (parts.empty()) continue;
+        if (m->dimension == orchard::Dimension::two_d) {
+            if (m->sim2) m->add_2d(at, *b, parts);
+        } else if (m->sim3) {
+            m->add_3d(at, *b, parts);
+        }
+    }
 }
 
 orchard::Entity World::raycast(orchard::Vec3 origin, orchard::Vec3 direction, float max_distance, orchard::Vec3* point, orchard::Vec3* normal, float* distance) const {

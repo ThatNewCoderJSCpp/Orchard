@@ -148,7 +148,7 @@ function on_tick(self, dt)
 end
 ```
 
-C# and Java scripts subclass `Script` (the class named like the file is used); C, C++, Lua and Walnut use `on_start(self)`, `on_tick(self, dt)` and `on_stop(self)`, and any of them can leave out their parameters. The APIs have the same pieces with each language's usual names: position, rotation (degrees), scale, velocity, spin, world position, translate, rotate, impulse/force/torque, `has_body`, `touching`, collision layers (`set_layers`), ray casts and sphere overlaps, name, parent, destroy, find, spawn, log, warn, time, dt, `is_2d` and `key_down`.
+C# and Java scripts subclass `Script` (the class named like the file is used); C, C++, Lua and Walnut use `on_start(self)`, `on_tick(self, dt)` and `on_stop(self)`, and any of them can leave out their parameters. The APIs have the same pieces with each language's usual names: position, rotation (degrees), scale, velocity, spin, world position, translate, rotate, impulse/force/torque, `has_body`, `touching`, collision layers (`set_layers`), ray casts and sphere overlaps, name, parent, destroy, find, spawn, `instantiate` (spawn a copy of an entity template), particle control (`play_particles`, `stop_particles`, `burst_particles`, `clear_particles`), log, warn, time, dt, `is_2d` and `key_down`.
 
 Other languages can be added from C++ with `ScriptRuntime::add_language`: a `ScriptLanguage` says which extensions it handles, how to build a file and how to load the result as a `ScriptModule` with `hooks()` and `call()`. The built-in ones are written that way.
 
@@ -183,7 +183,7 @@ Each function can also leave out its parameters (`function on_tick() -> void`). 
   - `orchard::raycast(ox, oy, oz, dx, dy, dz, max_distance)` gives a `RayHit` with `entity`, `x`/`y`/`z`, the normal `nx`/`ny`/`nz`, `distance` and `hit()`.
   - `orchard::overlap_count(x, y, z, radius)` and `orchard::overlap_at(i)` list what touches a sphere.
   - In other languages: `orchard_raycast` / `orchard_overlap_sphere` / `orchard_set_layers` (C), `World::raycast` / `World::overlap_sphere` (C++), and `orchard.raycast(origin, dir, max)` / `orchard.overlap_sphere(center, r)` (Lua).
-- `orchard::current()`, `orchard::find(name)`, `orchard::spawn(name)`, `orchard::spawn_child(name, parent)`, `orchard::log`, `orchard::warn`, `orchard::dt()`, `orchard::time()`, `orchard::is_2d()` and `orchard::key_down(key)` (key names as Grove gives them: `A`, `Space`, `UpArrow`...).
+- `orchard::current()`, `orchard::find(name)`, `orchard::spawn(name)`, `orchard::spawn_child(name, parent)`, `orchard::instantiate(template, x, y, z)`, `orchard::instantiate_child(template, x, y, z, parent)`, `orchard::burst_particles(e, count)` and friends, `orchard::log`, `orchard::warn`, `orchard::dt()`, `orchard::time()`, `orchard::is_2d()` and `orchard::key_down(key)` (key names as Grove gives them: `A`, `Space`, `UpArrow`...).
 
 ## Physics
 
@@ -194,6 +194,36 @@ Every other Fizmo body flag is under **All fizmo flags** in the inspector, group
 Layers are the first thing checked for every pair the broadphase finds, before any collision work. A body on layer 0 isn't put in the broadphase at all. Two bodies collide only when each one's layer is in the other's mask.
 
 When two colliders touch, their friction and bounce are mixed into one value. The **Physics** button sets the project's mix for each (`friction-mix:` and `bounce-mix:` in `project.orchard`, geometric mean and maximum by default), and every collider can pick its own in the inspector: average (Unity's and Unreal's default), geometric mean (Box2D), harmonic mean, quadratic mean, minimum, multiply (Bullet), maximum or sum. When two colliders pick different mixes, the one further down that list wins, the same rule Unity, Unreal and PhysX use.
+
+A **sphere section** collider is a hemisphere, dome, wedge, bowl or shell: set the angles from the top (`polar` 0 to 180, so 0 to 90 is the top half) and around (`azimuth` 0 to 360), and a `shell` thickness to hollow it out. Convex pieces are one collider; a bowl or shell becomes a few convex parts. **Add a hemisphere** in the right-click menu makes one.
+
+### Entities (templates)
+
+The **Entities** tab beside Files and Script holds reusable entities: build something once (its colliders, rigid body, materials and textures, lights, particles, scripts and children), then drop copies of it into the scene. **+ New entity** opens an empty one; **From selected** turns what you've selected (and its children) into one, and the selection becomes its first copy. **Edit** opens it on its own in the main view with the usual outliner, inspector, collider editor and Move tool; **Play** there tests it alone. **Save and go back** writes it to `Entities/<name>.entity` and updates every copy in the scene; each copy keeps its own name and place. **Place** drops a copy where the view is looking. The right-click menu has **Make an entity template from this**, **Edit its entity template**, **Unlink from its template** (makes a copy plain again) and **Duplicate** (Ctrl+D).
+
+Scripts are files in `Scripts/`, so any number of entities, templates or not, can use the same script; each copy still gets its own script state. Scripts spawn copies while the game runs with `instantiate("Crate", x, y, z)` (Lua `orchard.instantiate`, Java `World.instantiate`, C# `World.Instantiate`); a bare name means `Entities/<name>.entity`. A spawned copy gets its physics body right away and its scripts start on the same frame.
+
+### Particles
+
+Any entity can have a **particle emitter**: sparks, smoke, fire, explosion, dust, rain, snow, magic, debris, bubbles, steam and embers are presets, and every setting can be changed: rate, bursts, lifetime, speed, direction and spread, the shape they come from (point, sphere, hemisphere, cone, box, circle, line), gravity (below 0 rises), drag, wind, swirl, size, colour and see-through over their life, glow, stretch along movement, additive or covering blend, lit or not, bouncing off things, a texture with flipbook frames, and a second emitter to start when one dies (fire that leaves smoke). Scripts start, stop and burst them.
+
+Particles don't drag the frame rate down. The project has a particle budget (`particle-budget:` in the `physics` block, 60,000 by default) and a quality (`particle-quality:`, 0 to 3). When too many would be alive, low-priority and far-away emitters spawn fewer instead of the frame slowing down, emitters off screen pause or update cheaply and catch up when you look, far ones update at half rate, and all of them update in one tight pass and draw in one batch each. Each emitter has a `priority` (0 to 3) and `max` count.
+
+### Fluids
+
+Any entity can have a **fluid**: a box of water (or oil, honey, lava, ...) of a `size`, filled to `fill` along up. Rigid bodies in it float by density and feel its drag, friction and bounce. Each fluid, or the whole project (`fluids:` in the `physics` block, and `fluid-quality:`), picks how real it is:
+
+| `level` | Like | What it does | Cost |
+|---|---|---|---|
+| `blocky` | Minecraft | blocks of water flow down and spread a few blocks | lowest |
+| `still` | Garry's Mod | a flat surface that only pushes and drags | almost nothing |
+| `flowing` | modded Minecraft | cells that fill smoothly, level out and pour off edges | low |
+| `waves` (default) | | a height field with waves, ripples from things that move through it, and currents | moderate |
+| `realistic` | | particles that spill over walls and splash | highest |
+
+In 2D the same levels run in the plane and are cheap enough to play with: `realistic` is a FLIP/APIC particle fluid (tens of thousands of particles; honey, oil and water move differently, oil floats on water, it splashes and pours over walls, and bodies float and push it around), and `blocky` becomes a falling-sand box (sand, water, oil, lava, steam, smoke, fire, ice, stone, wood and acid, with reactions: lava and water make stone and steam, fire burns wood and oil). Scripts can play with any 2D fluid while the game runs: `pour_fluid(x, y, radius)`, `erase_fluid`, `push_fluid(x, y, radius, vx, vy)`, `splash_fluid(x, y, radius, strength)` and `paint_sand(x, y, radius, cell)` (Lua: `orchard.fluid("pour", x, y, radius)`; the cell numbers are the `ORCHARD_SAND_*` constants: 2 sand, 3 water, 5 lava, 8 fire, 11 wood...).
+
+Each fluid has `density`, `viscosity`, `surface-tension`, `drag`, `quadratic-drag`, `angular-drag`, `friction`, `bounce`, `color`, `opacity`, a `current`, wind `wave-height`, a cell or particle `resolution` and `infinite` (refills itself). Presets: `water`, `sea-water`, `oil`, `honey`, `lava`, `mud`, `mercury`, `sand` and `acid`. **Add water** and **Add a pool** are in the right-click menu.
 
 Play builds a Xylem world from the scene with gravity pointing down the project's axes, steps it at 60 Hz, and puts the scene back the way it was when you press Stop. `orchard --simulate PROJECT [SECONDS]` does the same without a window and prints where everything ended up.
 
@@ -229,7 +259,11 @@ Any entity can have a **light** and a **material**.
 
 A light's `type` is `point`, `spot`, `directional` (sun, moon), `sphere`, `disk`, `rectangle` (windows, TVs, panels) or `tube` (fluorescent, neon, LED strips). It shines along the entity's forward axis; rectangles are `width` along the entity's right and `height` along its up, and tubes run along its right. Every light has a color and a `temperature` in kelvin, an `intensity` in `unitless`, `candela`, `lumens`, `lux`, `nits` or `watts`, a `range` and `falloff` (`physical`, `linear`, `smooth`, `constant`, `custom`), cone angles for spots, an `angular-diameter` for suns (bigger is softer shadows), shadows on or off with a strength, bias and sample count, `diffuse`, `specular`, `indirect` and `volumetric` multipliers, light `channels` (a light only lights materials that share a channel), an optional IES profile, and a `mobility`: `dynamic` (fully live), `stationary` (live light, baked bounces) or `baked`.
 
-A material is metal/roughness PBR with emission (glowing materials light the scene), transmission with an `ior` and an `abbe` number for how much it splits light into colors, thin windows, colored absorption for water and tinted glass, opacity, and whether it casts shadows, is static (for baking) or is visible. Presets: `matte`, `plastic`, `rubber`, `metal`, `gold`, `copper`, `chrome`, `mirror`, `glass`, `frosted-glass`, `flint-glass`, `crystal`, `diamond`, `water`, `ice`, `window` and `glow`. Entities without a material are drawn in a light grey plastic; their colliders are their shape, or a 1 m cube if they have none.
+A material is metal/roughness PBR with emission (glowing materials light the scene), transmission with an `ior` and an `abbe` number for how much it splits light into colors, thin windows, colored absorption for water and tinted glass, opacity, and whether it casts shadows, is static (for baking) or is visible. Presets: `matte`, `plastic`, `rubber`, `metal`, `gold`, `copper`, `chrome`, `mirror`, `glass`, `frosted-glass`, `flint-glass`, `crystal`, `diamond`, `water`, `ice`, `window` and `glow`. `reflectivity` goes from matte (0) to a mirror (1) and works in the viewport too (screen-space reflections plus the sky). Lights also have `spread`: `natural` (the default) falls off like real light, with a soft `spill` that wraps a little past the lit side, and `blob` is the old round pool of light that ends at its range.
+
+**Textures:** a material can have a colour texture (`base-map`), a normal map (`normal-map`, with `normal-strength`), a packed occlusion/roughness/metal map (`orm-map`) or separate `roughness-map` and `metallic-map`, a glow texture (`emission-map`) and an opacity texture (`opacity-map`). `alpha-cutoff` turns opacity into a cut-out (leaves, fences). `tiling-u`, `tiling-v`, `offset-u`, `offset-v` and `uv-rotation` (degrees) move the texture, `pixelated` turns off smoothing for pixel art, and `triplanar` projects the texture from the sides by world size (`triplanar-scale` metres per repeat) so stretched boxes don't smear it. Put images in the project's `Assets` or `Textures` folder; the inspector lists them, paths are stored relative to the project, and the viewport reloads an image when the file changes. PNG, JPEG, BMP, GIF, WebP, TGA, QOI, PNM, ICO, TIFF and SVG load. The GPU path tracer uses the colour texture only; the CPU path tracer uses all of them.
+
+Entities without a material are drawn in a light grey plastic; their colliders are their shape, or a 1 m cube if they have none.
 
 ### Strobing and light effects
 

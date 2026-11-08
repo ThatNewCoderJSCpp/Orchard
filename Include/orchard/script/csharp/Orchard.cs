@@ -110,6 +110,17 @@ namespace Orchard
         public static Entity Find(string name) => new Entity(Native.Find(name));
         public static Entity Spawn(string name) => new Entity(Native.Spawn(name, 0));
         public static Entity Spawn(string name, Entity parent) => new Entity(Native.Spawn(name, parent?.Id ?? 0));
+        public static Entity Instantiate(string entityTemplate, double x, double y, double z) => new Entity(Native.Instantiate(entityTemplate, x, y, z, 0));
+        public static Entity Instantiate(string entityTemplate, double x, double y, double z, Entity parent) => new Entity(Native.Instantiate(entityTemplate, x, y, z, parent?.Id ?? 0));
+        public static void PlayParticles(Entity e) => Native.Particles(e?.Id ?? 0, 1, 0);
+        public static void StopParticles(Entity e) => Native.Particles(e?.Id ?? 0, 0, 0);
+        public static void BurstParticles(Entity e, int count) => Native.Particles(e?.Id ?? 0, 2, count);
+        public static void ClearParticles(Entity e) => Native.Particles(e?.Id ?? 0, 3, 0);
+        public static int PourFluid(double x, double y, double radius) => Native.Fluid(0, x, y, radius, 0, 0, 0);
+        public static int EraseFluid(double x, double y, double radius) => Native.Fluid(1, x, y, radius, 0, 0, 0);
+        public static int PushFluid(double x, double y, double radius, double vx, double vy) => Native.Fluid(2, x, y, radius, vx, vy, 0);
+        public static int SplashFluid(double x, double y, double radius, double strength) => Native.Fluid(3, x, y, radius, strength, 0, 0);
+        public static int PaintSand(double x, double y, double radius, int cell) => Native.Fluid(4, x, y, radius, 0, 0, cell);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -133,6 +144,12 @@ namespace Orchard
         public delegate* unmanaged<ulong, int> has_body;
         public delegate* unmanaged<byte*, int> key_down;
         public delegate* unmanaged<ulong, ulong, int> touching;
+        public delegate* unmanaged<double, double, double, double, double, double, double, double*, ulong> raycast;
+        public delegate* unmanaged<double, double, double, double, ulong*, int, int> overlap_sphere;
+        public delegate* unmanaged<ulong, ulong, ulong, void> set_layers;
+        public delegate* unmanaged<byte*, double, double, double, ulong, ulong> instantiate;
+        public delegate* unmanaged<ulong, int, int, void> particles;
+        public delegate* unmanaged<int, double, double, double, double, double, double, double, int, int> fluid_brush;
     }
 
     internal static unsafe class Native
@@ -170,6 +187,26 @@ namespace Orchard
         public static ulong Spawn(string name, ulong parent)
         {
             fixed (byte* p = Utf8(name)) return Host->spawn(p, parent);
+        }
+
+        static bool Has(int offset, int bytes) => Host != null && (long)Host->size >= offset + bytes;
+
+        public static ulong Instantiate(string path, double x, double y, double z, ulong parent)
+        {
+            if (!Has((int)Marshal.OffsetOf<HostApi>("instantiate"), sizeof(nint)) || Host->instantiate == null) return 0;
+            fixed (byte* p = Utf8(path)) return Host->instantiate(p, x, y, z, parent);
+        }
+
+        public static void Particles(ulong e, int action, int count)
+        {
+            if (!Has((int)Marshal.OffsetOf<HostApi>("particles"), sizeof(nint)) || Host->particles == null) return;
+            Host->particles(e, action, count);
+        }
+
+        public static int Fluid(int brush, double x, double y, double radius, double vx, double vy, int material)
+        {
+            if (!Has((int)Marshal.OffsetOf<HostApi>("fluid_brush"), sizeof(nint)) || Host->fluid_brush == null) return 0;
+            return Host->fluid_brush(brush, x, y, 0.0, radius, vx, vy, 0.0, material);
         }
 
         public static bool Exists(ulong e) => Host->exists(e) != 0;

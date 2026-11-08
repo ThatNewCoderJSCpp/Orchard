@@ -82,6 +82,42 @@ void test_falling_2d() {
     check(near(s.transform(ball)->position.z, 0.0f, 1e-5f), "2d: z stays put");
 }
 
+void test_fluids_2d() {
+    for (orchard::FluidLevel level : {orchard::FluidLevel::still, orchard::FluidLevel::waves, orchard::FluidLevel::flowing, orchard::FluidLevel::realistic, orchard::FluidLevel::blocky}) {
+        orchard::Scene s(orchard::Dimension::two_d);
+        ground(s, 20.0f);
+        const orchard::Entity pool = s.create("Pool");
+        s.transform(pool)->position = {0.0f, 1.5f, 0.0f};
+        orchard::Fluid& f = s.add_fluid(pool);
+        f.level = level;
+        f.size = {6.0f, 3.0f, 1.0f};
+        f.fill = 0.6f;
+        const orchard::Entity crate = s.create("Crate");
+        s.transform(crate)->position = {0.0f, 2.5f, 0.0f};
+        s.add_body(s.find("Crate"));
+        orchard::Collider* c = s.add_collider(crate);
+        c->density = 400.0f;
+        xylem::World w(orchard::Dimension::two_d);
+        w.build(s);
+        const std::string name = orchard::to_string(level);
+        check(w.fluid_count() == 1, "2d " + name + ": one fluid volume");
+        run(w, 2.0);
+        std::vector<xylem::FluidDraw> draws;
+        w.fluid_draws(draws);
+        check(draws.size() == 1 && draws[0].flat, "2d " + name + ": the fluid can be drawn");
+        if (level != orchard::FluidLevel::still) check(!draws.empty() && draws[0].image_width > 0 && draws[0].image.size() == static_cast<std::size_t>(draws[0].image_width * draws[0].image_height * 4), "2d " + name + ": the fluid makes an image");
+        const float y = s.transform(crate)->position.y;
+        check(std::isfinite(y) && y > 0.2f && y < 4.0f, "2d " + name + ": a light crate stays near the surface (y = " + str(y) + ")");
+        if (level == orchard::FluidLevel::realistic || level == orchard::FluidLevel::blocky) {
+            const std::size_t poured = w.fluid_brush(xylem::FluidBrush::pour, {2.0f, 2.8f, 0.0f}, 0.3f, {0.0f, 0.0f, 0.0f});
+            check(poured > 0, "2d " + name + ": pouring adds fluid");
+            const std::size_t erased = w.fluid_brush(xylem::FluidBrush::erase, {0.0f, 0.5f, 0.0f}, 0.5f, {0.0f, 0.0f, 0.0f});
+            check(erased > 0, "2d " + name + ": erasing removes fluid");
+        }
+        check(w.fluid_depth({-2.0f, 0.3f, 0.0f}) > 0.0f, "2d " + name + ": the bottom of the pool is under water");
+    }
+}
+
 void test_compound_and_sensor() {
     orchard::Scene s(orchard::Dimension::three_d);
     ground(s, 20.0f);
@@ -274,6 +310,7 @@ void test_layers_and_flags() {
 int main() {
     test_falling_3d();
     test_falling_2d();
+    test_fluids_2d();
     test_compound_and_sensor();
     test_impulse_and_disabled();
     test_axes();

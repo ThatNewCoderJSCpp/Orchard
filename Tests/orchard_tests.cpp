@@ -631,6 +631,115 @@ void test_lights_and_materials() {
     check(old && old->size() == 1, "version 2 scenes still load");
 }
 
+void test_textures_sections_and_fluids() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity crate = s.create("Crate");
+    s.add_collider(crate, orchard::ColliderShape::box);
+    orchard::Material& m = s.add_material(crate);
+    m.base_map = "Assets/Wood Crate/albedo.png";
+    m.normal_map = "Assets/crate_n.png";
+    m.roughness_map = "Textures/rough.jpg";
+    m.normal_strength = 0.5f;
+    m.alpha_cutoff = 0.4f;
+    m.tiling_u = 3.0f;
+    m.tiling_v = 2.0f;
+    m.offset_u = 0.25f;
+    m.uv_rotation = 45.0f;
+    m.pixelated = true;
+    m.triplanar = true;
+    m.triplanar_scale = 2.0f;
+    m.reflectivity = 0.7f;
+    const orchard::Entity dome = s.create("Dome");
+    orchard::Collider* c = s.add_collider(dome, orchard::ColliderShape::sphere_section);
+    check(c != nullptr, "a sphere section collider can be added");
+    if (c) {
+        c->polar_max = 90.0f;
+        c->azimuth_max = 180.0f;
+        c->shell = 0.1f;
+    }
+    const orchard::Entity lake = s.create("Lake");
+    orchard::Fluid& w = s.add_fluid(lake);
+    w.level = orchard::FluidLevel::realistic;
+    w.viscosity = 0.25f;
+    w.fill = 0.6f;
+    std::string err;
+    const auto back = orchard::Scene::load(s.save(), &err);
+    check(back.has_value(), "textured scene loads back " + err);
+    if (!back) return;
+    const orchard::Material* bm = back->material(back->find("Crate"));
+    check(bm && bm->base_map == "Assets/Wood Crate/albedo.png" && bm->normal_map == "Assets/crate_n.png" && bm->roughness_map == "Textures/rough.jpg", "texture paths round trip");
+    check(bm && near(bm->normal_strength, 0.5f) && near(bm->alpha_cutoff, 0.4f) && near(bm->tiling_u, 3.0f) && near(bm->tiling_v, 2.0f) && near(bm->offset_u, 0.25f) && near(bm->uv_rotation, 45.0f), "texture settings round trip");
+    check(bm && bm->pixelated && bm->triplanar && near(bm->triplanar_scale, 2.0f) && near(bm->reflectivity, 0.7f), "texture flags and reflectivity round trip");
+    check(bm && bm->has_textures() && bm->texture_paths().size() == 3, "texture paths are listed");
+    check(!orchard::Material{}.has_textures(), "plain materials have no textures");
+    check(orchard::is_image_file("a/b.PNG") && orchard::is_image_file("x.jpeg") && !orchard::is_image_file("x.wal") && !orchard::is_image_file("png"), "image file names");
+    const std::vector<orchard::Collider>* bc = back->colliders(back->find("Dome"));
+    check(bc && bc->size() == 1 && (*bc)[0].shape == orchard::ColliderShape::sphere_section && near((*bc)[0].azimuth_max, 180.0f) && near((*bc)[0].shell, 0.1f) && near((*bc)[0].polar_max, 90.0f), "sphere section round trip");
+    const orchard::Fluid* bf = back->fluid(back->find("Lake"));
+    check(bf && bf->level == orchard::FluidLevel::realistic && near(bf->viscosity, 0.25f) && near(bf->fill, 0.6f), "fluid round trip");
+    for (orchard::FluidLevel v : orchard::fluid_levels()) check(orchard::parse_fluid_level(orchard::to_string(v)) == v, std::string("fluid level round trip ") + orchard::to_string(v));
+}
+
+void test_entity_templates_and_emitters() {
+    orchard::Scene tmpl(orchard::Dimension::three_d);
+    const orchard::Entity car = tmpl.create("Cart");
+    tmpl.add_body(car);
+    tmpl.add_collider(car, orchard::ColliderShape::box)->size = {2.0f, 0.5f, 1.0f};
+    tmpl.set_script(car, "Scripts/drive.wal");
+    tmpl.add_material(car).base_map = "Textures/wood.png";
+    const orchard::Entity wheel = tmpl.create("Wheel", car);
+    tmpl.add_collider(wheel, orchard::ColliderShape::sphere);
+    tmpl.transform(wheel)->position = {0.8f, -0.25f, 0.5f};
+    orchard::Emitter& fx = tmpl.add_emitter(wheel);
+    fx = *orchard::Emitter::named("dust");
+    fx.rate = 25.0f;
+    fx.on_death = "smoke";
+    const auto back_t = orchard::Scene::load(tmpl.save());
+    check(back_t.has_value(), "template with emitter loads");
+    if (!back_t) return;
+    const orchard::Emitter* be = back_t->emitter(back_t->find("Wheel"));
+    check(be && be->preset == "dust" && near(be->rate, 25.0f) && be->on_death == "smoke" && be->blend == orchard::ParticleBlend::alpha && be->shape == orchard::EmitterShape::box, "emitter round trip");
+    for (const std::string& p : orchard::Emitter::presets()) check(orchard::Emitter::named(p).has_value(), "emitter preset " + p);
+    for (orchard::EmitterShape sh : orchard::emitter_shapes()) check(orchard::parse_emitter_shape(orchard::to_string(sh)) == sh, std::string("emitter shape ") + orchard::to_string(sh));
+
+    orchard::Scene world(orchard::Dimension::three_d);
+    orchard::Transform at;
+    at.position = {10.0f, 0.0f, 0.0f};
+    const orchard::Entity a = world.instantiate(*back_t, "Entities/Cart.entity", orchard::Entity{}, at);
+    at.position = {-5.0f, 0.0f, 2.0f};
+    const orchard::Entity b = world.instantiate(*back_t, "Entities/Cart.entity", orchard::Entity{}, at);
+    check(world.alive(a) && world.alive(b) && world.size() == 4, "two copies with their children");
+    check(world.instances_of("Entities/Cart.entity").size() == 2, "copies remember their template");
+    check(near(world.transform(a)->position.x, 10.0f) && world.script(a) == "Scripts/drive.wal" && world.script(b) == "Scripts/drive.wal", "copies share the script and sit where placed");
+    check(world.children(a).size() == 1 && world.emitter(world.children(a)[0]) != nullptr, "children and emitters are copied");
+    const auto saved = orchard::Scene::load(world.save());
+    check(saved && saved->instances_of("Entities/Cart.entity").size() == 2, "instance links survive saving");
+
+    orchard::Scene edited = *back_t;
+    edited.add_light(edited.find("Cart"));
+    edited.create("Bumper", edited.find("Cart"));
+    world.set_name(a, "Red cart");
+    check(world.refresh_instances("Entities/Cart.entity", edited) == 2, "editing the template updates both copies");
+    check(world.light(a) && world.light(b) && world.children(a).size() == 2, "updated copies get the new parts");
+    check(world.name(a) == "Red cart" && near(world.transform(a)->position.x, 10.0f), "copies keep their own name and place");
+    check(world.size() == 6, "old children were replaced, not doubled");
+
+    const orchard::Entity c = world.duplicate(a);
+    check(world.alive(c) && world.children(c).size() == 2 && world.instance_of(c) == "Entities/Cart.entity" && world.size() == 9, "duplicate copies the whole entity");
+    const orchard::Scene part = world.extract(a);
+    check(part.size() == 3 && part.instance_of(part.roots().front()).empty() && near(part.transform(part.roots().front())->position.x, 0.0f), "extract makes a template from a subtree");
+    world.set_instance_of(b, "");
+    check(world.instances_of("Entities/Cart.entity").size() == 2, "unlinking drops one copy from the template");
+
+    orchard::Scene two(orchard::Dimension::three_d);
+    two.create("A");
+    two.create("B");
+    const orchard::Entity group = world.instantiate(two, "Entities/Pair.entity", orchard::Entity{}, orchard::Transform{});
+    check(world.name(group) == "Pair" && world.children(group).size() == 2, "templates with several roots get a group");
+    check(orchard::Project::entity_template_path("My Crate!") == "Entities/My Crate.entity", "template file names");
+    check(orchard::ScriptRuntime::entity_template_file("Crate") == "Entities/Crate.entity" && orchard::ScriptRuntime::entity_template_file("Entities/Crate.entity") == "Entities/Crate.entity" && orchard::ScriptRuntime::entity_template_file("More/Thing") == "More/Thing.entity", "template names from scripts");
+}
+
 void test_light_animation() {
     orchard::LightAnimation a = orchard::LightAnimation::strobe(2.0f, 0.25f);
     check(a.active() && a.mode == orchard::LightAnimationMode::strobe, "strobe: the preset turns the effect on");
@@ -761,6 +870,8 @@ int main() {
     test_combine_settings();
     test_script_languages();
     test_lights_and_materials();
+    test_textures_sections_and_fluids();
+    test_entity_templates_and_emitters();
     test_light_animation();
     test_project_physics_and_lighting();
     std::cout << (checks - failures) << "/" << checks << " checks passed\n";
