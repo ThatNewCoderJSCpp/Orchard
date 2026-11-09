@@ -3,11 +3,22 @@
 #include <fizmo/../physics.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
 #include <map>
+#include <mutex>
+#include <optional>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <utility>
+
+#ifdef XYLEM_WITH_MODELS
+#include <fizmo/../../Source/Util Hpp/util_functions.hpp>
+#include <fizmo/../../Source/Graphics/model_3d.hpp>
+#endif // XYLEM_WITH_MODELS
 
 namespace xylem {
 
@@ -187,7 +198,220 @@ std::vector<Part> parts_of(const orchard::Scene& scene, orchard::Entity owner) {
     return out;
 }
 
+struct ModelSlot {
+    std::shared_ptr<const ModelGeometry> geometry;
+    std::filesystem::file_time_type stamp{};
+    std::string error;
+};
+
+std::mutex& model_mutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::map<std::string, ModelSlot>& model_slots() {
+    static std::map<std::string, ModelSlot> slots;
+    return slots;
+}
+
+std::map<std::string, fp::Shape3D>& shape_slots() {
+    static std::map<std::string, fp::Shape3D> slots;
+    return slots;
+}
+
+std::string scale_key(orchard::Vec3 s) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%.5g,%.5g,%.5g", static_cast<double>(s.x), static_cast<double>(s.y), static_cast<double>(s.z));
+    return buf;
+}
+
+std::vector<RVec3> hull_points(const ModelGeometry& g, orchard::Vec3 scale) {
+    std::vector<RVec3> out;
+    if (g.vertices.empty()) return out;
+    std::vector<orchard::Vec3> dirs;
+    const int n = 64;
+    for (int i = 0; i < n; ++i) {
+        const float y = 1.0f - 2.0f * (static_cast<float>(i) + 0.5f) / static_cast<float>(n);
+        const float r = std::sqrt(std::max(0.0f, 1.0f - y * y));
+        const float phi = static_cast<float>(i) * 2.399963f;
+        dirs.push_back({std::cos(phi) * r, y, std::sin(phi) * r});
+    }
+    for (int i = 0; i < 8; ++i) dirs.push_back(orchard::normalize(orchard::Vec3{i & 1 ? 1.0f : -1.0f, i & 2 ? 1.0f : -1.0f, i & 4 ? 1.0f : -1.0f}));
+    std::set<std::size_t> picked;
+    for (const orchard::Vec3& d : dirs) {
+        std::size_t best = 0;
+        float best_dot = -1e30f;
+        for (std::size_t i = 0; i < g.vertices.size(); ++i) {
+            const float k = orchard::dot(g.vertices[i] * scale, d);
+            if (k > best_dot) {
+                best_dot = k;
+                best = i;
+            }
+        }
+        picked.insert(best);
+    }
+    for (std::size_t i : picked) out.push_back(v3(g.vertices[i] * scale));
+    return out;
+}
+
+fp::Shape3D box_of(const ModelGeometry& g, orchard::Vec3 scale) {
+    std::vector<RVec3> corners;
+    for (int i = 0; i < 8; ++i) corners.push_back(v3(orchard::Vec3{i & 1 ? g.max.x : g.min.x, i & 2 ? g.max.y : g.min.y, i & 4 ? g.max.z : g.min.z} * scale));
+    return fp::Shape3D::make_convex(corners);
+}
+
+std::optional<fp::Shape3D> model_shape(const std::string& file, bool z_up, orchard::Vec3 scale, bool as_mesh, std::string* error) {
+    const std::shared_ptr<const ModelGeometry> g = load_model_geometry(file, z_up, error);
+    if (!g || g->empty()) return std::nullopt;
+    const std::string key = file + (z_up ? "|z|" : "|y|") + (as_mesh ? "mesh|" : "hull|") + scale_key(scale);
+    {
+        std::lock_guard<std::mutex> lock(model_mutex());
+        auto it = shape_slots().find(key);
+        if (it != shape_slots().end()) return it->second;
+    }
+    fp::Shape3D shape;
+    if (as_mesh) {
+        std::vector<RVec3> verts;
+        verts.reserve(g->vertices.size());
+        for (const orchard::Vec3& v : g->vertices) verts.push_back(v3(v * scale));
+        std::vector<std::array<std::uint32_t, 3>> tris;
+        tris.reserve(g->indices.size() / 3);
+        for (std::size_t i = 0; i + 2 < g->indices.size(); i += 3) {
+            const std::uint32_t a = g->indices[i], b = g->indices[i + 1], c = g->indices[i + 2];
+            if (a == b || b == c || a == c) continue;
+            const orchard::Vec3 n = orchard::cross(g->vertices[b] * scale - g->vertices[a] * scale, g->vertices[c] * scale - g->vertices[a] * scale);
+            if (orchard::dot(n, n) <= 1e-20f) continue;
+            tris.push_back({a, b, c});
+        }
+        if (tris.empty()) return std::nullopt;
+        shape = fp::Shape3D::make_mesh(std::move(verts), std::move(tris), true);
+    } else {
+        shape = fp::Shape3D::make_convex(hull_points(*g, scale));
+        if (!shape.hull || !shape.hull->valid()) shape = box_of(*g, scale);
+        if (!shape.hull || !shape.hull->valid()) return std::nullopt;
+    }
+    std::lock_guard<std::mutex> lock(model_mutex());
+    if (shape_slots().size() > 4096) shape_slots().clear();
+    return shape_slots().emplace(key, shape).first->second;
+}
+
+struct Trunk {
+    float radius = 0.3f;
+    float bottom = 0.0f;
+    float height = 1.0f;
+};
+
+Trunk trunk_of(const ModelGeometry& g) {
+    Trunk t;
+    t.bottom = g.min.y;
+    t.height = std::max(0.05f, g.max.y - g.min.y);
+    const float cut = g.min.y + t.height * 0.2f;
+    float r = 0.0f;
+    for (const orchard::Vec3& v : g.vertices)
+        if (v.y <= cut) r = std::max(r, std::sqrt(v.x * v.x + v.z * v.z));
+    if (r <= 0.0f) r = 0.5f * std::min(g.max.x - g.min.x, g.max.z - g.min.z);
+    t.radius = std::max(0.05f, r);
+    return t;
+}
+
+orchard::Vec3 terrain_axis_scale(orchard::Vec3 s, orchard::Quat frame) {
+    auto along = [&](orchard::Vec3 axis) {
+        const orchard::Vec3 d = orchard::rotate(frame, axis);
+        return std::fabs(d.x) * s.x + std::fabs(d.y) * s.y + std::fabs(d.z) * s.z;
+    };
+    return {along({1.0f, 0.0f, 0.0f}), along({0.0f, 1.0f, 0.0f}), along({0.0f, 0.0f, 1.0f})};
+}
+
 } // namespace
+
+bool models_supported() {
+#ifdef XYLEM_WITH_MODELS
+    return true;
+#else
+    return false;
+#endif
+}
+
+void clear_model_cache() {
+    std::lock_guard<std::mutex> lock(model_mutex());
+    model_slots().clear();
+    shape_slots().clear();
+}
+
+std::shared_ptr<const ModelGeometry> load_model_geometry(const std::string& path, bool z_up, std::string* error) {
+    if (path.empty()) {
+        if (error) *error = "no model file";
+        return nullptr;
+    }
+    std::error_code ec;
+    const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        if (error) *error = "can't find " + path;
+        return nullptr;
+    }
+    const std::string key = path + (z_up ? "|z" : "|y");
+    {
+        std::lock_guard<std::mutex> lock(model_mutex());
+        auto it = model_slots().find(key);
+        if (it != model_slots().end() && it->second.stamp == stamp) {
+            if (!it->second.geometry && error) *error = it->second.error;
+            return it->second.geometry;
+        }
+    }
+    ModelSlot slot;
+    slot.stamp = stamp;
+#ifdef XYLEM_WITH_MODELS
+    namespace fg = fizmo::graphics;
+    fg::Model3D model;
+    fg::ModelImportOptions options;
+    options.z_up = z_up;
+    options.generate_normals = false;
+    std::string why;
+    if (fg::Model3D::load(std::filesystem::path(path), model, &why, options)) {
+        auto g = std::make_shared<ModelGeometry>();
+        std::vector<fg::model_math::Mat4> world;
+        model.world_matrices(model.rest_pose(), world);
+        for (std::size_t ni = 0; ni < model.nodes.size() && ni < world.size(); ++ni) {
+            const int mesh = model.nodes[ni].mesh;
+            if (mesh < 0 || static_cast<std::size_t>(mesh) >= model.meshes.size()) continue;
+            for (const fg::ModelPrimitive& prim : model.meshes[static_cast<std::size_t>(mesh)].primitives) {
+                const auto& verts = prim.mesh.vertices();
+                const auto base = static_cast<std::uint32_t>(g->vertices.size());
+                for (const fg::Vertex3D& v : verts) {
+                    const auto p = fg::model_math::point(world[ni], v.x, v.y, v.z);
+                    g->vertices.push_back({static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
+                }
+                const auto& idx = prim.mesh.indices();
+                if (idx.empty()) {
+                    for (std::uint32_t i = 0; i + 2 < static_cast<std::uint32_t>(verts.size()); i += 3) g->indices.insert(g->indices.end(), {base + i, base + i + 1, base + i + 2});
+                } else {
+                    for (std::size_t i = 0; i + 2 < idx.size(); i += 3)
+                        if (idx[i] < verts.size() && idx[i + 1] < verts.size() && idx[i + 2] < verts.size()) g->indices.insert(g->indices.end(), {base + idx[i], base + idx[i + 1], base + idx[i + 2]});
+                }
+            }
+        }
+        if (!g->vertices.empty()) {
+            g->min = g->max = g->vertices.front();
+            for (const orchard::Vec3& v : g->vertices) {
+                g->min = {std::min(g->min.x, v.x), std::min(g->min.y, v.y), std::min(g->min.z, v.z)};
+                g->max = {std::max(g->max.x, v.x), std::max(g->max.y, v.y), std::max(g->max.z, v.z)};
+            }
+        }
+        if (g->empty()) slot.error = path + " has no triangles";
+        else slot.geometry = std::move(g);
+    } else {
+        slot.error = why.empty() ? "can't load " + path : why;
+    }
+#else
+    static_cast<void>(z_up);
+    slot.error = "this build of Xylem can't read model files (Fizmo graphics isn't linked)";
+#endif
+    if (!slot.geometry && error) *error = slot.error;
+    std::lock_guard<std::mutex> lock(model_mutex());
+    ModelSlot& stored = model_slots()[key];
+    stored = std::move(slot);
+    return stored.geometry;
+}
 
 const std::vector<FlagOption>& flag_options() {
     using F = fp::PhysicsFlags;
@@ -301,6 +525,126 @@ struct World::Impl {
     std::unique_ptr<fp::FluidWorld2D> fluids2;
     std::vector<std::pair<orchard::Entity, fp::FluidVolume2D*>> volumes2;
     mutable std::vector<fp::FluidRenderer2D> painters2;
+    std::string asset_root;
+    TerrainSource terrain_source;
+    std::vector<std::pair<orchard::Entity, fp::RigidBody3D*>> statics;
+    std::size_t terrains = 0;
+    std::size_t scatter_colliders = 0;
+    std::vector<std::string> warnings;
+    std::map<std::string, std::optional<Trunk>> trunks;
+
+    std::string resolve(const std::string& file) const {
+        return orchard::terrain_file_path(asset_root, file);
+    }
+
+    bool models_z_up() const {
+        return settings.up.z > 0.5f;
+    }
+
+    void warn(const std::string& w) {
+        if (warnings.size() < 64 && std::find(warnings.begin(), warnings.end(), w) == warnings.end()) warnings.push_back(w);
+    }
+
+    const Trunk* trunk_for(const std::string& model) {
+        auto it = trunks.find(model);
+        if (it == trunks.end()) {
+            std::string why;
+            const std::shared_ptr<const ModelGeometry> g = load_model_geometry(resolve(model), false, &why);
+            std::optional<Trunk> t;
+            if (g && !g->empty()) t = trunk_of(*g);
+            else warn("scatter model " + model + ": " + why);
+            it = trunks.emplace(model, t).first;
+        }
+        return it->second ? &*it->second : nullptr;
+    }
+
+    void build_terrains(const orchard::Scene& s) {
+        if (!sim3) return;
+        const orchard::Quat frame = orchard::terrain_frame(settings.up);
+        for (orchard::Entity e : s.entities()) {
+            const orchard::Terrain* t = s.terrain(e);
+            if (!t) continue;
+            std::shared_ptr<const orchard::TerrainHeights> heights = terrain_source ? terrain_source(e, *t) : nullptr;
+            if (!heights || !heights->valid()) {
+                auto made = std::make_shared<orchard::TerrainHeights>();
+                std::string why;
+                if (!orchard::build_terrain_heights(*t, asset_root, *made, &why) && !why.empty()) warn(s.name(e) + ": " + why);
+                heights = made;
+            }
+            if (!heights->valid()) continue;
+            const orchard::Vec3 pos = world_position(s, e);
+            const orchard::Quat rot = orchard::normalize(world_rotation(s, e) * frame);
+            const orchard::Vec3 ts = terrain_axis_scale(world_scale(s, e), frame);
+            const orchard::Body* owner = s.body(e);
+            fp::HeightfieldShape hf;
+            hf.columns = heights->width;
+            hf.rows = heights->depth;
+            hf.cell_x = std::max(1e-4_r, static_cast<Real>(heights->spacing_x() * ts.x));
+            hf.cell_z = std::max(1e-4_r, static_cast<Real>(heights->spacing_z() * ts.z));
+            hf.heights.reserve(heights->heights.size());
+            for (float h : heights->heights) hf.heights.push_back(static_cast<Real>(h * ts.y));
+            fp::RigidBody3D& body = sim3->add_body(fp::PhysicsFlags::DefaultStatic);
+            fp::Material3D mat(fp::MassSpec3D::from_density(1000.0_r), std::max(0.0f, t->friction), std::max(0.0f, t->restitution));
+            body.add_collider(fp::Shape3D::make_heightfield(std::move(hf)), mat, fp::Transform3D(), fp::CollisionFilter{}, false);
+            if (owner) body.set_collision_filter(owner->collision_layer, owner->collision_mask);
+            body.set_position(v3(pos));
+            body.set_orientation(to_fizmo(rot));
+            body.mark_mass_dirty();
+            owners[&body] = e;
+            statics.emplace_back(e, &body);
+            ++colliders;
+            ++terrains;
+            struct TrunkCell {
+                std::vector<RVec3> vertices;
+                std::vector<std::array<std::uint32_t, 3>> triangles;
+            };
+            const float cell = 64.0f;
+            const int sides = 8;
+            std::map<std::pair<int, int>, TrunkCell> cells;
+            for (const orchard::ScatterInstance& inst : orchard::scatter_instances(*t, *heights)) {
+                if (!inst.collide) continue;
+                const Trunk* trunk = trunk_for(inst.model);
+                if (!trunk) continue;
+                const std::pair<int, int> key{static_cast<int>(std::floor(inst.position.x / cell)), static_cast<int>(std::floor(inst.position.z / cell))};
+                const orchard::Vec3 cell_center{(static_cast<float>(key.first) + 0.5f) * cell, 0.0f, (static_cast<float>(key.second) + 0.5f) * cell};
+                TrunkCell& tc = cells[key];
+                const auto base = static_cast<std::uint32_t>(tc.vertices.size());
+                const float r = trunk->radius * inst.scale;
+                const float y0 = trunk->bottom * inst.scale, y1 = (trunk->bottom + trunk->height) * inst.scale;
+                for (int k = 0; k < sides; ++k) {
+                    const float a = static_cast<float>(k) * 2.0f * orchard::pi / static_cast<float>(sides);
+                    for (float y : {y0, y1}) {
+                        const orchard::Vec3 local = inst.position + orchard::rotate(inst.rotation, orchard::Vec3{r * std::cos(a), y, r * std::sin(a)});
+                        tc.vertices.push_back(v3((local - cell_center) * ts));
+                    }
+                }
+                for (int k = 0; k < sides; ++k) {
+                    const std::uint32_t b0 = base + static_cast<std::uint32_t>(k * 2), t0 = b0 + 1;
+                    const std::uint32_t b1 = base + static_cast<std::uint32_t>(((k + 1) % sides) * 2), t1 = b1 + 1;
+                    tc.triangles.push_back({b0, t0, b1});
+                    tc.triangles.push_back({b1, t0, t1});
+                    if (k > 0 && k + 1 < sides) {
+                        tc.triangles.push_back({base + 1, base + static_cast<std::uint32_t>((k + 1) * 2 + 1), base + static_cast<std::uint32_t>(k * 2 + 1)});
+                        tc.triangles.push_back({base, base + static_cast<std::uint32_t>(k * 2), base + static_cast<std::uint32_t>((k + 1) * 2)});
+                    }
+                }
+                ++scatter_colliders;
+            }
+            for (auto& kv : cells) {
+                const orchard::Vec3 cell_center{(static_cast<float>(kv.first.first) + 0.5f) * cell, 0.0f, (static_cast<float>(kv.first.second) + 0.5f) * cell};
+                fp::RigidBody3D& group = sim3->add_body(fp::PhysicsFlags::DefaultStatic);
+                fp::Material3D tm(fp::MassSpec3D::from_density(1000.0_r), 0.5_r, 0.0_r);
+                group.add_collider(fp::Shape3D::make_mesh(std::move(kv.second.vertices), std::move(kv.second.triangles), true), tm, fp::Transform3D(), fp::CollisionFilter{}, false);
+                if (owner) group.set_collision_filter(owner->collision_layer, owner->collision_mask);
+                group.set_position(v3(pos + orchard::rotate(rot, cell_center * ts)));
+                group.set_orientation(to_fizmo(rot));
+                group.mark_mass_dirty();
+                owners[&group] = e;
+                statics.emplace_back(e, &group);
+                ++colliders;
+            }
+        }
+    }
 
     static std::pair<std::uint64_t, std::uint64_t> key(orchard::Entity a, orchard::Entity b) {
         const std::uint64_t x = a.id(), y = b.id();
@@ -404,6 +748,11 @@ struct World::Impl {
         accumulator = 0.0_r;
         sim2.reset();
         sim3.reset();
+        statics.clear();
+        terrains = 0;
+        scatter_colliders = 0;
+        warnings.clear();
+        trunks.clear();
         if (dimension == orchard::Dimension::two_d) {
             fp::Simulation2D::Config cfg;
             cfg.gravity = RVec2{settings.gravity.x, settings.gravity.y};
@@ -432,6 +781,7 @@ struct World::Impl {
             if (dimension == orchard::Dimension::two_d) add_2d(e, *b, parts);
             else add_3d(e, *b, parts);
         }
+        build_terrains(s);
         build_fluids(s);
     }
 
@@ -504,6 +854,17 @@ struct World::Impl {
                     } else {
                         shape = fp::Shape3D::make_sphere(RVec3{0.0_r, 0.0_r, 0.0_r}, std::max({sx, sy, sz}) * 0.5_r);
                     }
+                }
+            } else if (c.shape == orchard::ColliderShape::convex_hull || c.shape == orchard::ColliderShape::mesh) {
+                const bool as_mesh = c.shape == orchard::ColliderShape::mesh && b.type == orchard::BodyType::fixed;
+                std::string why;
+                const orchard::Vec3 scale{c.size.x * p.scale.x, c.size.y * p.scale.y, c.size.z * p.scale.z};
+                if (std::optional<fp::Shape3D> made = model_shape(resolve(c.source), models_z_up(), scale, as_mesh, &why)) {
+                    shape = *made;
+                    if (c.shape == orchard::ColliderShape::mesh && !as_mesh) warn(c.source + ": mesh colliders only work on fixed bodies, so this one uses a convex hull");
+                } else {
+                    warn((c.source.empty() ? std::string("model collider") : c.source) + ": " + (why.empty() ? std::string("no model") : why) + "; using a box");
+                    shape = fp::Shape3D::make_box(sx * 0.5_r, sy * 0.5_r, sz * 0.5_r);
                 }
             } else {
                 shape = fp::Shape3D::make_box(sx * 0.5_r, sy * 0.5_r, sz * 0.5_r);
@@ -737,6 +1098,15 @@ struct World::Impl {
                     ++it;
                 }
             }
+            for (auto it = statics.begin(); it != statics.end();) {
+                if (!scene->alive(it->first)) {
+                    owners.erase(it->second);
+                    sim3->remove_body(*it->second);
+                    it = statics.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
     }
 
@@ -774,6 +1144,10 @@ void World::clear() {
     m->volumes2.clear();
     m->painters2.clear();
     m->volume_looks.clear();
+    m->statics.clear();
+    m->terrains = 0;
+    m->scatter_colliders = 0;
+    m->trunks.clear();
     m->sim3.reset();
     m->scene = nullptr;
     m->colliders = 0;
@@ -793,6 +1167,8 @@ void World::fluid_draws(std::vector<FluidDraw>& out) const {
         d.flat = true;
         d.color = look.color;
         d.opacity = look.opacity;
+        d.reflectivity = look.reflectivity;
+        d.reflections = look.reflections;
         const fp::AABB b = v.bounds();
         d.image_min = orchard::Vec3{static_cast<float>(b.min.x), static_cast<float>(b.min.y), 0.0f};
         d.image_max = orchard::Vec3{static_cast<float>(b.max.x), static_cast<float>(b.max.y), 0.0f};
@@ -834,6 +1210,8 @@ void World::fluid_draws(std::vector<FluidDraw>& out) const {
         d.entity = m->volumes[n].first;
         d.color = look.color;
         d.opacity = look.opacity;
+        d.reflectivity = look.reflectivity;
+        d.reflections = look.reflections;
         d.origin = ov(v.origin());
         d.axis_u = ov(v.world_dir(RVec3{1.0_r, 0.0_r, 0.0_r}));
         d.axis_up = ov(v.up());
@@ -871,6 +1249,19 @@ void World::fluid_draws(std::vector<FluidDraw>& out) const {
         case fp::FluidLevel::realistic: {
             d.level = orchard::FluidLevel::realistic;
             d.radius = static_cast<float>(v.particle_radius());
+            const fp::FluidSurfaceMesh3D& mesh = v.surface_mesh();
+            if (!mesh.empty()) {
+                d.mesh_positions.reserve(mesh.positions.size());
+                for (const RVec3& x : mesh.positions) d.mesh_positions.push_back(ov(x));
+                d.mesh_normals.reserve(mesh.normals.size());
+                for (const RVec3& x : mesh.normals) d.mesh_normals.push_back(ov(x));
+                d.mesh_indices = mesh.indices;
+                d.mesh_foam.reserve(mesh.foam.size());
+                for (Real x : mesh.foam) d.mesh_foam.push_back(static_cast<float>(x));
+                d.spray.reserve(mesh.spray.size());
+                for (const RVec3& x : mesh.spray) d.spray.push_back(ov(x));
+                break;
+            }
             const std::vector<RVec3>& p = v.positions();
             d.particles.reserve(p.size());
             for (const RVec3& x : p) d.particles.push_back(ov(x));
@@ -979,6 +1370,8 @@ void preview_fluids(const orchard::Scene& scene, orchard::FluidLevel project_lev
         d.level = orchard::FluidLevel::still;
         d.color = f->color;
         d.opacity = f->opacity;
+        d.reflectivity = f->reflectivity;
+        d.reflections = f->reflections;
         d.size = {std::fabs(f->size.x * sc.x), std::fabs(f->size.y * sc.y), std::fabs(f->size.z * sc.z)};
         d.level = fluid_level_for(*f, project_level);
         d.cell = -1.0f;
@@ -1036,6 +1429,30 @@ std::size_t World::body_count() const {
 
 std::size_t World::collider_count() const {
     return m->colliders;
+}
+
+void World::set_asset_root(const std::string& path) {
+    m->asset_root = path;
+}
+
+const std::string& World::asset_root() const {
+    return m->asset_root;
+}
+
+void World::set_terrain_source(TerrainSource source) {
+    m->terrain_source = std::move(source);
+}
+
+std::size_t World::terrain_count() const {
+    return m->terrains;
+}
+
+std::size_t World::scatter_collider_count() const {
+    return m->scatter_colliders;
+}
+
+const std::vector<std::string>& World::warnings() const {
+    return m->warnings;
 }
 
 const std::vector<Contact>& World::contacts() const {

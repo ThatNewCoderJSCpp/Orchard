@@ -85,6 +85,64 @@ std::string starter_script(Dimension d, Axes axes) {
     return s;
 }
 
+std::string fly_camera_script() {
+    std::string s;
+    s += "import module.orchard\n";
+    s += "import module.math\n\n";
+    s += "function on_tick(orchard::Entity&: camera, double: dt) -> void {\n";
+    s += "    double: speed = 5.0;\n";
+    s += "    double: turn = 90.0;\n";
+    s += "    if (orchard::key_down(\"shift\")) then {\n";
+    s += "        speed = 15.0;\n";
+    s += "    }\n";
+    s += "    double: pitch = camera.rotation_x();\n";
+    s += "    double: yaw = camera.rotation_y();\n";
+    s += "    if (orchard::key_down(\"left\")) then {\n";
+    s += "        yaw += turn * dt;\n";
+    s += "    }\n";
+    s += "    if (orchard::key_down(\"right\")) then {\n";
+    s += "        yaw -= turn * dt;\n";
+    s += "    }\n";
+    s += "    if (orchard::key_down(\"up\") && pitch < 85.0) then {\n";
+    s += "        pitch += turn * dt;\n";
+    s += "    }\n";
+    s += "    if (orchard::key_down(\"down\") && pitch > -85.0) then {\n";
+    s += "        pitch -= turn * dt;\n";
+    s += "    }\n";
+    s += "    camera.set_rotation(pitch, yaw, 0.0);\n";
+    s += "    double: a = yaw * 3.14159265358979 / 180.0;\n";
+    s += "    double: forward_x = -std::math::sin(a);\n";
+    s += "    double: forward_z = -std::math::cos(a);\n";
+    s += "    double: x = 0.0;\n";
+    s += "    double: y = 0.0;\n";
+    s += "    double: z = 0.0;\n";
+    s += "    if (orchard::key_down(\"w\")) then {\n";
+    s += "        x += forward_x;\n";
+    s += "        z += forward_z;\n";
+    s += "    }\n";
+    s += "    if (orchard::key_down(\"s\")) then {\n";
+    s += "        x -= forward_x;\n";
+    s += "        z -= forward_z;\n";
+    s += "    }\n";
+    s += "    if (orchard::key_down(\"d\")) then {\n";
+    s += "        x -= forward_z;\n";
+    s += "        z += forward_x;\n";
+    s += "    }\n";
+    s += "    if (orchard::key_down(\"a\")) then {\n";
+    s += "        x += forward_z;\n";
+    s += "        z -= forward_x;\n";
+    s += "    }\n";
+    s += "    if (orchard::key_down(\"e\") || orchard::key_down(\"space\")) then {\n";
+    s += "        y += 1.0;\n";
+    s += "    }\n";
+    s += "    if (orchard::key_down(\"q\")) then {\n";
+    s += "        y -= 1.0;\n";
+    s += "    }\n";
+    s += "    camera.translate(x * speed * dt, y * speed * dt, z * speed * dt);\n";
+    s += "} end function on_tick\n";
+    return s;
+}
+
 std::string starter_graph(Dimension d, Axes axes) {
     graph::Graph g;
     const int start = g.add_node("on_start", 40.0f, 40.0f);
@@ -567,6 +625,7 @@ std::optional<Project> Project::create(const std::string& folder, const std::str
 
     Scene scene(dimension);
     const Entity camera = scene.create("Camera");
+    scene.add_camera(camera);
     if (dimension == Dimension::three_d) {
         scene.transform(camera)->position = system.from_render({0.0f, 2.0f, 6.0f});
         const Entity light = scene.create("Light");
@@ -581,6 +640,7 @@ std::optional<Project> Project::create(const std::string& folder, const std::str
     }
     write_text(root / "Scripts" / "spin.wal", starter_script(dimension, axes));
     write_text(root / "Graphs" / "spin.graph", starter_graph(dimension, axes));
+    if (dimension == Dimension::three_d && spin_axis(dimension, axes) == "y") write_text(root / "Scripts" / "fly_camera.wal", fly_camera_script());
     write_text(root / ".gitignore", ".orchard/\nbuild*/\n");
     return p;
 }
@@ -677,6 +737,17 @@ std::string Project::entity_template_path(const std::string& name) {
 const std::vector<std::string>& Project::image_extensions() {
     static const std::vector<std::string> exts = {".png", ".apng", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tga", ".qoi", ".pnm", ".ppm", ".pgm", ".ico", ".tif", ".tiff", ".svg"};
     return exts;
+}
+
+const std::vector<std::string>& Project::model_extensions() {
+    static const std::vector<std::string> exts = {".glb", ".gltf", ".obj", ".fbx"};
+    return exts;
+}
+
+std::vector<std::string> Project::models() const {
+    std::vector<std::string> out = files_with("Assets", model_extensions());
+    for (const std::string& f : files_with("Models", model_extensions())) out.push_back(f);
+    return out;
 }
 
 std::vector<std::string> Project::images() const {

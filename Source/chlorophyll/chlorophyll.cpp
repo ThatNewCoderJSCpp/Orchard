@@ -1,10 +1,20 @@
 #include <chlorophyll/chlorophyll.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
+#include <mutex>
+#include <unordered_map>
+
+#ifdef CHLOROPHYLL_WITH_MODELS
+#include <fizmo/../../Source/Util Hpp/util_functions.hpp>
+#include <fizmo/../../Source/Graphics/model_3d.hpp>
+#endif // CHLOROPHYLL_WITH_MODELS
 
 namespace chlorophyll {
 
@@ -610,6 +620,407 @@ fl::Environment environment_for(const orchard::ProjectInfo& info, std::vector<st
     return env;
 }
 
+#ifdef CHLOROPHYLL_WITH_MODELS
+namespace fg = fizmo::graphics;
+namespace mm = fizmo::graphics::model_math;
+
+namespace {
+
+struct TextureKey {
+    const void* image = nullptr;
+    bool srgb = true;
+    bool alpha = true;
+    bool operator==(const TextureKey& o) const noexcept { return image == o.image && srgb == o.srgb && alpha == o.alpha; }
+};
+
+struct TextureKeyHash {
+    std::size_t operator()(const TextureKey& k) const noexcept {
+        return std::hash<const void*>()(k.image) ^ (k.srgb ? 0x9E37u : 0u) ^ (k.alpha ? 0x79B9u : 0u);
+    }
+};
+
+struct TextureSlot {
+    std::shared_ptr<const fizmo::images::BitmapImage> pin;
+    std::shared_ptr<const fl::Texture> texture;
+};
+
+std::mutex& model_mutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::unordered_map<TextureKey, TextureSlot, TextureKeyHash>& texture_slots() {
+    static std::unordered_map<TextureKey, TextureSlot, TextureKeyHash> slots;
+    return slots;
+}
+
+struct FileSlot {
+    std::filesystem::file_time_type stamp{};
+    std::shared_ptr<const ModelGeometry> geometry;
+    std::string error;
+};
+
+std::unordered_map<std::string, FileSlot>& file_slots() {
+    static std::unordered_map<std::string, FileSlot> slots;
+    return slots;
+}
+
+std::uint64_t next_revision() {
+    static std::atomic<std::uint64_t> counter{ 0 };
+    return ++counter;
+}
+
+std::shared_ptr<const fl::Texture> lighting_texture(const fg::Texture& tex, bool srgb, bool alpha) {
+    const std::shared_ptr<const fizmo::images::BitmapImage>& img = tex.shared_image();
+    if (!img || !img->is_valid_image()) return nullptr;
+    const TextureKey key{ img.get(), srgb, alpha };
+    std::lock_guard<std::mutex> lock(model_mutex());
+    auto& slots = texture_slots();
+    const auto it = slots.find(key);
+    if (it != slots.end()) return it->second.texture;
+    std::vector<std::uint8_t> rgba = img->to_rgba();
+    if (!alpha)
+        for (std::size_t i = 3; i < rgba.size(); i += 4) rgba[i] = 255;
+    auto out = std::make_shared<fl::Texture>(fl::Texture::from_rgba8(img->width(), img->height(), std::move(rgba), srgb ? fl::ColorSpace::srgb : fl::ColorSpace::linear));
+    slots[key] = TextureSlot{ img, out };
+    return out;
+}
+
+fl::TextureMap texture_map(const fg::Model3D& model, int index, bool srgb, bool alpha, int channel) {
+    fl::TextureMap map;
+    if (index < 0 || static_cast<std::size_t>(index) >= model.textures.size()) return map;
+    const fg::Texture& tex = model.textures[static_cast<std::size_t>(index)];
+    map.texture = lighting_texture(tex, srgb, alpha);
+    map.channel = channel;
+    map.filter = tex.filter() == fg::SampleFilter::Nearest ? fl::TextureFilter::nearest : fl::TextureFilter::bilinear;
+    map.wrap = tex.wrap() == fg::WrapMode::Clamp ? fl::TextureWrap::clamp : tex.wrap() == fg::WrapMode::MirrorRepeat ? fl::TextureWrap::mirror : fl::TextureWrap::repeat;
+    return map;
+}
+
+float byte01(std::uint8_t v) {
+    return static_cast<float>(v) / 255.0f;
+}
+
+void normal_matrix(const mm::Mat4& m, double out[9]) {
+    const mm::Mat4 inv = mm::inverse(m);
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c) out[r * 3 + c] = inv[static_cast<std::size_t>(c * 4 + r)];
+}
+
+struct MaterialSlots {
+    const fg::Model3D& model;
+    ModelGeometry& out;
+    std::vector<std::size_t> plain;
+    std::vector<std::size_t> colored;
+
+    MaterialSlots(const fg::Model3D& m, ModelGeometry& g) : model(m), out(g), plain(m.materials.size() + 1, SIZE_MAX), colored(m.materials.size() + 1, SIZE_MAX) {}
+
+    std::size_t get(int material, bool vertex_colors) {
+        const std::size_t k = material >= 0 && static_cast<std::size_t>(material) < model.materials.size() ? static_cast<std::size_t>(material) : model.materials.size();
+        std::vector<std::size_t>& slots = vertex_colors ? colored : plain;
+        if (slots[k] != SIZE_MAX) return slots[k];
+        fl::Material mat = k < model.materials.size() ? to_material(model.materials[k], model) : fl::Material();
+        if (k >= model.materials.size()) {
+            mat.base_color = fl::Rgb(1.0f);
+            mat.roughness = 0.8f;
+        }
+        if (vertex_colors) {
+            mat.base_color = fl::Rgb(1.0f);
+            mat.opacity = 1.0f;
+        }
+        slots[k] = out.materials.size();
+        out.materials.push_back(std::move(mat));
+        return slots[k];
+    }
+};
+
+bool needs_tangents(const fg::Model3D& model, int material) {
+    return material >= 0 && static_cast<std::size_t>(material) < model.materials.size() && model.materials[static_cast<std::size_t>(material)].normal_texture >= 0;
+}
+
+void add_primitive(const fg::Model3D& model, const fg::ModelPrimitive& prim, const fg::Mesh3D& source, const mm::Mat4* xf, MaterialSlots& slots, ModelGeometry& out) {
+    const auto& verts = source.vertices();
+    if (verts.empty()) return;
+    ModelPiece piece;
+    fl::Mesh& m = piece.mesh;
+    m.positions.reserve(verts.size());
+    m.normals.reserve(verts.size());
+    m.uvs.reserve(verts.size());
+    double nm[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+    if (xf) normal_matrix(*xf, nm);
+    bool any_normal = false;
+    const fg::Color factor = prim.material >= 0 && static_cast<std::size_t>(prim.material) < model.materials.size() ? model.materials[static_cast<std::size_t>(prim.material)].base_color : fg::Color(255, 255, 255, 255);
+    const std::uint32_t factor_rgba = fg::Vertex3D::pack(factor);
+    bool uniform = true;
+    for (const fg::Vertex3D& v : verts) {
+        if (xf) {
+            const auto p = mm::point(*xf, v.x, v.y, v.z);
+            m.positions.push_back({ static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z) });
+            const fl::Vec3f n{ static_cast<float>(nm[0] * v.nx + nm[1] * v.ny + nm[2] * v.nz), static_cast<float>(nm[3] * v.nx + nm[4] * v.ny + nm[5] * v.nz), static_cast<float>(nm[6] * v.nx + nm[7] * v.ny + nm[8] * v.nz) };
+            m.normals.push_back(fl::normalize(n));
+        } else {
+            m.positions.push_back({ v.x, v.y, v.z });
+            m.normals.push_back(fl::normalize(fl::Vec3f{ v.nx, v.ny, v.nz }));
+        }
+        any_normal = any_normal || v.nx != 0.0f || v.ny != 0.0f || v.nz != 0.0f;
+        m.uvs.push_back({ v.u, v.v });
+        uniform = uniform && v.rgba == factor_rgba;
+    }
+    const bool blend = prim.material >= 0 && static_cast<std::size_t>(prim.material) < model.materials.size() && model.materials[static_cast<std::size_t>(prim.material)].transparent;
+    if (!uniform) {
+        m.colors.reserve(verts.size());
+        for (const fg::Vertex3D& v : verts) {
+            const fg::Color c = v.color();
+            m.colors.push_back({ byte01(c.red()), byte01(c.green()), byte01(c.blue()), blend ? byte01(c.alpha()) : 1.0f });
+        }
+    }
+    const auto& idx = source.indices();
+    if (idx.empty()) {
+        for (std::uint32_t i = 0; i + 2 < static_cast<std::uint32_t>(verts.size()); i += 3) m.indices.insert(m.indices.end(), { i, i + 1, i + 2 });
+    } else {
+        for (std::size_t i = 0; i + 2 < idx.size(); i += 3)
+            if (idx[i] < verts.size() && idx[i + 1] < verts.size() && idx[i + 2] < verts.size()) m.indices.insert(m.indices.end(), { idx[i], idx[i + 1], idx[i + 2] });
+    }
+    if (m.indices.empty()) return;
+    if (!any_normal) m.compute_normals();
+    if (needs_tangents(model, prim.material)) m.compute_tangents();
+    piece.material = slots.get(prim.material, !uniform);
+    out.pieces.push_back(std::move(piece));
+}
+
+std::shared_ptr<const ModelGeometry> convert(const fg::Model3D& model, const std::vector<mm::Mat4>& world, const fg::ModelAnimator* pose) {
+    auto out = std::make_shared<ModelGeometry>();
+    MaterialSlots slots(model, *out);
+    for (std::size_t ni = 0; ni < model.nodes.size() && ni < world.size(); ++ni) {
+        const fg::ModelNode& node = model.nodes[ni];
+        if (node.mesh < 0 || static_cast<std::size_t>(node.mesh) >= model.meshes.size()) continue;
+        const auto& prims = model.meshes[static_cast<std::size_t>(node.mesh)].primitives;
+        for (std::size_t p = 0; p < prims.size(); ++p) {
+            const fg::Mesh3D* skinned = pose && node.skin >= 0 && prims[p].skinned() ? pose->skinned_mesh(static_cast<std::size_t>(node.mesh), p) : nullptr;
+            if (skinned && !skinned->vertices().empty()) add_primitive(model, prims[p], *skinned, nullptr, slots, *out);
+            else add_primitive(model, prims[p], prims[p].mesh, &world[ni], slots, *out);
+        }
+    }
+    out->revision = next_revision();
+    return out;
+}
+
+int find_clip(const fg::Model3D& model, const std::string& clip) {
+    if (model.animations.empty()) return -1;
+    if (clip.empty()) return 0;
+    int index = model.find_animation(clip);
+    if (index >= 0) return index;
+    auto lower = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    const std::string want = lower(clip);
+    for (std::size_t i = 0; i < model.animations.size(); ++i)
+        if (lower(model.animations[i].name) == want) return static_cast<int>(i);
+    return -1;
+}
+
+} // namespace
+
+bool models_supported() noexcept {
+    return true;
+}
+
+fl::Material to_material(const fg::ModelMaterial& mat, const fg::Model3D& model) {
+    fl::Material out;
+    out.name = mat.name;
+    out.base_color = fl::Rgb(byte01(mat.base_color.red()), byte01(mat.base_color.green()), byte01(mat.base_color.blue()));
+    out.metallic = std::clamp(mat.metallic, 0.0f, 1.0f);
+    out.roughness = std::clamp(mat.roughness, 0.02f, 1.0f);
+    out.double_sided = mat.double_sided;
+    const bool mask = mat.alpha_cutoff > 0.0f;
+    out.opacity = mat.transparent || mask ? byte01(mat.base_color.alpha()) : 1.0f;
+    out.alpha_cutoff = mask ? std::clamp(mat.alpha_cutoff, 0.0f, 1.0f) : 0.0f;
+    if (mat.emissive_strength > 0.0f) {
+        out.emission = fl::Rgb(byte01(mat.emissive.red()), byte01(mat.emissive.green()), byte01(mat.emissive.blue()));
+        out.emission_strength = mat.emissive_strength;
+    }
+    if (mat.unlit) {
+        out.emission = out.base_color;
+        out.emission_strength = 1.0f;
+        out.base_color = fl::Rgb(0.0f);
+    }
+    out.base_color_map = texture_map(model, mat.texture, true, mat.transparent || mask, 0);
+    if (out.base_color_map.valid() && mat.unlit) out.emission_map = out.base_color_map;
+    out.normal_map = texture_map(model, mat.normal_texture, false, false, 0);
+    out.normal_map.strength = mat.normal_scale;
+    if (mat.metallic_roughness_texture >= 0) {
+        out.roughness_map = texture_map(model, mat.metallic_roughness_texture, false, false, 1);
+        out.metallic_map = texture_map(model, mat.metallic_roughness_texture, false, false, 2);
+        if (out.roughness_map.valid()) out.roughness = std::clamp(mat.roughness_factor, 0.02f, 1.0f);
+        if (out.metallic_map.valid()) out.metallic = std::clamp(mat.metallic_factor, 0.0f, 1.0f);
+    }
+    if (mat.emissive_texture >= 0 && !mat.unlit) {
+        out.emission_map = texture_map(model, mat.emissive_texture, true, false, 0);
+        if (out.emission_map.valid()) {
+            out.emission = fl::Rgb(byte01(mat.emissive.red()), byte01(mat.emissive.green()), byte01(mat.emissive.blue()));
+            out.emission_strength = mat.emissive_map_strength;
+        }
+    }
+    return out;
+}
+
+std::shared_ptr<const ModelGeometry> model_geometry(const fg::Model3D& model) {
+    std::vector<mm::Mat4> world;
+    model.world_matrices(model.rest_pose(), world);
+    return convert(model, world, nullptr);
+}
+
+std::shared_ptr<const ModelGeometry> model_geometry(const fg::Model3D& model, const fg::ModelAnimator& pose) {
+    if (pose.model() != &model || pose.world().size() != model.nodes.size()) return model_geometry(model);
+    return convert(model, pose.world(), &pose);
+}
+
+std::shared_ptr<const ModelGeometry> load_model(const std::string& path, bool z_up, std::string* error) {
+    if (path.empty()) {
+        if (error) *error = "no model file";
+        return nullptr;
+    }
+    std::error_code ec;
+    const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        if (error) *error = "can't find " + path;
+        return nullptr;
+    }
+    const std::string key = path + (z_up ? "|z" : "|y");
+    {
+        std::lock_guard<std::mutex> lock(model_mutex());
+        const auto it = file_slots().find(key);
+        if (it != file_slots().end() && it->second.stamp == stamp) {
+            if (!it->second.geometry && error) *error = it->second.error;
+            return it->second.geometry;
+        }
+    }
+    FileSlot slot;
+    slot.stamp = stamp;
+    fg::Model3D model;
+    fg::ModelImportOptions options;
+    options.z_up = z_up;
+    std::string why;
+    if (fg::Model3D::load(std::filesystem::path(path), model, &why, options)) {
+        auto g = model_geometry(model);
+        if (g->empty()) slot.error = path + " has no triangles";
+        else slot.geometry = std::move(g);
+    } else {
+        slot.error = why.empty() ? "can't read " + path : why;
+    }
+    if (!slot.geometry && error) *error = slot.error;
+    std::lock_guard<std::mutex> lock(model_mutex());
+    file_slots()[key] = slot;
+    return slot.geometry;
+}
+
+void clear_model_cache() {
+    std::lock_guard<std::mutex> lock(model_mutex());
+    file_slots().clear();
+    texture_slots().clear();
+}
+
+struct ModelPoser::Impl {
+    struct Rest {
+        std::string source;
+        std::size_t vertices = 0;
+        std::shared_ptr<const ModelGeometry> geometry;
+    };
+    struct Live {
+        const fg::Model3D* model = nullptr;
+        fg::ModelAnimator anim;
+        int clip = -2;
+        double time = -1.0;
+        std::shared_ptr<const ModelGeometry> geometry;
+    };
+    std::unordered_map<const fg::Model3D*, Rest> rest;
+    std::unordered_map<std::uint64_t, Live> live;
+};
+
+ModelPoser::ModelPoser() : m(std::make_unique<Impl>()) {}
+ModelPoser::~ModelPoser() = default;
+
+std::shared_ptr<const ModelGeometry> ModelPoser::rest(const fg::Model3D& model) {
+    Impl::Rest& r = m->rest[&model];
+    const std::size_t verts = model.vertex_count();
+    if (!r.geometry || r.source != model.source || r.vertices != verts) {
+        r.source = model.source;
+        r.vertices = verts;
+        r.geometry = model_geometry(model);
+    }
+    return r.geometry;
+}
+
+std::shared_ptr<const ModelGeometry> ModelPoser::posed(orchard::Entity entity, const fg::Model3D& model, const std::string& clip, double time) {
+    const int index = find_clip(model, clip);
+    if (index < 0 || !entity.valid()) return rest(model);
+    Impl::Live& l = m->live[entity.id()];
+    if (l.model != &model) {
+        l = Impl::Live{};
+        l.model = &model;
+        l.anim.attach(model);
+    }
+    if (l.geometry && l.clip == index && std::fabs(l.time - time) < 1e-6) return l.geometry;
+    l.anim.play(index, true, 0.0, 1.0);
+    l.anim.set_time(time);
+    l.anim.update(0.0);
+    l.clip = index;
+    l.time = time;
+    l.geometry = model_geometry(model, l.anim);
+    return l.geometry;
+}
+
+void ModelPoser::forget(orchard::Entity entity) {
+    m->live.erase(entity.id());
+}
+
+void ModelPoser::clear() {
+    m->rest.clear();
+    m->live.clear();
+}
+#else
+bool models_supported() noexcept {
+    return false;
+}
+
+fl::Material to_material(const fizmo::graphics::ModelMaterial&, const fizmo::graphics::Model3D&) {
+    return fl::Material();
+}
+
+std::shared_ptr<const ModelGeometry> model_geometry(const fizmo::graphics::Model3D&) {
+    return nullptr;
+}
+
+std::shared_ptr<const ModelGeometry> model_geometry(const fizmo::graphics::Model3D&, const fizmo::graphics::ModelAnimator&) {
+    return nullptr;
+}
+
+std::shared_ptr<const ModelGeometry> load_model(const std::string&, bool, std::string* error) {
+    if (error) *error = "this build can't read model files";
+    return nullptr;
+}
+
+void clear_model_cache() {}
+
+struct ModelPoser::Impl {};
+
+ModelPoser::ModelPoser() : m(std::make_unique<Impl>()) {}
+ModelPoser::~ModelPoser() = default;
+
+std::shared_ptr<const ModelGeometry> ModelPoser::rest(const fizmo::graphics::Model3D&) {
+    return nullptr;
+}
+
+std::shared_ptr<const ModelGeometry> ModelPoser::posed(orchard::Entity, const fizmo::graphics::Model3D&, const std::string&, double) {
+    return nullptr;
+}
+
+void ModelPoser::forget(orchard::Entity) {}
+
+void ModelPoser::clear() {}
+#endif // CHLOROPHYLL_WITH_MODELS
+
 World::World() = default;
 World::~World() = default;
 
@@ -700,6 +1111,354 @@ fl::Mesh section_mesh(const orchard::Collider& c) {
 
 } // namespace
 
+struct World::Piece {
+    bool terrain = false;
+    std::string signature;
+    std::shared_ptr<const ModelGeometry> geometry;
+    std::vector<std::size_t> meshes;
+    std::vector<std::size_t> materials;
+    bool material_override = false;
+    std::shared_ptr<const orchard::TerrainHeights> heights;
+    std::uint64_t revision = 0;
+    std::vector<orchard::ScatterInstance> scatter;
+    std::vector<std::size_t> scatter_pieces;
+    std::size_t first_scatter = 0;
+    int lod = 0;
+    std::vector<orchard::Vec3> tints;
+};
+
+namespace {
+
+orchard::Entity model_owner(const orchard::Scene& scene, orchard::Entity e) {
+    for (orchard::Entity at = e; scene.alive(at); at = scene.parent(at))
+        if (const orchard::Model* md = scene.model(at))
+            if (md->visible && !md->source.empty()) return at;
+    return orchard::Entity{};
+}
+
+std::string model_signature(const orchard::Scene& scene, orchard::Entity e, const orchard::Model& model) {
+    const orchard::Material* om = scene.material(e);
+    std::string s = model.source + (model.cast_shadows ? "|s" : "|-") + (om ? "|m" : "|-");
+    if (om) s += (om->casts_shadows ? "s" : "-") + std::string(om->is_static ? "t" : "-") + std::to_string(om->light_channels);
+    return s;
+}
+
+std::string terrain_key(const orchard::Terrain& t) {
+    std::string k = orchard::terrain_signature(t) + "#";
+    for (const orchard::TerrainLayer& l : t.layers) {
+        k += l.texture + "|" + std::to_string(l.color.x) + "," + std::to_string(l.color.y) + "," + std::to_string(l.color.z) + "|" + std::to_string(l.tiling) + "|" + std::to_string(l.min_height) + "|" + std::to_string(l.max_height) + "|" + std::to_string(l.min_slope) + "|" + std::to_string(l.max_slope) + "|" + std::to_string(l.blend) + ";";
+    }
+    k += "#";
+    for (const orchard::TerrainScatter& s : t.scatter) {
+        k += s.model + "|" + std::to_string(s.density) + "|" + std::to_string(s.min_scale) + "|" + std::to_string(s.max_scale) + "|" + std::to_string(s.min_height) + "|" + std::to_string(s.max_height) + "|" + std::to_string(s.max_slope) + "|" + (s.align_to_slope ? "a" : "-") + "|" + std::to_string(s.seed) + ";";
+    }
+    return k;
+}
+
+int terrain_lod(const orchard::TerrainHeights& h) {
+    int lod = 0;
+    while (lod < 6 && static_cast<std::size_t>(((h.width - 1) >> lod) + 1) * static_cast<std::size_t>(((h.depth - 1) >> lod) + 1) > 1100000u) ++lod;
+    return lod;
+}
+
+fl::Mesh terrain_mesh(const orchard::Terrain& t, const orchard::TerrainHeights& h, int lod, const std::vector<orchard::Vec3>& tints) {
+    orchard::TerrainMesh tm;
+    orchard::TerrainMeshOptions o;
+    o.skirts = false;
+    o.layer_tints = tints.empty() ? nullptr : &tints;
+    orchard::build_terrain_mesh(t, h, tm, lod, o);
+    fl::Mesh m;
+    m.positions.reserve(tm.positions.size());
+    for (const orchard::Vec3& p : tm.positions) m.positions.push_back({ p.x, p.y, p.z });
+    if (tm.normals.size() == tm.positions.size()) {
+        m.normals.reserve(tm.normals.size());
+        for (const orchard::Vec3& n : tm.normals) m.normals.push_back({ n.x, n.y, n.z });
+    }
+    if (tm.uvs.size() == tm.positions.size()) {
+        m.uvs.reserve(tm.uvs.size());
+        for (const orchard::Vec2& uv : tm.uvs) m.uvs.push_back({ uv.x, uv.y });
+    }
+    if (tm.colors.size() == tm.positions.size()) {
+        m.colors.reserve(tm.colors.size());
+        for (const orchard::Vec3& c : tm.colors) m.colors.push_back({ c.x, c.y, c.z, 1.0f });
+    }
+    m.indices = std::move(tm.indices);
+    if (!m.has_normals()) m.compute_normals();
+    return m;
+}
+
+orchard::Vec3 builtin_layer_color(const std::string& name) {
+    if (name == "builtin:grass") return { 0.2f, 0.34f, 0.11f };
+    if (name == "builtin:dirt") return { 0.34f, 0.26f, 0.18f };
+    if (name == "builtin:rock") return { 0.42f, 0.4f, 0.37f };
+    if (name == "builtin:sand") return { 0.74f, 0.65f, 0.47f };
+    if (name == "builtin:snow") return { 0.9f, 0.92f, 0.95f };
+    return { 1.0f, 1.0f, 1.0f };
+}
+
+orchard::Vec3 texture_average(const std::shared_ptr<const fl::Texture>& tex) {
+    if (!tex || !tex->valid()) return { 1.0f, 1.0f, 1.0f };
+    const fl::Rgba a = tex->average();
+    return { a.r, a.g, a.b };
+}
+
+bool same_map(const fl::TextureMap& a, const fl::TextureMap& b) {
+    return a.texture == b.texture && a.channel == b.channel && a.strength == b.strength && a.filter == b.filter && a.wrap == b.wrap;
+}
+
+bool same_material(const fl::Material& a, const fl::Material& b) {
+    return a.base_color == b.base_color && a.metallic == b.metallic && a.roughness == b.roughness && a.emission == b.emission && a.emission_strength == b.emission_strength
+        && a.opacity == b.opacity && a.alpha_cutoff == b.alpha_cutoff && a.double_sided == b.double_sided && same_map(a.base_color_map, b.base_color_map)
+        && same_map(a.normal_map, b.normal_map) && same_map(a.roughness_map, b.roughness_map) && same_map(a.metallic_map, b.metallic_map) && same_map(a.emission_map, b.emission_map);
+}
+
+bool same_shape(const ModelGeometry& a, const ModelGeometry& b) {
+    if (a.pieces.size() != b.pieces.size() || a.materials.size() != b.materials.size()) return false;
+    for (std::size_t k = 0; k < a.pieces.size(); ++k)
+        if (a.pieces[k].material != b.pieces[k].material) return false;
+    return true;
+}
+
+orchard::Mat4 scatter_local(const orchard::Mat4& frame, const orchard::Mat4& unimport, const orchard::ScatterInstance& s) {
+    return frame * orchard::trs(s.position, s.rotation, { s.scale, s.scale, s.scale }) * unimport;
+}
+
+} // namespace
+
+std::shared_ptr<const ModelGeometry> World::model_for(orchard::Entity e, const std::string& source) {
+    if (source.empty()) return nullptr;
+    if (m_model_source) return m_model_source(e, source);
+    std::filesystem::path p(source);
+    if (!p.is_absolute() && !m_asset_root.empty()) p = std::filesystem::path(m_asset_root) / p;
+    return load_model(p.string(), m_axes.up().z > 0.5f);
+}
+
+std::shared_ptr<const orchard::TerrainHeights> World::heights_for(orchard::Entity e, const orchard::Terrain& t) {
+    if (m_terrain_source) {
+        std::shared_ptr<const orchard::TerrainHeights> h = m_terrain_source(e, t);
+        if (h && h->valid()) return h;
+    }
+    auto& slot = m_default_heights[e.id()];
+    const std::string sig = orchard::terrain_signature(t);
+    if (slot.second && slot.first == sig) return slot.second;
+    auto made = std::make_shared<orchard::TerrainHeights>();
+    std::string why;
+    if (!orchard::build_terrain_heights(t, m_asset_root, *made, &why) && !why.empty()) m_problems.push_back("terrain: " + why);
+    slot = { sig, made };
+    return made;
+}
+
+std::vector<std::size_t> World::scatter_meshes(const std::string& source, std::vector<std::size_t>& materials) {
+    auto it = m_scatter_meshes.find(source);
+    if (it == m_scatter_meshes.end()) {
+        ScatterMesh sm;
+        sm.geometry = model_for(orchard::Entity{}, source);
+        if (sm.geometry) {
+            std::vector<std::size_t> mats;
+            for (const fl::Material& m : sm.geometry->materials) mats.push_back(m_scene.add_material(m));
+            for (const ModelPiece& p : sm.geometry->pieces) {
+                sm.meshes.push_back(m_scene.add_mesh(p.mesh));
+                sm.materials.push_back(p.material < mats.size() ? mats[p.material] : 0);
+            }
+        }
+        it = m_scatter_meshes.emplace(source, std::move(sm)).first;
+    }
+    materials = it->second.materials;
+    return it->second.meshes;
+}
+
+bool World::add_model(const orchard::Scene& scene, orchard::Entity e, const orchard::Model& model) {
+    std::shared_ptr<const ModelGeometry> geo = model_for(e, model.source);
+    if (!geo || geo->empty()) return false;
+    auto piece = std::make_shared<Piece>();
+    piece->signature = model_signature(scene, e, model);
+    piece->geometry = geo;
+    const orchard::Material* om = scene.material(e);
+    piece->material_override = om != nullptr;
+    if (om) {
+        piece->materials.push_back(m_scene.add_material(to_material(*om, m_textures)));
+    } else {
+        for (const fl::Material& m : geo->materials) piece->materials.push_back(m_scene.add_material(m));
+        if (piece->materials.empty()) piece->materials.push_back(m_scene.add_material(fl::Material()));
+    }
+    const orchard::Mat4 world = m_axes.to_render_matrix() * scene.world_matrix(e);
+    std::vector<std::size_t>& ids = m_instances_of[e.id()];
+    std::vector<orchard::Mat4>& locals = m_parts_of[e.id()];
+    for (const ModelPiece& p : geo->pieces) {
+        const std::size_t mesh = m_scene.add_mesh(p.mesh);
+        piece->meshes.push_back(mesh);
+        fl::Instance inst;
+        inst.name = scene.name(e);
+        inst.id = e.id();
+        inst.mesh = mesh;
+        inst.material = om ? piece->materials.front() : piece->materials[std::min(p.material, piece->materials.size() - 1)];
+        inst.transform = to_transform(world);
+        inst.casts_shadows = model.cast_shadows && (!om || om->casts_shadows);
+        inst.is_static = om && om->is_static;
+        inst.channels = om ? om->light_channels : 1u;
+        inst.instanced = true;
+        ids.push_back(m_scene.add_instance(inst));
+        locals.push_back(orchard::Mat4{});
+    }
+    m_pieces[e.id()] = std::move(piece);
+    return true;
+}
+
+bool World::add_terrain(const orchard::Scene& scene, orchard::Entity e, const orchard::Terrain& t) {
+    std::shared_ptr<const orchard::TerrainHeights> h = heights_for(e, t);
+    if (!h || !h->valid()) return false;
+    auto piece = std::make_shared<Piece>();
+    piece->terrain = true;
+    piece->signature = terrain_key(t);
+    piece->heights = h;
+    piece->revision = h->revision;
+    piece->lod = terrain_lod(*h);
+    fl::Material mat;
+    mat.name = "terrain";
+    mat.base_color = fl::Rgb(1.0f);
+    mat.roughness = 0.92f;
+    mat.specular = 0.3f;
+    std::vector<std::shared_ptr<const fl::Texture>> texes(t.layers.size());
+    if (m_textures)
+        for (std::size_t i = 0; i < t.layers.size(); ++i)
+            if (!t.layers[i].texture.empty()) texes[i] = m_textures(t.layers[i].texture, true);
+    piece->tints.assign(t.layers.size(), orchard::Vec3{ 1.0f, 1.0f, 1.0f });
+    if (!texes.empty() && texes[0] && texes[0]->valid()) {
+        mat.base_color_map = fl::TextureMap(texes[0]);
+        const orchard::Vec3 a0 = texture_average(texes[0]);
+        const orchard::Vec3 inv{ 1.0f / std::max(0.05f, a0.x), 1.0f / std::max(0.05f, a0.y), 1.0f / std::max(0.05f, a0.z) };
+        for (std::size_t i = 1; i < t.layers.size(); ++i) piece->tints[i] = texture_average(texes[i]) * inv;
+    } else {
+        for (std::size_t i = 0; i < t.layers.size(); ++i) piece->tints[i] = texes[i] ? texture_average(texes[i]) : builtin_layer_color(t.layers[i].texture);
+    }
+    const std::size_t mesh = m_scene.add_mesh(terrain_mesh(t, *h, piece->lod, piece->tints));
+    const std::size_t material = m_scene.add_material(mat);
+    piece->meshes.push_back(mesh);
+    piece->materials.push_back(material);
+    const orchard::Material* om = scene.material(e);
+    const orchard::Quat q = orchard::terrain_frame(m_axes.up());
+    const orchard::Mat4 frame = orchard::rotation(q);
+    const orchard::Mat4 unimport = orchard::rotation(orchard::Quat{ -q.x, -q.y, -q.z, q.w });
+    const orchard::Mat4 world = m_axes.to_render_matrix() * scene.world_matrix(e);
+    std::vector<std::size_t>& ids = m_instances_of[e.id()];
+    std::vector<orchard::Mat4>& locals = m_parts_of[e.id()];
+    fl::Instance ground;
+    ground.name = scene.name(e);
+    ground.id = e.id();
+    ground.mesh = mesh;
+    ground.material = material;
+    ground.transform = to_transform(world * frame);
+    ground.casts_shadows = !om || om->casts_shadows;
+    ground.is_static = om && om->is_static;
+    ground.channels = om ? om->light_channels : 1u;
+    ground.instanced = true;
+    ids.push_back(m_scene.add_instance(ground));
+    locals.push_back(frame);
+    piece->first_scatter = ids.size();
+    piece->scatter = orchard::scatter_instances(t, *h);
+    piece->scatter_pieces.reserve(piece->scatter.size());
+    for (const orchard::ScatterInstance& s : piece->scatter) {
+        std::vector<std::size_t> mats;
+        const std::vector<std::size_t> meshes = scatter_meshes(s.model, mats);
+        const orchard::Mat4 local = scatter_local(frame, unimport, s);
+        const fl::Transform xf = to_transform(world * local);
+        for (std::size_t k = 0; k < meshes.size(); ++k) {
+            fl::Instance inst;
+            inst.id = e.id();
+            inst.mesh = meshes[k];
+            inst.material = mats[k];
+            inst.transform = xf;
+            inst.instanced = true;
+            ids.push_back(m_scene.add_instance(inst));
+            locals.push_back(local);
+        }
+        piece->scatter_pieces.push_back(meshes.size());
+    }
+    m_pieces[e.id()] = std::move(piece);
+    return true;
+}
+
+bool World::update_piece(const orchard::Scene& scene, orchard::Entity e, Piece& piece, bool& rebuild) {
+    if (!piece.terrain) {
+        const orchard::Model* model = scene.model(e);
+        if (!model || model_owner(scene, e) != e || model_signature(scene, e, *model) != piece.signature) {
+            rebuild = true;
+            return false;
+        }
+        std::shared_ptr<const ModelGeometry> geo = model_for(e, model->source);
+        if (!geo || geo->empty() || !same_shape(*geo, *piece.geometry)) {
+            rebuild = true;
+            return false;
+        }
+        if (geo == piece.geometry) return false;
+        for (std::size_t k = 0; k < geo->pieces.size(); ++k) m_scene.replace_mesh(piece.meshes[k], geo->pieces[k].mesh);
+        if (!piece.material_override) {
+            for (std::size_t k = 0; k < geo->materials.size() && k < piece.materials.size(); ++k)
+                if (!same_material(geo->materials[k], piece.geometry->materials[k])) m_scene.replace_material(piece.materials[k], geo->materials[k]);
+        }
+        piece.geometry = std::move(geo);
+        return true;
+    }
+    const orchard::Terrain* t = scene.terrain(e);
+    if (!t || terrain_key(*t) != piece.signature) {
+        rebuild = true;
+        return false;
+    }
+    std::shared_ptr<const orchard::TerrainHeights> h = heights_for(e, *t);
+    if (!h || !h->valid()) {
+        rebuild = true;
+        return false;
+    }
+    if (h == piece.heights && h->revision == piece.revision) return false;
+    const int lod = terrain_lod(*h);
+    std::vector<orchard::ScatterInstance> scatter = orchard::scatter_instances(*t, *h);
+    if (scatter.size() != piece.scatter.size() || lod != piece.lod) {
+        rebuild = true;
+        return false;
+    }
+    for (std::size_t i = 0; i < scatter.size(); ++i) {
+        if (scatter[i].model != piece.scatter[i].model) {
+            rebuild = true;
+            return false;
+        }
+    }
+    m_scene.replace_mesh(piece.meshes.front(), terrain_mesh(*t, *h, lod, piece.tints));
+    const orchard::Quat q = orchard::terrain_frame(m_axes.up());
+    const orchard::Mat4 frame = orchard::rotation(q);
+    const orchard::Mat4 unimport = orchard::rotation(orchard::Quat{ -q.x, -q.y, -q.z, q.w });
+    std::vector<orchard::Mat4>& locals = m_parts_of[e.id()];
+    std::size_t at = piece.first_scatter;
+    for (std::size_t i = 0; i < scatter.size(); ++i) {
+        const orchard::Mat4 local = scatter_local(frame, unimport, scatter[i]);
+        for (std::size_t k = 0; k < piece.scatter_pieces[i] && at < locals.size(); ++k) locals[at++] = local;
+    }
+    m_world_of.erase(e.id());
+    piece.scatter = std::move(scatter);
+    piece.heights = std::move(h);
+    piece.revision = piece.heights->revision;
+    return true;
+}
+
+std::size_t World::refresh_geometry(const orchard::Scene& scene) {
+    std::size_t changed = 0;
+    bool rebuild = false;
+    for (auto& kv : m_pieces) {
+        const orchard::Entity e = orchard::Entity::from_id(kv.first);
+        if (!scene.alive(e)) {
+            rebuild = true;
+            break;
+        }
+        if (update_piece(scene, e, *kv.second, rebuild)) ++changed;
+        if (rebuild) break;
+    }
+    if (rebuild) {
+        sync(scene);
+        return changed + 1;
+    }
+    if (changed > 0) sync(scene);
+    return changed;
+}
+
 void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info, bool editor) {
     m_info = info;
     m_axes = info.dimension == orchard::Dimension::two_d ? orchard::AxisSystem() : info.axis_system();
@@ -709,7 +1468,11 @@ void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info,
     m_light_of.clear();
     m_instances_of.clear();
     m_parts_of.clear();
+    m_pieces.clear();
+    m_scatter_meshes.clear();
+    m_world_of.clear();
     apply();
+    const bool geometry = m_geometry && info.dimension == orchard::Dimension::three_d;
     const std::size_t box = m_scene.add_mesh(fl::Mesh::box({ 0.5f, 0.5f, 0.5f }));
     const std::size_t ball = m_scene.add_mesh(fl::Mesh::sphere(0.5f, 32, 16));
     std::map<std::pair<int, int>, std::size_t> capsules;
@@ -729,6 +1492,10 @@ void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info,
             continue;
         }
         if (is_camera(scene, e)) continue;
+        if (const orchard::Material* shown = scene.material(e); !shown || shown->visible) {
+            m_instances_of[e.id()];
+            m_parts_of[e.id()];
+        }
         if (const orchard::Fluid* fluid = scene.fluid(e)) {
             if (fluid->enabled && fluid->fill > 0.0f && info.dimension == orchard::Dimension::three_d) {
                 fl::Material water = fl::Material::water();
@@ -769,6 +1536,17 @@ void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info,
         }
         const orchard::Material* om = scene.material(e);
         if (om && !om->visible) continue;
+        m_instances_of[e.id()];
+        m_parts_of[e.id()];
+        if (geometry) {
+            const orchard::Entity owner = model_owner(scene, e);
+            if (owner.valid() && owner != e && model_for(owner, scene.model(owner)->source)) continue;
+            if (owner == e && add_model(scene, e, *scene.model(e))) continue;
+            if (const orchard::Terrain* t = scene.terrain(e)) {
+                add_terrain(scene, e, *t);
+                continue;
+            }
+        }
         const orchard::Material mat = om ? *om : orchard::Material{};
         const std::size_t material = m_scene.add_material(to_material(mat, m_textures));
         std::vector<std::pair<std::size_t, orchard::Mat4>> parts;
@@ -777,6 +1555,30 @@ void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info,
             for (const orchard::Collider& c : *cs) {
                 if (!c.enabled || c.sensor) continue;
                 const orchard::Mat4 offset = translate_matrix(c.offset);
+                if (geometry && (c.shape == orchard::ColliderShape::mesh || c.shape == orchard::ColliderShape::convex_hull) && !c.source.empty()) {
+                    std::vector<std::size_t> mats;
+                    const std::vector<std::size_t> meshes = scatter_meshes(c.source, mats);
+                    if (!meshes.empty()) {
+                        const orchard::Mat4 local = offset * scale_matrix(c.size);
+                        std::vector<std::size_t>& ids = m_instances_of[e.id()];
+                        std::vector<orchard::Mat4>& locals = m_parts_of[e.id()];
+                        for (std::size_t k = 0; k < meshes.size(); ++k) {
+                            fl::Instance inst;
+                            inst.name = scene.name(e);
+                            inst.id = e.id();
+                            inst.mesh = meshes[k];
+                            inst.material = om ? material : mats[k];
+                            inst.transform = to_transform(world * local);
+                            inst.casts_shadows = mat.casts_shadows;
+                            inst.is_static = mat.is_static;
+                            inst.channels = mat.light_channels;
+                            inst.instanced = true;
+                            ids.push_back(m_scene.add_instance(inst));
+                            locals.push_back(local);
+                        }
+                        continue;
+                    }
+                }
                 if (c.shape == orchard::ColliderShape::box) {
                     parts.emplace_back(box, offset * scale_matrix(c.size));
                 } else if (c.shape == orchard::ColliderShape::sphere) {
@@ -869,7 +1671,26 @@ void World::sync(const orchard::Scene& scene) {
             rebuild = true;
             break;
         }
+        if (m_geometry && m_info.dimension == orchard::Dimension::three_d) {
+            const auto piece = m_pieces.find(e.id());
+            if (piece != m_pieces.end()) {
+                update_piece(scene, e, *piece->second, rebuild);
+                if (rebuild) break;
+            } else if (scene.model(e) && model_owner(scene, e) == e && model_for(e, scene.model(e)->source)) {
+                rebuild = true;
+                break;
+            } else if (const orchard::Terrain* t = scene.terrain(e); t && ids->second.empty()) {
+                const std::shared_ptr<const orchard::TerrainHeights> h = heights_for(e, *t);
+                if (h && h->valid()) {
+                    rebuild = true;
+                    break;
+                }
+            }
+        }
         const orchard::Mat4 world = to_r * scene.world_matrix(e);
+        auto seen = m_world_of.find(e.id());
+        if (seen != m_world_of.end() && std::equal(std::begin(world.m), std::end(world.m), std::begin(seen->second.m))) continue;
+        m_world_of[e.id()] = world;
         const std::vector<orchard::Mat4>& locals = m_parts_of[e.id()];
         for (std::size_t k = 0; k < ids->second.size() && k < locals.size(); ++k) {
             const fl::Transform t = to_transform(world * locals[k]);
@@ -971,6 +1792,16 @@ Stats World::stats() const {
     s.lights = m_scene.lights().size();
     s.objects = m_scene.instances().size();
     s.triangles = m_scene.triangle_count();
+    s.instanced = m_scene.instanced_count();
+    s.traced_triangles = m_scene.traced_triangle_count();
+    for (const auto& kv : m_pieces) {
+        if (kv.second->terrain) {
+            ++s.terrains;
+            s.scatter += kv.second->scatter.size();
+        } else {
+            ++s.models;
+        }
+    }
     return s;
 }
 

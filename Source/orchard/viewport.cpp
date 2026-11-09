@@ -141,6 +141,7 @@ Entity Viewport::pick_icon(const Scene& scene, float x, float y, float radius) c
     for (Entity e : scene.entities()) {
         const std::vector<Collider>* cs = scene.colliders(e);
         if (cs && !cs->empty()) continue;
+        if (scene.model(e) || scene.terrain(e)) continue;
         const Vec4 o = scene.world_matrix(e) * Vec4{0.0f, 0.0f, 0.0f, 1.0f};
         float sx, sy;
         if (!project({o.x, o.y, o.z}, sx, sy)) continue;

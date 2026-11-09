@@ -11,6 +11,13 @@ string: inspecting = "";
 string: outline_side = "left";
 string: outline_group = "sections";
 bool: details_on = true;
+bool: sculpt_down = false;
+string: sculpt_id = "";
+string: center = "scene";
+string: script_path = "";
+bool: script_dirty = false;
+string: file_target = "";
+string: graph_path = "";
 
 function call(const string&: name, const string&: arg) -> string;
 function el(const string&: tag, const string&: cls, const string&: label) -> grove::Element;
@@ -20,6 +27,8 @@ function failed(const string&: result) -> bool;
 function reason(const string&: result) -> string;
 function say(const string&: msg, bool: bad) -> void;
 function commit_number(const string&: target, const string&: field, const string&: value) -> void;
+function live_number(const string&: target, const string&: field, const string&: value) -> void;
+function number_text(const string&: entry) -> bool;
 function number_row(const string&: target, const string&: field, const string&: label, const string&: value, const string&: lo, const string&: hi, const string&: step, const string&: kind) -> grove::Element;
 function pick_row(const string&: target, const string&: field, const string&: label, const string&: value, const string&: options) -> grove::Element;
 function bool_row(const string&: target, const string&: field, const string&: label, bool: on) -> grove::Element;
@@ -47,6 +56,16 @@ function select(const string&: id) -> void;
 function set_field(const string&: field) -> void;
 function set_component(const string&: field, const string&: value) -> void;
 function open_file(const string&: path) -> void;
+function open_script(const string&: path) -> void;
+function center_tab(const string&: which) -> void;
+function save_script() -> void;
+function file_action(const string&: key) -> void;
+function open_graph(const string&: path) -> void;
+function close_graph() -> void;
+function graph_status() -> void;
+function graph_result(const string&: r) -> void;
+function save_graph() -> void;
+function commit_graph_value(const string&: value) -> void;
 function enter_editor() -> void;
 function add_entity(const string&: parent) -> void;
 function save_project() -> void;
@@ -63,6 +82,8 @@ function show_axes(const string&: fields) -> void;
 function pick_axes(const string&: style, const string&: flips) -> void;
 function toggle_axes_flip(const string&: axis) -> void;
 function set_tool(const string&: tool) -> void;
+function send_brush() -> void;
+function sculpt_at(short float: x, short float: y, const string&: phase) -> bool;
 function fly_key(grove::Event&: e, bool: pressed) -> bool;
 function build_templates() -> void;
 function update_template_bar() -> void;
@@ -74,9 +95,40 @@ function set_tool(const string&: tool) -> void {
     grove::get_by_id("tool-select").remove_class("on");
     grove::get_by_id("tool-move").remove_class("on");
     grove::get_by_id("tool-orbit").remove_class("on");
+    grove::get_by_id("tool-rotate").remove_class("on");
+    grove::get_by_id("tool-scale").remove_class("on");
     grove::get_by_id("tool-pan").remove_class("on");
+    grove::get_by_id("tool-sculpt").remove_class("on");
     grove::get_by_id("tool-" + now).add_class("on");
+    show("sculpt-bar", now == "sculpt");
+    if (now == "sculpt") then {
+        send_brush();
+    }
 } end function set_tool
+
+function send_brush() -> void {
+    call("terrain_brush", grove::get_by_id("brush-kind").value_string() + "\t" + grove::get_by_id("brush-radius").value_float().to_string() + "\t" + grove::get_by_id("brush-strength").value_float().to_string() + "\t" + grove::get_by_id("brush-falloff").value_float().to_string() + "\t" + grove::get_by_id("brush-height").value_float().to_string());
+} end function send_brush
+
+function sculpt_at(short float: x, short float: y, const string&: phase) -> bool {
+    string: hit = call("terrain_pick", x.to_string() + "\t" + y.to_string());
+    if (hit.empty()) then {
+        return false;
+    }
+    auto: f = hit.split("\t");
+    if (phase == "hover") then {
+        return true;
+    }
+    if (phase == "begin") then {
+        sculpt_id = f[0];
+    }
+    string: target = "";
+    if (grove::get_by_id("brush-kind").value_string() == "set-height") then {
+        target = grove::get_by_id("brush-height").value_float().to_string();
+    }
+    call("terrain_sculpt", sculpt_id + "\t" + f[1] + "\t" + f[2] + "\t" + f[3] + "\t\t\t\t\t" + target + "\t" + phase);
+    return true;
+} end function sculpt_at
 
 function fly_key(grove::Event&: e, bool: pressed) -> bool {
     string: k = e.key();
@@ -480,6 +532,11 @@ function inspect_field(const string&: line) -> grove::Element {
         input.on("change", [key](grove::Event&: e) -> void {
             inspect_set(key, e.target().value_float().to_string());
         });
+        input.on("input", [key](grove::Event&: e) -> void {
+            if (e.has_edit_text() && number_text(e.edit_text())) then {
+                live_number("inspect", key, e.edit_text());
+            }
+        });
         row.append_child(input);
     } else if (kind == "slider") then {
         string: step = "0.01";
@@ -689,6 +746,15 @@ function edit_key(grove::Event&: e) -> void {
     } else if (k == "G" || k == "g") then {
         e.prevent_default();
         set_tool("move");
+    } else if (k == "R" || k == "r") then {
+        e.prevent_default();
+        set_tool("rotate");
+    } else if (k == "T" || k == "t") then {
+        e.prevent_default();
+        set_tool("scale");
+    } else if (k == "B" || k == "b") then {
+        e.prevent_default();
+        set_tool("sculpt");
     } else if (k == "Escape") then {
         e.prevent_default();
         set_tool("select");
@@ -737,7 +803,14 @@ function apply_outliner_prefs() -> void {
         grove::get_by_id("view-particles").set_value_bool(f[12] != "0");
     }
     if (f.size() > 7l) then {
-        grove::get_by_id("render-mode").set_value_string(f[7]);
+        string: mode = f[7];
+        if (mode == "off") then {
+            mode = "medium";
+            if (f.size() > 13l) then {
+                mode = f[13];
+            }
+        }
+        grove::get_by_id("render-mode").set_value_string(mode);
         show("trace-info", f[7] != "off");
     }
     filling = false;
@@ -867,8 +940,26 @@ function build_files() -> void {
         grove::Element: row = el("row", "file", "");
         row.append_child(el("text", "kind", f[0]));
         row.append_child(el("text", "", path));
-        row.on("click", [path](grove::Event&: e) -> void {
-            open_file(path);
+        string: kind = f[0];
+        row.on("click", [path, kind](grove::Event&: e) -> void {
+            if (kind == "script") then {
+                open_script(path);
+            } else if (kind == "graph") then {
+                open_graph(path);
+            } else if (kind == "model") then {
+                file_target = path;
+                file_action("place");
+            } else then {
+                open_file(path);
+            }
+        });
+        row.on("mouse_down", [path](grove::Event&: e) -> void {
+            if (e.button() == 2l) then {
+                e.prevent_default();
+                e.stop_propagation();
+                file_target = path;
+                call("file_menu", path + "\t" + e.x().to_string() + "\t" + e.y().to_string());
+            }
         });
         box.append_child(row);
     }
@@ -904,6 +995,45 @@ function fill_inspector() -> void {
     fill_transform();
     fill_components();
 } end function fill_inspector
+
+function number_text(const string&: entry) -> bool {
+    if (entry.empty()) then {
+        return false;
+    }
+    bool: digit = false;
+    for (long int: i = 0l; i < entry.size(); i += 1l) {
+        string: c = entry.substr(i, 1l);
+        if (c == "0" || c == "1" || c == "2" || c == "3" || c == "4" || c == "5" || c == "6" || c == "7" || c == "8" || c == "9") then {
+            digit = true;
+        } else if (c != "." && c != "-" && c != "+" && c != "e" && c != "E") then {
+            return false;
+        }
+    }
+    if (!digit) then {
+        return false;
+    }
+    string: last = entry.substr(entry.size() - 1l, 1l);
+    return last != "." && last != "-" && last != "+" && last != "e" && last != "E";
+} end function number_text
+
+function live_number(const string&: target, const string&: field, const string&: value) -> void {
+    if (filling) then {
+        return;
+    }
+    if (target == "world") then {
+        call("set_world_setting", field + "\t" + value);
+    } else if (target == "inspect") then {
+        if (!inspecting.empty()) then {
+            call("inspect_set", inspecting + "\t" + field + "\t" + value);
+        }
+    } else if (target == "transform") then {
+        if (!selected.empty()) then {
+            call("set_transform", selected + "\t" + field + "\t" + value);
+        }
+    } else if (!selected.empty()) then {
+        call("set_component", selected + "\t" + field + "\t" + value);
+    }
+} end function live_number
 
 function commit_number(const string&: target, const string&: field, const string&: value) -> void {
     if (target == "world") then {
@@ -943,6 +1073,18 @@ function number_row(const string&: target, const string&: field, const string&: 
             }
             commit_number(target, field, v);
         });
+        slider.on("input", [target, field, whole](grove::Event&: e) -> void {
+            grove::Element: box = e.target().parent().child(2l);
+            string: v = "";
+            if (whole) then {
+                box.set_value_integer(std::io::parse_int<long int>(e.target().get_attribute("value")));
+                v = box.value_integer().to_string();
+            } else then {
+                box.set_value_float(e.target().value_float());
+                v = box.value_float().to_string();
+            }
+            live_number(target, field, v);
+        });
         row.append_child(slider);
     }
     string: tag = "input_float";
@@ -974,6 +1116,16 @@ function number_row(const string&: target, const string&: field, const string&: 
             e.target().parent().child(1l).set_value_float(std::io::parse_float<short float>(v));
         }
         commit_number(target, field, v);
+    });
+    box.on("input", [target, field, sliding](grove::Event&: e) -> void {
+        if (!e.has_edit_text() || !number_text(e.edit_text())) then {
+            return;
+        }
+        string: v = e.edit_text();
+        if (sliding) then {
+            e.target().parent().child(1l).set_value_float(std::io::parse_float<short float>(v));
+        }
+        live_number(target, field, v);
     });
     box.on("invalid", [label, lo, hi](grove::Event&: e) -> void {
         string: what = label;
@@ -1052,6 +1204,11 @@ function float_input(const string&: value, const string&: step, const string&: f
     input.on("change", [field](grove::Event&: e) -> void {
         set_component(field, e.target().value_float().to_string());
     });
+    input.on("input", [field](grove::Event&: e) -> void {
+        if (e.has_edit_text() && number_text(e.edit_text())) then {
+            live_number("component", field, e.edit_text());
+        }
+    });
     return input;
 } end function float_input
 
@@ -1103,6 +1260,29 @@ function collider_card(const string&: line) -> grove::Element {
     });
     head.append_child(remove);
     card.append_child(head);
+    if (f.size() > 30l && (f[2] == "mesh" || f[2] == "convex-hull")) then {
+        card.append_child(el("div", "sub-title", "Model file (size scales it)"));
+        grove::Element: src = grove::create_element("input_select");
+        auto: models = call("files", "").split("\n");
+        grove::Element: none = el("option", "", "Pick a model");
+        none.set_attribute("value", "");
+        src.append_child(none);
+        for (long int: m = 0l; m < models.size(); m += 1l) {
+            auto: mf = models[m].split("\t");
+            if (mf.size() < 2l || mf[0] != "model") then {
+                continue;
+            }
+            grove::Element: opt = el("option", "", mf[1]);
+            opt.set_attribute("value", mf[1]);
+            src.append_child(opt);
+        }
+        src.set_value_string(f[30]);
+        src.on("change", [base](grove::Event&: e) -> void {
+            set_component(base + "source", e.target().value_string());
+            fill_components();
+        });
+        card.append_child(src);
+    }
     card.append_child(el("div", "sub-title", "Size"));
     grove::Element: size = el("row", "xyz", "");
     size.append_child(float_input(f[3], "0.1", base + "sx"));
@@ -1296,6 +1476,215 @@ function set_component(const string&: field, const string&: value) -> void {
     refresh();
 } end function set_component
 
+function center_tab(const string&: which) -> void {
+    center = which;
+    bool: scene = which == "scene";
+    show("scene-bar", scene);
+    show("sculpt-bar", scene && grove::get_by_id("tool-sculpt").has_class("on"));
+    show("viewport", scene);
+    show("scene-hint", scene);
+    show("script-view", which == "script");
+    show("graph-view", which == "graph");
+    grove::get_by_id("tab-scene").remove_class("on");
+    grove::get_by_id("tab-script").remove_class("on");
+    grove::get_by_id("tab-graph").remove_class("on");
+    grove::get_by_id("tab-" + which).add_class("on");
+    show("center-tabs", !script_path.empty() || !graph_path.empty());
+    if (which == "graph") then {
+        call("graph_show", graph_path);
+    } else if (scene) then {
+        call("graph_show", "");
+    }
+} end function center_tab
+
+function script_language(const string&: path) -> string {
+    if (path.ends_with(".cpp") || path.ends_with(".hpp") || path.ends_with(".cc") || path.ends_with(".h")) then {
+        return "cpp";
+    }
+    if (path.ends_with(".c")) then {
+        return "c";
+    }
+    if (path.ends_with(".cs")) then {
+        return "csharp";
+    }
+    if (path.ends_with(".java")) then {
+        return "java";
+    }
+    if (path.ends_with(".lua")) then {
+        return "lua";
+    }
+    return "walnut";
+} end function script_language
+
+function open_script(const string&: path) -> void {
+    if (!script_path.empty() && script_dirty && script_path != path) then {
+        save_script();
+    }
+    script_path = path;
+    grove::Element: ed = grove::get_by_id("script-editor");
+    ed.set_attribute("language", script_language(path));
+    filling = true;
+    ed.set_value_string(call("read_text", path));
+    filling = false;
+    script_dirty = false;
+    grove::get_by_id("script-name").set_inner_text(path);
+    grove::get_by_id("script-state").set_inner_text("");
+    grove::get_by_id("tab-script").set_inner_text(path);
+    show("tab-script", true);
+    show("tab-script-close", true);
+    grove::get_by_id("editor-command").set_value_string(call("editor_command", ""));
+    center_tab("script");
+} end function open_script
+
+function save_script() -> void {
+    if (script_path.empty()) then {
+        return;
+    }
+    string: r = call("write_text", script_path + "\t" + grove::get_by_id("script-editor").value_string());
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    script_dirty = false;
+    grove::get_by_id("script-state").set_inner_text("saved");
+    say("Saved " + script_path, false);
+} end function save_script
+
+function open_graph(const string&: path) -> void {
+    string: r = call("graph_open", path);
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    graph_path = path;
+    show("graph-edit", false);
+    show("tab-graph", true);
+    show("tab-graph-close", true);
+    grove::get_by_id("tab-graph").set_attribute("title", path);
+    center_tab("graph");
+    graph_status();
+    grove::get_by_id("graph-canvas").focus();
+} end function open_graph
+
+function close_graph() -> void {
+    if (graph_path.empty()) then {
+        return;
+    }
+    string: r = call("graph_close", graph_path);
+    if (r == "dirty") then {
+        say(graph_path + " has unsaved changes. Save it, or close it again to throw them away.", true);
+        return;
+    }
+    graph_path = "";
+    show("tab-graph", false);
+    show("tab-graph-close", false);
+    center_tab("scene");
+} end function close_graph
+
+function graph_status() -> void {
+    if (graph_path.empty()) then {
+        return;
+    }
+    auto: f = call("graph_status", "").split("\t");
+    if (f.size() < 4l) then {
+        return;
+    }
+    grove::Element: s = grove::get_by_id("graph-status");
+    s.set_inner_text(f[1]);
+    if (f[1].starts_with("Compiles")) then {
+        s.remove_class("bad");
+    } else then {
+        s.add_class("bad");
+    }
+    string: label = "Graph: " + graph_path;
+    if (f[0] == "1") then {
+        label = label + " *";
+    }
+    grove::get_by_id("tab-graph").set_inner_text(label);
+} end function graph_status
+
+function graph_result(const string&: r) -> void {
+    auto: f = r.split("\t");
+    if (f.size() < 1l) then {
+        return;
+    }
+    if (f[0] == "edit" && f.size() > 4l) then {
+        grove::get_by_id("graph-edit-label").set_inner_text(f[2] + " (" + f[3] + ")");
+        grove::get_by_id("graph-edit-value").set_value_string(f[4]);
+        show("graph-edit", true);
+        grove::get_by_id("graph-edit-value").focus();
+        return;
+    }
+    if (f[0] == "error" && f.size() > 1l) then {
+        say(f[1], true);
+    }
+    if (f[0] == "changed" || f[0] == "error") then {
+        graph_status();
+    }
+} end function graph_result
+
+function save_graph() -> void {
+    if (graph_path.empty()) then {
+        return;
+    }
+    string: r = call("graph_save", graph_path);
+    if (failed(r)) then {
+        say(reason(r), true);
+    } else then {
+        say("Saved " + graph_path, false);
+    }
+    graph_status();
+} end function save_graph
+
+function commit_graph_value(const string&: value) -> void {
+    string: r = call("graph_set_value", value);
+    if (failed(r)) then {
+        say(reason(r), true);
+    }
+    show("graph-edit", false);
+    graph_status();
+    grove::get_by_id("graph-canvas").focus();
+} end function commit_graph_value
+
+function file_action(const string&: key) -> void {
+    string: path = file_target;
+    if (path.empty()) then {
+        return;
+    }
+    if (key == "here") then {
+        open_script(path);
+    } else if (key == "external") then {
+        string: r = call("open_external", path);
+        if (failed(r)) then {
+            say(reason(r), true);
+        } else then {
+            say("Opened " + path + " in your editor", false);
+        }
+    } else if (key == "graph") then {
+        open_graph(path);
+    } else if (key == "place") then {
+        string: r = call("place_model", path);
+        if (failed(r)) then {
+            say(reason(r), true);
+            return;
+        }
+        auto: f = r.split("\t");
+        refresh();
+        build_tree();
+        if (f.size() > 1l) then {
+            select(f[1]);
+        }
+        say("Placed " + path + ". Move it with G, turn it with R, resize it with T.", false);
+    } else if (key == "system") then {
+        string: r = call("open_system", path);
+        if (failed(r)) then {
+            say(reason(r), true);
+        }
+    } else if (key == "preview") then {
+        open_file(path);
+    }
+} end function file_action
+
 function open_file(const string&: path) -> void {
     grove::get_by_id("code-title").set_inner_text(path);
     grove::get_by_id("code").set_value_string(call("read_file", path));
@@ -1303,6 +1692,14 @@ function open_file(const string&: path) -> void {
 } end function open_file
 
 function enter_editor() -> void {
+    script_path = "";
+    script_dirty = false;
+    graph_path = "";
+    show("tab-script", false);
+    show("tab-script-close", false);
+    show("tab-graph", false);
+    show("tab-graph-close", false);
+    center_tab("scene");
     refresh();
     apply_outliner_prefs();
     build_tree();
@@ -1373,6 +1770,204 @@ grove::get_by_id("open-folder").on("change", [](grove::Event&: e) -> void {
         return;
     }
     enter_editor();
+});
+
+grove::get_by_id("tab-graph").on("click", [](grove::Event&: e) -> void {
+    if (!graph_path.empty()) then {
+        center_tab("graph");
+        graph_status();
+    }
+});
+
+grove::get_by_id("tab-graph-close").on("click", [](grove::Event&: e) -> void {
+    close_graph();
+});
+
+grove::Element: graph_canvas = grove::get_by_id("graph-canvas");
+
+graph_canvas.on("canvas_resize", [](grove::Event&: e) -> void {
+    if (!graph_path.empty() && center == "graph") then {
+        call("graph_show", graph_path);
+    }
+});
+
+graph_canvas.on("mouse_down", [](grove::Event&: e) -> void {
+    grove::get_by_id("graph-canvas").focus();
+    string: shift = "0";
+    if (e.shift()) then {
+        shift = "1";
+    }
+    string: ctrl = "0";
+    if (e.ctrl() || e.meta()) then {
+        ctrl = "1";
+    }
+    if (e.button() == 2l) then {
+        e.prevent_default();
+    }
+    call("graph_press", e.x().to_string() + "\t" + e.y().to_string() + "\t" + e.button().to_string() + "\t" + shift + "\t" + ctrl);
+});
+
+graph_canvas.on("mouse_move", [](grove::Event&: e) -> void {
+    call("graph_move", e.x().to_string() + "\t" + e.y().to_string());
+});
+
+graph_canvas.on("mouse_up", [](grove::Event&: e) -> void {
+    graph_result(call("graph_release", e.x().to_string() + "\t" + e.y().to_string()));
+});
+
+graph_canvas.on("wheel", [](grove::Event&: e) -> void {
+    e.prevent_default();
+    call("graph_wheel", e.x().to_string() + "\t" + e.y().to_string() + "\t" + e.delta_y().to_string());
+});
+
+graph_canvas.on("key_down", [](grove::Event&: e) -> void {
+    string: ctrl = "0";
+    if (e.ctrl() || e.meta()) then {
+        ctrl = "1";
+    }
+    string: shift = "0";
+    if (e.shift()) then {
+        shift = "1";
+    }
+    if (ctrl == "1" && (e.key() == "S" || e.key() == "s")) then {
+        e.prevent_default();
+        e.stop_propagation();
+        save_graph();
+    } else then {
+        string: r = call("graph_key", e.key() + "\t" + ctrl + "\t" + shift);
+        if (!r.empty()) then {
+            e.prevent_default();
+            e.stop_propagation();
+            graph_status();
+        }
+    }
+});
+
+graph_canvas.on("menu", [](grove::Event&: e) -> void {
+    graph_result(call("graph_menu_action", e.key()));
+});
+
+grove::get_by_id("graph-save").on("click", [](grove::Event&: e) -> void {
+    save_graph();
+});
+
+grove::get_by_id("graph-add").on("click", [](grove::Event&: e) -> void {
+    call("graph_add_menu", e.x().to_string() + "\t" + e.y().to_string());
+});
+
+grove::get_by_id("graph-frame").on("click", [](grove::Event&: e) -> void {
+    graph_result(call("graph_menu_action", "frame"));
+});
+
+grove::get_by_id("graph-undo").on("click", [](grove::Event&: e) -> void {
+    graph_result(call("graph_menu_action", "undo"));
+});
+
+grove::get_by_id("graph-redo").on("click", [](grove::Event&: e) -> void {
+    graph_result(call("graph_menu_action", "redo"));
+});
+
+grove::get_by_id("graph-walnut").on("click", [](grove::Event&: e) -> void {
+    grove::get_by_id("code-title").set_inner_text(graph_path + " (Walnut it turns into)");
+    grove::get_by_id("code").set_value_string(call("graph_walnut", ""));
+    grove::navigate("code-page");
+});
+
+grove::get_by_id("graph-edit-value").on("change", [](grove::Event&: e) -> void {
+    commit_graph_value(e.target().value_string());
+});
+
+grove::get_by_id("graph-edit-ok").on("click", [](grove::Event&: e) -> void {
+    commit_graph_value(grove::get_by_id("graph-edit-value").value_string());
+});
+
+grove::get_by_id("graph-edit-cancel").on("click", [](grove::Event&: e) -> void {
+    show("graph-edit", false);
+    grove::get_by_id("graph-canvas").focus();
+});
+
+grove::get_by_id("import-files").on("change", [](grove::Event&: e) -> void {
+    string: picked = e.target().value_string();
+    if (picked.empty()) then {
+        return;
+    }
+    string: r = call("import_files", picked);
+    if (failed(r)) then {
+        say(reason(r), true);
+        return;
+    }
+    auto: f = r.split("\t");
+    build_files();
+    if (f.size() > 2l) then {
+        say("Imported " + f[1] + " file(s) into Assets. Click a model in Files to place it.", false);
+    }
+});
+
+grove::get_by_id("files").on("menu", [](grove::Event&: e) -> void {
+    file_action(e.key());
+});
+
+grove::get_by_id("tab-scene").on("click", [](grove::Event&: e) -> void {
+    center_tab("scene");
+});
+
+grove::get_by_id("tab-script").on("click", [](grove::Event&: e) -> void {
+    center_tab("script");
+});
+
+grove::get_by_id("tab-script-close").on("click", [](grove::Event&: e) -> void {
+    if (script_dirty) then {
+        save_script();
+    }
+    script_path = "";
+    show("tab-script", false);
+    show("tab-script-close", false);
+    center_tab("scene");
+});
+
+grove::get_by_id("script-save").on("click", [](grove::Event&: e) -> void {
+    save_script();
+});
+
+grove::get_by_id("script-reload").on("click", [](grove::Event&: e) -> void {
+    if (!script_path.empty()) then {
+        string: p = script_path;
+        script_dirty = false;
+        open_script(p);
+    }
+});
+
+grove::get_by_id("script-external").on("click", [](grove::Event&: e) -> void {
+    if (script_path.empty()) then {
+        return;
+    }
+    if (script_dirty) then {
+        save_script();
+    }
+    call("set_pref", "editor.command\t" + grove::get_by_id("editor-command").value_string());
+    file_target = script_path;
+    file_action("external");
+});
+
+grove::get_by_id("editor-command").on("change", [](grove::Event&: e) -> void {
+    call("set_pref", "editor.command\t" + e.target().value_string());
+});
+
+grove::get_by_id("script-editor").on("input", [](grove::Event&: e) -> void {
+    if (filling || script_path.empty()) then {
+        return;
+    }
+    if (!script_dirty) then {
+        script_dirty = true;
+        grove::get_by_id("script-state").set_inner_text("not saved");
+    }
+});
+
+grove::get_by_id("script-editor").on("key_down", [](grove::Event&: e) -> void {
+    if (e.ctrl() && (e.key() == "S" || e.key() == "s")) then {
+        e.prevent_default();
+        save_script();
+    }
 });
 
 grove::get_by_id("template-done").on("click", [](grove::Event&: e) -> void {
@@ -1661,14 +2256,59 @@ grove::get_by_id("add-collider").on("click", [](grove::Event&: e) -> void {
 });
 
 grove::get_by_id("px").on("change", [](grove::Event&: e) -> void { set_field("px"); });
+grove::get_by_id("px").on("input", [](grove::Event&: e) -> void {
+    if (e.has_edit_text() && number_text(e.edit_text())) then {
+        live_number("transform", "px", e.edit_text());
+    }
+});
 grove::get_by_id("py").on("change", [](grove::Event&: e) -> void { set_field("py"); });
+grove::get_by_id("py").on("input", [](grove::Event&: e) -> void {
+    if (e.has_edit_text() && number_text(e.edit_text())) then {
+        live_number("transform", "py", e.edit_text());
+    }
+});
 grove::get_by_id("pz").on("change", [](grove::Event&: e) -> void { set_field("pz"); });
+grove::get_by_id("pz").on("input", [](grove::Event&: e) -> void {
+    if (e.has_edit_text() && number_text(e.edit_text())) then {
+        live_number("transform", "pz", e.edit_text());
+    }
+});
 grove::get_by_id("rx").on("change", [](grove::Event&: e) -> void { set_field("rx"); });
+grove::get_by_id("rx").on("input", [](grove::Event&: e) -> void {
+    if (e.has_edit_text() && number_text(e.edit_text())) then {
+        live_number("transform", "rx", e.edit_text());
+    }
+});
 grove::get_by_id("ry").on("change", [](grove::Event&: e) -> void { set_field("ry"); });
+grove::get_by_id("ry").on("input", [](grove::Event&: e) -> void {
+    if (e.has_edit_text() && number_text(e.edit_text())) then {
+        live_number("transform", "ry", e.edit_text());
+    }
+});
 grove::get_by_id("rz").on("change", [](grove::Event&: e) -> void { set_field("rz"); });
+grove::get_by_id("rz").on("input", [](grove::Event&: e) -> void {
+    if (e.has_edit_text() && number_text(e.edit_text())) then {
+        live_number("transform", "rz", e.edit_text());
+    }
+});
 grove::get_by_id("sx").on("change", [](grove::Event&: e) -> void { set_field("sx"); });
+grove::get_by_id("sx").on("input", [](grove::Event&: e) -> void {
+    if (e.has_edit_text() && number_text(e.edit_text())) then {
+        live_number("transform", "sx", e.edit_text());
+    }
+});
 grove::get_by_id("sy").on("change", [](grove::Event&: e) -> void { set_field("sy"); });
+grove::get_by_id("sy").on("input", [](grove::Event&: e) -> void {
+    if (e.has_edit_text() && number_text(e.edit_text())) then {
+        live_number("transform", "sy", e.edit_text());
+    }
+});
 grove::get_by_id("sz").on("change", [](grove::Event&: e) -> void { set_field("sz"); });
+grove::get_by_id("sz").on("input", [](grove::Event&: e) -> void {
+    if (e.has_edit_text() && number_text(e.edit_text())) then {
+        live_number("transform", "sz", e.edit_text());
+    }
+});
 
 grove::Element: viewport = grove::get_by_id("viewport");
 
@@ -1678,6 +2318,12 @@ viewport.on("canvas_resize", [](grove::Event&: e) -> void {
 
 viewport.on("mouse_down", [](grove::Event&: e) -> void {
     grove::get_by_id("viewport").focus();
+    if (grove::get_by_id("tool-sculpt").has_class("on") && e.button() == 1l && mode == "edit") then {
+        if (sculpt_at(e.x(), e.y(), "begin")) then {
+            sculpt_down = true;
+            return;
+        }
+    }
     string: shift = "0";
     if (e.shift()) then {
         shift = "1";
@@ -1686,10 +2332,23 @@ viewport.on("mouse_down", [](grove::Event&: e) -> void {
 });
 
 viewport.on("mouse_move", [](grove::Event&: e) -> void {
+    if (grove::get_by_id("tool-sculpt").has_class("on") && mode == "edit") then {
+        if (sculpt_down) then {
+            sculpt_at(e.x(), e.y(), "drag");
+            return;
+        }
+        sculpt_at(e.x(), e.y(), "hover");
+    }
     call("viewport_move", e.x().to_string() + "\t" + e.y().to_string());
 });
 
 viewport.on("mouse_up", [](grove::Event&: e) -> void {
+    if (sculpt_down) then {
+        sculpt_down = false;
+        call("terrain_sculpt", sculpt_id + "\t0\t0\t0\t\t\t\t\t\tend");
+        refresh();
+        return;
+    }
     string: r = call("viewport_release", e.x().to_string() + "\t" + e.y().to_string());
     if (r.starts_with("pick")) then {
         select(reason(r));
@@ -1741,17 +2400,32 @@ viewport.on("key_up", [](grove::Event&: e) -> void {
     }
 });
 
+grove::get_by_id("tool-sculpt").on("click", [](grove::Event&: e) -> void { set_tool("sculpt"); });
+grove::get_by_id("brush-kind").on("change", [](grove::Event&: e) -> void { send_brush(); });
+grove::get_by_id("brush-radius").on("change", [](grove::Event&: e) -> void { send_brush(); });
+grove::get_by_id("brush-strength").on("change", [](grove::Event&: e) -> void { send_brush(); });
+grove::get_by_id("brush-falloff").on("change", [](grove::Event&: e) -> void { send_brush(); });
+grove::get_by_id("brush-height").on("change", [](grove::Event&: e) -> void { send_brush(); });
+
 grove::get_by_id("tool-select").on("click", [](grove::Event&: e) -> void { set_tool("select"); });
 grove::get_by_id("tool-move").on("click", [](grove::Event&: e) -> void { set_tool("move"); });
 grove::get_by_id("tool-orbit").on("click", [](grove::Event&: e) -> void { set_tool("orbit"); });
+grove::get_by_id("tool-rotate").on("click", [](grove::Event&: e) -> void { set_tool("rotate"); });
+grove::get_by_id("tool-scale").on("click", [](grove::Event&: e) -> void { set_tool("scale"); });
 grove::get_by_id("tool-pan").on("click", [](grove::Event&: e) -> void { set_tool("pan"); });
 
 grove::get_by_id("app").on("key_down", [](grove::Event&: e) -> void {
     if (e.ctrl() && (e.key() == "S" || e.key() == "s")) then {
         e.prevent_default();
-        save_project();
+        if (center == "script") then {
+            save_script();
+        } else if (center == "graph") then {
+            save_graph();
+        } else then {
+            save_project();
+        }
     }
-    if (e.ctrl() && (e.key() == "D" || e.key() == "d") && !selected.empty() && mode == "edit") then {
+    if (e.ctrl() && (e.key() == "D" || e.key() == "d") && !selected.empty() && mode == "edit" && center == "scene") then {
         e.prevent_default();
         menu_target = selected;
         handle_menu("duplicate");
@@ -1919,7 +2593,13 @@ grove::get_by_id("render-mode").on("change", [](grove::Event&: e) -> void {
         return;
     }
     string: v = e.target().value_string();
-    call("set_pref", "viewport.trace\t" + v);
+    if (v == "path" || v == "photon") then {
+        call("set_pref", "viewport.trace\t" + v);
+    } else then {
+        call("set_pref", "viewport.quality\t" + v);
+        call("set_pref", "viewport.trace\toff");
+        v = "off";
+    }
     show("trace-info", v != "off");
     grove::get_by_id("trace-info").set_inner_text("");
 });

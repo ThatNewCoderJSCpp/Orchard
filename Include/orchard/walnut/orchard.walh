@@ -38,6 +38,16 @@ extern "C++" from "<orchard/script/script_api.hpp>" {
         static function stop_particles(const NativeEntity&: e) -> void;
         static function burst_particles(const NativeEntity&: e, long int: count) -> void;
         static function clear_particles(const NativeEntity&: e) -> void;
+        static function play_animation(const NativeEntity&: e, const string&: clip, short float: fade) -> void;
+        static function play_animation_once(const NativeEntity&: e, const string&: clip, short float: fade) -> void;
+        static function stop_animation(const NativeEntity&: e) -> void;
+        static function resume_animation(const NativeEntity&: e) -> void;
+        static function set_animation_speed(const NativeEntity&: e, short float: speed) -> void;
+        static function animation_time(const NativeEntity&: e) -> short float;
+        static function set_animation_time(const NativeEntity&: e, short float: seconds) -> void;
+        static function animation_length(const NativeEntity&: e) -> short float;
+        static function animation_playing(const NativeEntity&: e) -> bool;
+        static function animation_event(const NativeEntity&: e) -> string;
         static function pour_fluid(short float: x, short float: y, short float: radius) -> long int;
         static function erase_fluid(short float: x, short float: y, short float: radius) -> long int;
         static function push_fluid(short float: x, short float: y, short float: radius, short float: vx, short float: vy) -> long int;
@@ -355,6 +365,50 @@ function burst_particles(const Entity&: e, long int: count) -> void {
 function clear_particles(const Entity&: e) -> void {
     NativeWorld::clear_particles(e.raw);
 } end function clear_particles
+
+function play_animation(const Entity&: e, const string&: clip) -> void {
+    NativeWorld::play_animation(e.raw, clip, 0.25);
+} end function play_animation
+
+function play_animation_fade(const Entity&: e, const string&: clip, short float: fade) -> void {
+    NativeWorld::play_animation(e.raw, clip, fade);
+} end function play_animation_fade
+
+function play_animation_once(const Entity&: e, const string&: clip) -> void {
+    NativeWorld::play_animation_once(e.raw, clip, 0.25);
+} end function play_animation_once
+
+function stop_animation(const Entity&: e) -> void {
+    NativeWorld::stop_animation(e.raw);
+} end function stop_animation
+
+function resume_animation(const Entity&: e) -> void {
+    NativeWorld::resume_animation(e.raw);
+} end function resume_animation
+
+function set_animation_speed(const Entity&: e, short float: speed) -> void {
+    NativeWorld::set_animation_speed(e.raw, speed);
+} end function set_animation_speed
+
+function animation_time(const Entity&: e) -> short float {
+    return NativeWorld::animation_time(e.raw);
+} end function animation_time
+
+function set_animation_time(const Entity&: e, short float: seconds) -> void {
+    NativeWorld::set_animation_time(e.raw, seconds);
+} end function set_animation_time
+
+function animation_length(const Entity&: e) -> short float {
+    return NativeWorld::animation_length(e.raw);
+} end function animation_length
+
+function animation_playing(const Entity&: e) -> bool {
+    return NativeWorld::animation_playing(e.raw);
+} end function animation_playing
+
+function animation_event(const Entity&: e) -> string {
+    return NativeWorld::animation_event(e.raw);
+} end function animation_event
 
 function pour_fluid(short float: x, short float: y, short float: radius) -> long int {
     return NativeWorld::pour_fluid(x, y, radius);

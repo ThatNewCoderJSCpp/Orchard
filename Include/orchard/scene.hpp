@@ -2,6 +2,7 @@
 #define ORCHARD_SCENE_HPP
 
 #include "math.hpp"
+#include "terrain.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -42,6 +43,11 @@ enum class BodyType {
     kinematic
 };
 
+enum class ReflectionMode { highlights, surroundings, realistic };
+const char* to_string(ReflectionMode v);
+std::optional<ReflectionMode> parse_reflection_mode(const std::string& text);
+const char* reflection_label(ReflectionMode v);
+
 enum class ColliderShape {
     box,
     sphere,
@@ -49,7 +55,9 @@ enum class ColliderShape {
     cylinder,
     cone,
     rounded_box,
-    sphere_section
+    sphere_section,
+    convex_hull,
+    mesh
 };
 
 enum class BodyQuality {
@@ -168,6 +176,7 @@ struct Collider {
     float azimuth_min = 0.0f;
     float azimuth_max = 360.0f;
     float shell = 0.0f;
+    std::string source;
 };
 
 enum class LightType {
@@ -336,6 +345,7 @@ struct Material {
     float absorption_distance = 0.0f;
     float opacity = 1.0f;
     float reflectivity = 0.0f;
+    ReflectionMode reflections = ReflectionMode::surroundings;
     std::string base_map;
     std::string normal_map;
     std::string orm_map;
@@ -399,6 +409,8 @@ struct Fluid {
     float opacity = 0.7f;
     Vec3 current{0.0f, 0.0f, 0.0f};
     float wave_height = 0.0f;
+    float reflectivity = 0.3f;
+    ReflectionMode reflections = ReflectionMode::surroundings;
     float resolution = 0.0f;
     bool infinite = false;
     bool enabled = true;
@@ -407,7 +419,7 @@ struct Fluid {
     static const std::vector<std::string>& presets();
 };
 
-enum class EmitterShape { point, sphere, hemisphere, cone, box, circle, line };
+enum class EmitterShape { point, sphere, hemisphere, cone, box, circle, line, fluid_surface, parts };
 const char* to_string(EmitterShape v);
 std::optional<EmitterShape> parse_emitter_shape(const std::string& text);
 const std::vector<EmitterShape>& emitter_shapes();
@@ -458,10 +470,65 @@ struct Emitter {
     bool local_space = false;
     float inherit_velocity = 0.0f;
     std::string on_death;
+    std::string part;
+    std::string soft = "auto";
+    float soft_distance = 0.0f;
 
     static std::optional<Emitter> named(const std::string& preset);
     static const std::vector<std::string>& presets();
 };
+
+enum class CameraControl { none, fly, walk };
+const char* to_string(CameraControl v);
+std::optional<CameraControl> parse_camera_control(const std::string& text);
+
+struct Camera {
+    CameraControl control = CameraControl::none;
+    float move_speed = 5.0f;
+    float look_speed = 0.25f;
+    float eye_height = 1.7f;
+    bool mouse_look = true;
+    bool active = true;
+    int priority = 0;
+    float fov = 60.0f;
+    float near_clip = 0.05f;
+    float far_clip = 5000.0f;
+    float view_height = 12.0f;
+};
+
+struct Model {
+    std::string source;
+    bool visible = true;
+    bool cast_shadows = true;
+};
+
+struct AnimationEvent {
+    std::string clip;
+    float time = 0.0f;
+    std::string name;
+};
+
+struct Animator {
+    std::string clip;
+    bool playing = true;
+    bool loop = true;
+    float speed = 1.0f;
+    float blend = 0.25f;
+    float start = 0.0f;
+    std::vector<AnimationEvent> events;
+    std::uint32_t restart = 0;
+};
+
+bool is_model_file(const std::string& path);
+
+enum class HumanoidKind { basic, head_and_body, full_body, detailed };
+const char* to_string(HumanoidKind v);
+std::optional<HumanoidKind> parse_humanoid_kind(const std::string& text);
+const std::vector<HumanoidKind>& humanoid_kinds();
+const char* humanoid_label(HumanoidKind v);
+
+class Scene;
+Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent = Entity{}, const std::string& name = "Character", float height = 1.8f);
 
 class Scene {
 public:
@@ -517,12 +584,32 @@ public:
     const Fluid* fluid(Entity e) const;
     Fluid& add_fluid(Entity e);
     bool remove_fluid(Entity e);
+    Camera* camera(Entity e);
+    const Camera* camera(Entity e) const;
+    Camera& add_camera(Entity e);
+    bool remove_camera(Entity e);
+    Entity active_camera() const;
     Emitter* emitter(Entity e);
     const Emitter* emitter(Entity e) const;
     Emitter& add_emitter(Entity e);
     bool remove_emitter(Entity e);
+    Model* model(Entity e);
+    const Model* model(Entity e) const;
+    Model& add_model(Entity e);
+    bool remove_model(Entity e);
+    Animator* animator(Entity e);
+    const Animator* animator(Entity e) const;
+    Animator& add_animator(Entity e);
+    bool remove_animator(Entity e);
+    Terrain* terrain(Entity e);
+    const Terrain* terrain(Entity e) const;
+    Terrain& add_terrain(Entity e);
+    bool remove_terrain(Entity e);
 
     const std::string& instance_of(Entity e) const;
+    const std::string& bone(Entity e) const;
+    bool set_bone(Entity e, const std::string& bone_name);
+    Entity bone_owner(Entity e) const;
     bool set_instance_of(Entity e, const std::string& template_path);
     std::vector<Entity> instances_of(const std::string& template_path) const;
     std::vector<Entity> subtree(Entity e) const;
@@ -552,6 +639,11 @@ private:
         std::optional<Material> material;
         std::optional<Fluid> fluid;
         std::optional<Emitter> emitter;
+        std::optional<Camera> camera;
+        std::optional<Model> model;
+        std::optional<Animator> animator;
+        std::optional<Terrain> terrain;
+        std::string bone;
         std::string instance_of;
     };
 

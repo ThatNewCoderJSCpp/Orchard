@@ -6,6 +6,8 @@
 #include <xylem/xylem.hpp>
 
 #include "particle_view.hpp"
+#include "model_view.hpp"
+#include "terrain_view.hpp"
 
 #include <grove/canvas.hpp>
 
@@ -35,6 +37,8 @@ struct GpuViewOptions {
     double shadow_distance = 48.0;
     double blob_distance = 160.0;
     bool move_gizmo = false;
+    bool rotate_gizmo = false;
+    bool scale_gizmo = false;
     int hot_axis = -1;
     bool icons = true;
     bool orientation_gizmo = true;
@@ -44,6 +48,9 @@ struct GpuViewOptions {
     bool particles_running = false;
     int particle_budget = 60000;
     int particle_quality = 1;
+    bool show_bones = true;
+    bool ambient_occlusion = true;
+    int lighting_quality = 1;
 };
 
 struct GpuViewStats {
@@ -77,6 +84,15 @@ public:
     void set_texture_folder(const std::string& folder);
     std::function<std::shared_ptr<const fizmo::lighting::Texture>(const std::string& path, bool color)> lighting_textures();
     ParticleView& particles() noexcept { return m_particles; }
+    ModelView& models() noexcept { return m_models; }
+    TerrainView& terrain() noexcept { return m_terrain; }
+    void set_terrain_brush(Entity terrain, Vec3 point, float radius, bool visible) {
+        m_brush_entity = terrain;
+        m_brush_point = point;
+        m_brush_radius = radius;
+        m_brush_visible = visible;
+    }
+    void set_extra_models(const std::vector<ModelInstance>* instances) { m_extra_models = instances; }
     const GpuViewOptions& options() const noexcept { return m_options; }
     const GpuViewStats& stats() const noexcept { return m_stats; }
 
@@ -88,6 +104,15 @@ private:
     struct Meshes;
     std::unique_ptr<Meshes> m_meshes;
     ParticleView m_particles;
+    ModelView m_models;
+    const std::vector<ModelInstance>* m_extra_models = nullptr;
+    TerrainView m_terrain;
+    std::vector<ModelInstance> m_scatter_models;
+    std::vector<std::size_t> m_scatter_visible;
+    Entity m_brush_entity;
+    Vec3 m_brush_point;
+    float m_brush_radius = 0.0f;
+    bool m_brush_visible = false;
 };
 
 } // namespace editor

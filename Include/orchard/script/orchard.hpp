@@ -26,6 +26,16 @@ inline void play_particles(const Entity& e) { World::play_particles(e); }
 inline void stop_particles(const Entity& e) { World::stop_particles(e); }
 inline void burst_particles(const Entity& e, long long count) { World::burst_particles(e, count); }
 inline void clear_particles(const Entity& e) { World::clear_particles(e); }
+inline void play_animation(const Entity& e, const std::string& clip, double fade = 0.25) { World::play_animation(e, clip, fade); }
+inline void play_animation_once(const Entity& e, const std::string& clip, double fade = 0.25) { World::play_animation_once(e, clip, fade); }
+inline void stop_animation(const Entity& e) { World::stop_animation(e); }
+inline void resume_animation(const Entity& e) { World::resume_animation(e); }
+inline void set_animation_speed(const Entity& e, double speed) { World::set_animation_speed(e, speed); }
+inline double animation_time(const Entity& e) { return World::animation_time(e); }
+inline void set_animation_time(const Entity& e, double seconds) { World::set_animation_time(e, seconds); }
+inline double animation_length(const Entity& e) { return World::animation_length(e); }
+inline bool animation_playing(const Entity& e) { return World::animation_playing(e); }
+inline std::string animation_event(const Entity& e) { return World::animation_event(e); }
 inline long long pour_fluid(double x, double y, double radius) { return World::pour_fluid(x, y, radius); }
 inline long long erase_fluid(double x, double y, double radius) { return World::erase_fluid(x, y, radius); }
 inline long long push_fluid(double x, double y, double radius, double vx, double vy) { return World::push_fluid(x, y, radius, vx, vy); }

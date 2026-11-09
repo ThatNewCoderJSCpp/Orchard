@@ -8,7 +8,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace xylem {
@@ -49,9 +51,16 @@ struct FluidDraw {
     int nz = 0;
     std::vector<float> values;
     std::vector<orchard::Vec3> particles;
+    std::vector<orchard::Vec3> mesh_positions;
+    std::vector<orchard::Vec3> mesh_normals;
+    std::vector<std::uint32_t> mesh_indices;
+    std::vector<float> mesh_foam;
+    std::vector<orchard::Vec3> spray;
     float radius = 0.0f;
     float level_height = 0.0f;
     bool flat = false;
+    float reflectivity = 0.3f;
+    orchard::ReflectionMode reflections = orchard::ReflectionMode::surroundings;
     int image_width = 0;
     int image_height = 0;
     std::vector<std::uint8_t> image;
@@ -68,6 +77,7 @@ struct Settings {
     orchard::Vec3 gravity{0.0f, -9.80665f, 0.0f};
     float fixed_dt = 1.0f / 60.0f;
     int max_steps = 5;
+    orchard::Vec3 up{0.0f, 1.0f, 0.0f};
     orchard::CombineMode friction_combine = orchard::CombineMode::geometric_mean;
     orchard::CombineMode bounce_combine = orchard::CombineMode::maximum;
     orchard::PhysicsSettings physics;
@@ -88,15 +98,31 @@ struct Settings {
     static Settings with_axes(orchard::Dimension dimension, const orchard::AxisSystem& axes, orchard::YAxis2D y_axis = orchard::YAxis2D::up) {
         Settings s;
         s.gravity = dimension == orchard::Dimension::two_d ? orchard::gravity_of(y_axis) : axes.gravity();
+        if (dimension == orchard::Dimension::three_d) s.up = axes.up();
         return s;
     }
 
     static Settings with_axes(orchard::Dimension dimension, orchard::Axes axes, orchard::YAxis2D y_axis = orchard::YAxis2D::up) {
         Settings s;
         s.gravity = dimension == orchard::Dimension::two_d ? orchard::gravity_of(y_axis) : orchard::gravity_of(axes);
+        if (dimension == orchard::Dimension::three_d) s.up = orchard::up_of(axes);
         return s;
     }
 };
+
+using TerrainSource = std::function<std::shared_ptr<const orchard::TerrainHeights>(orchard::Entity entity, const orchard::Terrain& terrain)>;
+
+struct ModelGeometry {
+    std::vector<orchard::Vec3> vertices;
+    std::vector<std::uint32_t> indices;
+    orchard::Vec3 min;
+    orchard::Vec3 max;
+    bool empty() const { return indices.size() < 3; }
+};
+
+bool models_supported();
+std::shared_ptr<const ModelGeometry> load_model_geometry(const std::string& path, bool z_up, std::string* error = nullptr);
+void clear_model_cache();
 
 class World : public orchard::ScriptPhysics {
 public:
@@ -117,6 +143,12 @@ public:
     void set_physics(const orchard::PhysicsSettings& physics);
     std::size_t body_count() const;
     std::size_t collider_count() const;
+    void set_asset_root(const std::string& path);
+    const std::string& asset_root() const;
+    void set_terrain_source(TerrainSource source);
+    std::size_t terrain_count() const;
+    std::size_t scatter_collider_count() const;
+    const std::vector<std::string>& warnings() const;
     const std::vector<Contact>& contacts() const;
     bool awake(orchard::Entity e) const;
 

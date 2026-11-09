@@ -135,6 +135,8 @@ public:
     std::vector<std::string> entity_templates() const;
     static std::string entity_template_path(const std::string& name);
     static const std::vector<std::string>& image_extensions();
+    std::vector<std::string> models() const;
+    static const std::vector<std::string>& model_extensions();
 
     static std::string write_info(const ProjectInfo& info);
     static std::optional<ProjectInfo> read_info(const std::string& text, std::string* error = nullptr);

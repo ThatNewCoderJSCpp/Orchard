@@ -5,6 +5,9 @@
 
 #include "axes_preview.hpp"
 #include "gpu_view.hpp"
+#include "graph_view.hpp"
+#include "builtin_models.hpp"
+#include "particle_textures.hpp"
 
 #include <grove/app.hpp>
 #include <grove/bundle.hpp>
@@ -171,6 +174,7 @@ const std::vector<Section>& outline_sections() {
         {"fluids", "Fluids", "≈", "Fluid volume"},
         {"particles", "Particles", "✺", "Particle emitter"},
         {"cameras", "Cameras", "▣", "Camera"},
+        {"models", "Models", "◈", "Model"},
         {"scripted", "Scripted", "▸", "Scripted"},
         {"groups", "Groups", "▤", "Group"},
         {"other", "Empty", "○", "Empty"},
@@ -189,6 +193,47 @@ std::string options_of(const std::vector<std::pair<std::string, std::string>>& i
     std::string out;
     for (std::size_t i = 0; i < items.size(); ++i) out += (i ? "|" : "") + items[i].first + "=" + items[i].second;
     return out;
+}
+
+std::string shell_quote(const std::string& s) {
+#ifdef _WIN32
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"') out += "\\\"";
+        else out += c;
+    }
+    return out + "\"";
+#else
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') out += "'\\''";
+        else out += c;
+    }
+    return out + "'";
+#endif
+}
+
+bool launch_detached(const std::string& command) {
+    if (command.empty()) return false;
+#ifdef _WIN32
+    return std::system(("start \"\" " + command).c_str()) == 0;
+#else
+    return std::system(("(" + command + ") >/dev/null 2>&1 &").c_str()) == 0;
+#endif
+}
+
+std::string default_editor_command() {
+    if (const char* v = std::getenv("VISUAL"); v && *v) {
+        const std::string s = v;
+        if (s.find("vi") == std::string::npos && s.find("nano") == std::string::npos && s.find("emacs -nw") == std::string::npos) return s;
+    }
+#ifdef _WIN32
+    return "notepad";
+#elif defined(__APPLE__)
+    return "open -t";
+#else
+    return "xdg-open";
+#endif
 }
 
 std::string read_file(const std::string& path) {
@@ -247,6 +292,7 @@ public:
     bool building() const { return m_build.valid(); }
     orchard::ScriptRuntime& scripts() { return m_scripts; }
     xylem::World* world() { return m_world.get(); }
+    void set_terrain_source(xylem::TerrainSource source) { m_terrain_source = std::move(source); }
 
     void begin(const orchard::Project& project, orchard::Scene& scene) {
         if (m_playing || m_build.valid()) return;
@@ -302,7 +348,10 @@ private:
     void start_now() {
         if (!m_scene || !m_project) return;
         m_world = std::make_unique<xylem::World>(m_scene->dimension(), xylem::Settings::for_project(m_project->info()));
+        m_world->set_asset_root(m_project->folder());
+        if (m_terrain_source) m_world->set_terrain_source(m_terrain_source);
         m_world->build(*m_scene);
+        for (const std::string& w : m_world->warnings()) m_log(w, true);
         m_scripts.set_physics(m_world.get());
         m_scripts.start(*m_project, *m_scene);
         m_time = 0.0;
@@ -328,6 +377,7 @@ private:
     orchard::Scene m_snapshot;
     bool m_playing = false;
     double m_time = 0.0;
+    xylem::TerrainSource m_terrain_source;
 };
 
 class Editor {
@@ -340,6 +390,26 @@ public:
         if (grove::Node* canvas = m_doc.find_by_id("axes-preview")) {
             grove::set_canvas_draw(m_doc, *canvas, [this](grove::GpuCanvasFrame& f) { m_axes_preview.draw(f, m_axes_choice); });
         }
+        if (grove::Node* canvas = m_doc.find_by_id("graph-canvas")) {
+            grove::set_canvas_draw(m_doc, *canvas, [this](grove::GpuCanvasFrame& f) {
+                orchard::editor::GraphView* g = active_graph();
+                (g ? *g : m_no_graph).draw(f);
+            });
+        }
+        m_session.set_terrain_source(m_gpu.terrain().source());
+        orchard::set_height_image_decoder([](const std::string& path, orchard::HeightImage& out, std::string* error) {
+            fizmo::images::BitmapImage img;
+            if (!fizmo::images::load_image(path, img, error)) return false;
+            out.width = static_cast<int>(img.width());
+            out.height = static_cast<int>(img.height());
+            out.bits = 8;
+            out.values.resize(img.pixels().size());
+            for (std::size_t i = 0; i < img.pixels().size(); ++i) {
+                const auto& c = img.pixels()[i];
+                out.values[i] = (c.red() + c.green() + c.blue()) / (3.0f * 255.0f);
+            }
+            return true;
+        });
     }
 
     bool open(const std::string& path, std::string& error) {
@@ -357,10 +427,15 @@ public:
         m_scene = std::move(*s);
         m_selected = orchard::Entity{};
         m_dirty = false;
+        m_graphs.clear();
+        m_graph_open.clear();
+        m_graph_close_warned.clear();
+        redraw_graph();
         m_view.set_dimension(m_project->info().dimension);
         sync_view_axes();
         m_view.reset_camera();
         load_prefs();
+        m_trace_poser.clear();
         m_light_built = false;
         m_light_dirty = true;
         set_animating(wants_animation());
@@ -403,12 +478,13 @@ private:
         const std::string trace = pref("viewport.trace", "off");
         if (trace != "off" && m_project && m_view.dimension() == orchard::Dimension::three_d) {
             chlorophyll::World& lw = light_world();
-            if (m_session.playing() || seconds > 0.0) lw.animate(m_scene, seconds);
             const fizmo::lighting::LightingSettings s = chlorophyll::settings_for(m_project->info(), trace == "photon" ? orchard::LightingLevel::photon : orchard::LightingLevel::path_traced);
             fizmo::lighting::LightingSettings preview = s;
             if (preview.firefly_clamp <= 0.0f) preview.firefly_clamp = 8.0f;
             const bool settling = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_view_moved).count() < 0.2 || m_drag || !m_fly_keys.empty();
             draw_editor_view(f, seconds);
+            if (m_session.playing() || seconds > 0.0) lw.animate(m_scene, seconds);
+            else lw.refresh_geometry(m_scene);
             if (!settling) m_gpu.draw_traced_over(f, lw.lighting_scene(), preview, lw.camera_for(m_view, f.viewport_width, f.viewport_height), 12u);
             return;
         }
@@ -420,7 +496,13 @@ private:
         view_options.culling = pref("viewport.cull", "1") == "1";
         view_options.occlusion = view_options.culling;
         view_options.shadows = pref("viewport.shadows", "1") == "1";
+        {
+            const std::string q = pref("viewport.quality", "medium");
+            view_options.lighting_quality = q == "low" ? 0 : q == "high" ? 2 : q == "ultra" ? 3 : 1;
+        }
         view_options.move_gizmo = m_tool == "move" && !m_session.playing();
+        view_options.rotate_gizmo = m_tool == "rotate" && !m_session.playing();
+        view_options.scale_gizmo = m_tool == "scale" && !m_session.playing();
         view_options.hot_axis = m_move_entity.valid() ? m_move_axis : -1;
         view_options.scene_lights = pref("viewport.lights", "1") == "1";
         view_options.materials = pref("viewport.materials", "1") == "1";
@@ -434,6 +516,25 @@ private:
         if (m_session.playing() != m_particles_were_playing) {
             m_gpu.particles().reset();
             m_particles_were_playing = m_session.playing();
+            m_player_ready = false;
+            if (m_session.playing()) {
+                m_view_before_play = m_view;
+                m_fly_keys.clear();
+            } else if (m_view_before_play) {
+                const unsigned w = m_view.width(), h = m_view.height();
+                m_view = *m_view_before_play;
+                m_view.resize(w, h);
+                m_view_before_play.reset();
+            }
+        }
+        if (m_view.dimension() == orchard::Dimension::three_d) step_animation(f.dt);
+        if (++m_model_check % 60 == 0 && m_gpu.models().reload_changed()) {
+            m_trace_poser.clear();
+            m_light_dirty = true;
+        }
+        if (m_session.playing() && pref("play.use_camera", "1") == "1") {
+            drive_player_camera(static_cast<float>(f.dt));
+            follow_game_camera();
         }
         for (const orchard::ParticleCommand& c : m_session.scripts().take_particle_commands()) m_gpu.particles().command(c.entity, c.action, c.count);
         for (const orchard::ParticleCommand& c : m_particle_commands) m_gpu.particles().command(c.entity, c.action, c.count);
@@ -451,6 +552,7 @@ private:
         m_gpu.set_fluids(&m_fluid_draws);
         m_gpu.set_texture_folder(m_project ? m_project->folder() : std::string());
         m_gpu.draw(f, m_scene, m_selected, m_view, m_session.playing(), seconds);
+        if (m_gpu.terrain().stats().pending > 0) redraw();
     }
 
     void moved_view() {
@@ -524,6 +626,131 @@ private:
         return best;
     }
 
+    int ring_axis_at(float x, float y) const {
+        if (!m_scene.alive(m_selected) || m_view.dimension() == orchard::Dimension::two_d) return -1;
+        const orchard::Vec3 at = xylem::world_position(m_scene, m_selected);
+        const float len = gizmo_length(at);
+        int best = -1;
+        float best_d = 9.0f;
+        for (int i = 0; i < 3; ++i) {
+            orchard::Vec3 a{}, b{};
+            (i == 0 ? a.y : i == 1 ? a.z : a.x) = 1.0f;
+            (i == 0 ? b.z : i == 1 ? b.x : b.y) = 1.0f;
+            float px = 0.0f, py = 0.0f;
+            bool have = false;
+            for (int k = 0; k <= 48; ++k) {
+                const float t = static_cast<float>(k) / 48.0f * 6.2831853f;
+                float qx, qy;
+                if (!m_view.project(at + (a * std::cos(t) + b * std::sin(t)) * len, qx, qy)) {
+                    have = false;
+                    continue;
+                }
+                if (have) {
+                    const float vx = qx - px, vy = qy - py, l2 = vx * vx + vy * vy;
+                    const float u = l2 > 1e-4f ? std::clamp(((x - px) * vx + (y - py) * vy) / l2, 0.0f, 1.0f) : 0.0f;
+                    const float d = std::hypot(x - (px + vx * u), y - (py + vy * u));
+                    if (d < best_d) {
+                        best_d = d;
+                        best = i;
+                    }
+                }
+                px = qx;
+                py = qy;
+                have = true;
+            }
+        }
+        return best;
+    }
+
+    static orchard::Quat axis_angle(orchard::Vec3 axis, float radians) {
+        const orchard::Vec3 n = orchard::normalize(axis);
+        const float h = radians * 0.5f;
+        const float s = std::sin(h);
+        return orchard::Quat{n.x * s, n.y * s, n.z * s, std::cos(h)};
+    }
+
+    bool begin_gizmo(float x, float y) {
+        if (m_session.playing() || m_session.building() || m_view.dimension() == orchard::Dimension::two_d) return false;
+        int axis = -1;
+        orchard::Entity hit;
+        if (m_scene.alive(m_selected)) {
+            const orchard::Vec3 at = xylem::world_position(m_scene, m_selected);
+            float x0, y0;
+            const bool center = m_view.project(at, x0, y0) && std::hypot(x - x0, y - y0) < 16.0f;
+            if (m_tool == "rotate") axis = ring_axis_at(x, y);
+            else axis = center ? 3 : gizmo_axis_at(x, y);
+            if (axis >= 0) hit = m_selected;
+        }
+        if (!m_scene.alive(hit)) {
+            hit = pick_entity(x, y);
+            if (!m_scene.alive(hit)) return false;
+            m_selected = hit;
+            redraw();
+            return false;
+        }
+        const orchard::Transform* t = m_scene.transform(hit);
+        if (!t) return false;
+        m_move_entity = hit;
+        m_move_axis = axis;
+        m_gizmo_mode = m_tool;
+        m_move_start = xylem::world_position(m_scene, hit);
+        m_gizmo_start_rotation = t->rotation;
+        m_gizmo_start_scale = t->scale;
+        m_move_moved = false;
+        m_move_press_x = x;
+        m_move_press_y = y;
+        redraw();
+        return true;
+    }
+
+    void continue_gizmo(float x, float y) {
+        orchard::Transform* t = m_scene.transform(m_move_entity);
+        if (!t) return;
+        if (m_gizmo_mode == "rotate") {
+            float cx, cy;
+            if (!m_view.project(m_move_start, cx, cy)) return;
+            const float a0 = std::atan2(m_move_press_y - cy, m_move_press_x - cx);
+            const float a1 = std::atan2(y - cy, x - cx);
+            float delta = a1 - a0;
+            orchard::Vec3 dir{};
+            (m_move_axis == 0 ? dir.x : m_move_axis == 1 ? dir.y : dir.z) = 1.0f;
+            if (orchard::dot(dir, m_view.view_direction()) < 0.0f) delta = -delta;
+            if (m_snap_rotation) delta = orchard::radians(std::round(orchard::degrees(delta) / 15.0f) * 15.0f);
+            orchard::Quat parent_rot{0.0f, 0.0f, 0.0f, 1.0f};
+            const orchard::Entity parent = m_scene.parent(m_move_entity);
+            if (m_scene.alive(parent)) parent_rot = xylem::world_rotation(m_scene, parent);
+            const orchard::Quat parent_inv{-parent_rot.x, -parent_rot.y, -parent_rot.z, parent_rot.w};
+            t->rotation = orchard::normalize(parent_inv * axis_angle(dir, -delta) * parent_rot * m_gizmo_start_rotation);
+        } else {
+            float factor = 1.0f;
+            if (m_move_axis == 3) {
+                factor = 1.0f + ((x - m_move_press_x) - (y - m_move_press_y)) / 120.0f;
+            } else {
+                const orchard::Quat rot = xylem::world_rotation(m_scene, m_move_entity);
+                orchard::Vec3 local{};
+                (m_move_axis == 0 ? local.x : m_move_axis == 1 ? local.y : local.z) = 1.0f;
+                const orchard::Vec3 dir = orchard::rotate(rot, local);
+                const float len = gizmo_length(m_move_start);
+                float x0, y0, x1, y1;
+                if (!m_view.project(m_move_start, x0, y0) || !m_view.project(m_move_start + dir * len, x1, y1)) return;
+                const float vx = x1 - x0, vy = y1 - y0, l2 = vx * vx + vy * vy;
+                if (l2 < 1.0f) return;
+                factor = 1.0f + ((x - m_move_press_x) * vx + (y - m_move_press_y) * vy) / l2;
+            }
+            factor = std::max(0.01f, factor);
+            orchard::Vec3 s = m_gizmo_start_scale;
+            if (m_move_axis == 3) s = s * factor;
+            else if (m_move_axis == 0) s.x *= factor;
+            else if (m_move_axis == 1) s.y *= factor;
+            else s.z *= factor;
+            t->scale = s;
+        }
+        m_move_moved = true;
+        m_light_dirty = true;
+        m_dirty = true;
+        redraw();
+    }
+
     void set_world_position(orchard::Entity e, orchard::Vec3 world) {
         orchard::Transform* t = m_scene.transform(e);
         if (!t) return;
@@ -539,12 +766,13 @@ private:
     bool begin_move(float x, float y, bool vertical) {
         if (m_session.playing() || m_session.building()) return false;
         int axis = gizmo_axis_at(x, y);
-        orchard::Entity hit = axis >= 0 ? m_selected : m_view.pick(m_scene, x, y);
+        orchard::Entity hit = axis >= 0 ? m_selected : pick_entity(x, y);
         if (!m_scene.alive(hit)) return false;
         if (axis < 0 && vertical) axis = 3;
         m_selected = hit;
         m_move_entity = hit;
         m_move_axis = axis;
+        m_gizmo_mode = "move";
         m_move_start = xylem::world_position(m_scene, hit);
         m_move_moved = false;
         orchard::Vec3 origin, dir;
@@ -565,6 +793,10 @@ private:
 
     void continue_move(float x, float y) {
         if (!m_scene.alive(m_move_entity)) return;
+        if (m_gizmo_mode == "rotate" || m_gizmo_mode == "scale") {
+            continue_gizmo(x, y);
+            return;
+        }
         orchard::Vec3 target = m_move_start;
         if (m_move_axis >= 0) {
             orchard::Vec3 dir{};
@@ -608,6 +840,330 @@ private:
         redraw();
     }
 
+    orchard::editor::GraphView* active_graph() {
+        const auto it = m_graphs.find(m_graph_open);
+        return it == m_graphs.end() ? nullptr : &it->second;
+    }
+
+    void redraw_graph() {
+        if (grove::Node* canvas = m_doc.find_by_id("graph-canvas")) grove::redraw_canvas(m_doc, *canvas);
+    }
+
+    bool graph_point(const std::string& xs, const std::string& ys, float& x, float& y) {
+        const grove::Node* canvas = m_doc.find_by_id("graph-canvas");
+        orchard::editor::GraphView* g = active_graph();
+        if (!canvas || !g) return false;
+        const grove::CanvasRect r = grove::canvas_rect(m_doc, *canvas);
+        if (r.width <= 0.0 || r.height <= 0.0) return false;
+        const double sx = g->width() > 0.0f ? g->width() / r.width : 1.0;
+        const double sy = g->height() > 0.0f ? g->height() / r.height : 1.0;
+        x = static_cast<float>((std::atof(xs.c_str()) - r.x) * sx);
+        y = static_cast<float>((std::atof(ys.c_str()) - r.y) * sy);
+        return true;
+    }
+
+    std::string graph_status_text() {
+        orchard::editor::GraphView* g = active_graph();
+        if (!g) return std::string();
+        const orchard::editor::GraphCompile c = g->compile();
+        const std::string problems = c.errors.empty() ? std::string("Compiles to Walnut") : std::to_string(c.errors.size()) + (c.errors.size() == 1 ? " problem: " : " problems: ") + clean(c.errors.front());
+        return std::string(g->dirty() ? "1" : "0") + "\t" + problems + "\t" + (g->can_undo() ? "1" : "0") + "\t" + (g->can_redo() ? "1" : "0");
+    }
+
+    std::vector<grove::MenuItem> graph_add_items() const {
+        std::vector<grove::MenuItem> items;
+        for (const orchard::editor::GraphCategory& cat : orchard::editor::GraphView::catalog()) {
+            if (!items.empty()) items.push_back(grove::menu_separator());
+            items.push_back(grove::menu_item("", cat.name, "", true));
+            for (const orchard::editor::GraphCatalogEntry& t : cat.types) items.push_back(grove::menu_item("add:" + t.id, "  " + t.title));
+        }
+        return items;
+    }
+
+    std::vector<grove::MenuItem> graph_menu_items(const orchard::editor::GraphHit& hit) const {
+        using orchard::editor::GraphHitKind;
+        std::vector<grove::MenuItem> items;
+        if (hit.kind == GraphHitKind::link) {
+            items.push_back(grove::menu_item("unlink", "Remove this link"));
+            return items;
+        }
+        if (hit.node) {
+            if (hit.kind == GraphHitKind::pin && !hit.output) items.push_back(grove::menu_item("unpin:" + hit.pin, "Disconnect " + hit.pin));
+            items.push_back(grove::menu_item("duplicate", "Duplicate", "Ctrl+D"));
+            items.push_back(grove::menu_item("delete", "Delete", "Del"));
+            items.push_back(grove::menu_separator());
+            items.push_back(grove::menu_item("frame_selected", "Frame selected"));
+            return items;
+        }
+        items = graph_add_items();
+        items.push_back(grove::menu_separator());
+        items.push_back(grove::menu_item("frame", "Frame all", "F"));
+        return items;
+    }
+
+    std::string graph_event_text(const orchard::editor::GraphEvent& ev) {
+        using orchard::editor::GraphEventKind;
+        switch (ev.kind) {
+        case GraphEventKind::edit:
+            m_graph_edit_node = ev.edit.node;
+            m_graph_edit_pin = ev.edit.pin;
+            return "edit\t" + std::to_string(ev.edit.node) + "\t" + ev.edit.pin + "\t" + orchard::graph::to_string(ev.edit.kind) + "\t" + clean(ev.edit.value);
+        case GraphEventKind::error:
+            return "error\t" + clean(ev.message);
+        default:
+            break;
+        }
+        return orchard::editor::to_string(ev.kind);
+    }
+
+    orchard::Entity pick_entity(float x, float y) {
+        const orchard::Entity by_shape = m_view.pick(m_scene, x, y);
+        if (m_view.dimension() != orchard::Dimension::three_d) return by_shape;
+        orchard::Vec3 origin, dir;
+        if (!m_view.ray(x, y, origin, dir)) return by_shape;
+        orchard::Entity by_model;
+        float model_t = 0.0f;
+        if (!m_gpu.models().pick(m_scene, origin, dir, by_model, model_t)) return by_shape;
+        if (!m_scene.alive(by_shape)) return by_model;
+        if (m_scene.colliders(by_shape) == nullptr || m_scene.colliders(by_shape)->empty()) return by_shape;
+        const orchard::Vec3 at = xylem::world_position(m_scene, by_shape);
+        const float shape_t = orchard::dot(at - origin, dir);
+        for (orchard::Entity up = by_shape; m_scene.alive(up); up = m_scene.parent(up))
+            if (up == by_model) return by_shape;
+        return shape_t < model_t ? by_shape : by_model;
+    }
+
+    void fit_model_collider(orchard::Entity e, const std::string& how) {
+        const orchard::Model* md = m_scene.model(e);
+        if (!md) return;
+        orchard::Vec3 lo, hi;
+        if (!m_gpu.models().local_bounds(md->source, lo, hi)) return;
+        std::vector<orchard::Collider>* cs = m_scene.colliders(e);
+        if (cs) cs->erase(std::remove_if(cs->begin(), cs->end(), [&md](const orchard::Collider& c) { return c.source == md->source || c.source.empty(); }), cs->end());
+        if (how == "none") return;
+        orchard::Collider& c = *m_scene.add_collider(e, how == "mesh" ? orchard::ColliderShape::mesh : how == "hull" ? orchard::ColliderShape::convex_hull : how == "capsule" ? orchard::ColliderShape::capsule : orchard::ColliderShape::box);
+        if (how == "mesh" || how == "hull") {
+            c.source = md->source;
+            c.size = {1.0f, 1.0f, 1.0f};
+            c.offset = {};
+            if (how == "mesh")
+                if (orchard::Body* b = m_scene.body(e))
+                    if (b->type == orchard::BodyType::dynamic) c.shape = orchard::ColliderShape::convex_hull;
+            return;
+        }
+        c.size = {std::max(0.01f, hi.x - lo.x), std::max(0.01f, hi.y - lo.y), std::max(0.01f, hi.z - lo.z)};
+        c.offset = (lo + hi) * 0.5f;
+    }
+
+    orchard::Entity place_model(const std::string& source, orchard::Entity parent) {
+        const std::string stem = fs::path(source).stem().string();
+        const orchard::Entity e = m_scene.create(stem.empty() ? "Model" : stem, parent);
+        m_scene.add_model(e).source = source;
+        orchard::Transform* t = m_scene.transform(e);
+        orchard::Vec3 lo, hi;
+        const bool sized = m_gpu.models().local_bounds(source, lo, hi);
+        if (m_scene.dimension() == orchard::Dimension::two_d) {
+            const orchard::Vec2 c = m_view.pan_camera().center;
+            t->position = {c.x, c.y, 0.0f};
+        } else {
+            const orchard::Vec3 up = camera_up_axis();
+            orchard::Vec3 at = m_view.orbit_camera().target;
+            if (xylem::World* w = m_session.world()) {
+                float hit = 0.0f;
+                if (w->raycast(at + up * 50.0f, up * -1.0f, 200.0f, nullptr, nullptr, &hit).valid()) at = at + up * (50.0f - hit);
+            }
+            t->position = sized ? at - up * orchard::dot(lo, up) : at;
+        }
+        if (sized) fit_model_collider(e, "box");
+        if (const fizmo::graphics::Model3D* model = m_gpu.models().model(source))
+            if (!model->animations.empty()) m_scene.add_animator(e);
+        return e;
+    }
+
+    orchard::Entity add_character_hitboxes(orchard::Entity e, orchard::HumanoidKind kind) {
+        const orchard::Model* md = m_scene.model(e);
+        if (!md) return orchard::Entity{};
+        const orchard::editor::ModelInfo info = m_gpu.models().info(md->source);
+        if (!info.ok) return orchard::Entity{};
+        const orchard::Vec3 up = camera_up_axis();
+        const float height = std::max(0.2f, orchard::dot(info.high - info.low, up));
+        const orchard::Entity rig = orchard::add_humanoid(m_scene, kind, e, "Hitboxes", height);
+        if (orchard::Transform* rt = m_scene.transform(rig)) {
+            rt->position = up * orchard::dot(info.low, up);
+            rt->rotation = orchard::Quat{};
+            rt->scale = {1.0f, 1.0f, 1.0f};
+        }
+        m_scene.remove_body(rig);
+        attach_parts_to_bones(e);
+        fit_parts_to_bones(e);
+        return rig;
+    }
+
+    void fit_parts_to_bones(orchard::Entity e) {
+        const orchard::Model* md = m_scene.model(e);
+        if (!md) return;
+        const std::string source = md->source;
+        const orchard::Mat4 model_world = m_scene.world_matrix(e);
+        for (orchard::Entity c : m_scene.subtree(e)) {
+            if (c == e || m_scene.bone(c).empty()) continue;
+            std::vector<orchard::Collider>* cs = m_scene.colliders(c);
+            if (!cs || cs->size() != 1 || (*cs)[0].sensor) continue;
+            orchard::Vec3 head, tail;
+            if (!m_gpu.models().bone_segment(source, m_scene.bone(c), head, tail)) continue;
+            const orchard::Vec3 a = orchard::mul_point(model_world, head), b = orchard::mul_point(model_world, tail);
+            orchard::Vec3 dir = b - a;
+            const float len = orchard::length(dir);
+            if (len < 1e-4f) continue;
+            dir = dir * (1.0f / len);
+            orchard::Collider& col = (*cs)[0];
+            const float thick = std::max(0.02f, std::min(col.size.x, col.size.z));
+            orchard::Quat q;
+            const orchard::Vec3 y{0.0f, 1.0f, 0.0f};
+            const float d = orchard::dot(y, dir);
+            if (d < -0.9999f) q = orchard::Quat{1.0f, 0.0f, 0.0f, 0.0f};
+            else {
+                const orchard::Vec3 ax = orchard::cross(y, dir);
+                q = orchard::normalize(orchard::Quat{ax.x, ax.y, ax.z, 1.0f + d});
+            }
+            const orchard::Mat4 target = orchard::trs((a + b) * 0.5f, q, {1.0f, 1.0f, 1.0f});
+            orchard::Mat4 local = target;
+            const orchard::Entity parent = m_scene.parent(c);
+            orchard::Mat4 pinv;
+            if (m_scene.alive(parent) && orchard::invert(m_scene.world_matrix(parent), pinv)) local = pinv * target;
+            orchard::Transform* t = m_scene.transform(c);
+            if (!t) continue;
+            t->position = {local.at(0, 3), local.at(1, 3), local.at(2, 3)};
+            if (m_scene.alive(parent)) {
+                const orchard::Quat pr = xylem::world_rotation(m_scene, parent);
+                t->rotation = orchard::normalize(orchard::Quat{-pr.x, -pr.y, -pr.z, pr.w} * q);
+            } else {
+                t->rotation = q;
+            }
+            t->scale = {1.0f, 1.0f, 1.0f};
+            col.offset = {};
+            if (col.shape == orchard::ColliderShape::capsule || col.shape == orchard::ColliderShape::cylinder || col.shape == orchard::ColliderShape::box) col.size = {thick, std::max(len, thick), thick};
+        }
+    }
+
+    std::size_t attach_parts_to_bones(orchard::Entity e) {
+        const orchard::Model* md = m_scene.model(e);
+        if (!md) return 0;
+        const orchard::editor::ModelInfo info = m_gpu.models().info(md->source);
+        if (!info.ok || info.bones.empty()) return 0;
+        std::size_t attached = 0;
+        for (orchard::Entity c : m_scene.subtree(e)) {
+            if (c == e) continue;
+            const std::vector<orchard::Collider>* cs = m_scene.colliders(c);
+            if (!cs || cs->empty()) continue;
+            std::string bone = m_scene.bone(c);
+            if (bone.empty()) bone = orchard::editor::guess_bone(info.bones, m_scene.name(c));
+            if (bone.empty()) continue;
+            m_scene.set_bone(c, bone);
+            if (!m_scene.body(c)) m_scene.add_body(c).type = orchard::BodyType::kinematic;
+            else m_scene.body(c)->type = orchard::BodyType::kinematic;
+            ++attached;
+        }
+        return attached;
+    }
+
+    std::string import_files(const std::string& list) {
+        if (!m_project) return "error\topen a project first";
+        std::vector<std::string> picked;
+        std::string line;
+        std::istringstream in(list);
+        while (std::getline(in, line))
+            if (!line.empty()) picked.push_back(line);
+        const fs::path assets = fs::path(m_project->folder()) / "Assets";
+        std::error_code ec;
+        fs::create_directories(assets, ec);
+        std::size_t copied = 0;
+        std::string first;
+        auto copy_one = [&](const fs::path& from, const fs::path& to) {
+            fs::create_directories(to.parent_path(), ec);
+            if (fs::equivalent(from, to, ec)) return true;
+            ec.clear();
+            fs::copy_file(from, to, fs::copy_options::overwrite_existing, ec);
+            return !ec;
+        };
+        for (const std::string& p : picked) {
+            const fs::path from(p);
+            if (!fs::is_regular_file(from, ec)) continue;
+            const fs::path to = assets / from.filename();
+            if (!copy_one(from, to)) continue;
+            ++copied;
+            if (first.empty()) first = fs::path(to).lexically_relative(m_project->folder()).generic_string();
+            std::string ext = from.extension().string();
+            for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (ext == ".fbx") {
+                for (const fs::path& folder : {from.parent_path() / (from.stem().string() + ".fbm"), from.parent_path() / "textures", from.parent_path() / "Textures"}) {
+                    if (!fs::is_directory(folder, ec)) continue;
+                    for (fs::recursive_directory_iterator it(folder, ec), end; it != end && !ec; it.increment(ec)) {
+                        if (!it->is_regular_file(ec)) continue;
+                        copy_one(it->path(), assets / folder.filename() / it->path().lexically_relative(folder));
+                    }
+                    ec.clear();
+                }
+            }
+            if (ext == ".gltf" || ext == ".obj") {
+                const std::string text = read_file(from.string());
+                const std::string key = ext == ".gltf" ? "\"uri\"" : "";
+                std::vector<std::string> refs;
+                if (ext == ".gltf") {
+                    for (std::size_t at = text.find(key); at != std::string::npos; at = text.find(key, at + 1)) {
+                        const std::size_t q1 = text.find('"', text.find(':', at) + 1);
+                        const std::size_t q2 = q1 == std::string::npos ? q1 : text.find('"', q1 + 1);
+                        if (q2 == std::string::npos) break;
+                        const std::string uri = text.substr(q1 + 1, q2 - q1 - 1);
+                        if (uri.rfind("data:", 0) != 0) refs.push_back(uri);
+                    }
+                } else {
+                    std::istringstream lines(text);
+                    std::string l;
+                    while (std::getline(lines, l))
+                        if (l.rfind("mtllib ", 0) == 0) refs.push_back(l.substr(7));
+                    for (std::size_t i = 0; i < refs.size(); ++i) {
+                        const std::string mtl = read_file((from.parent_path() / refs[i]).string());
+                        std::istringstream ml(mtl);
+                        while (std::getline(ml, l)) {
+                            const std::size_t sp = l.find(' ');
+                            if (sp != std::string::npos && l.rfind("map_", 0) == 0) refs.push_back(l.substr(l.find_last_of(' ') + 1));
+                        }
+                    }
+                }
+                for (std::string r : refs) {
+                    while (!r.empty() && (r.back() == '\r' || r.back() == ' ')) r.pop_back();
+                    if (r.empty() || r.find("..") != std::string::npos) continue;
+                    const fs::path src = from.parent_path() / fs::path(r);
+                    if (fs::is_regular_file(src, ec)) copy_one(src, assets / fs::path(r));
+                }
+            }
+        }
+        if (copied == 0) return "error\tnothing was imported";
+        m_gpu.models().reload_changed();
+        return "ok\t" + std::to_string(copied) + "\t" + first;
+    }
+
+    void step_animation(double dt) {
+        const bool running = m_session.playing();
+        orchard::editor::ModelView& mv = m_gpu.models();
+        if (running != m_animation_was_running) {
+            mv.reset_animation();
+            m_animation_was_running = running;
+        }
+        mv.animate(m_scene, dt, running || pref("preview_effects", "0") == "1");
+        if (!running) return;
+        const std::vector<orchard::Entity> moved = mv.follow_bones(m_scene);
+        if (xylem::World* w = m_session.world())
+            for (orchard::Entity e : moved) w->moved(e);
+        orchard::ScriptRuntime& rt = m_session.scripts();
+        for (const orchard::editor::FiredAnimationEvent& ev : mv.take_events()) rt.push_animation_event(ev.entity, ev.name);
+        for (orchard::Entity e : m_scene.entities()) {
+            if (!m_scene.animator(e)) continue;
+            const orchard::editor::AnimationState st = mv.state(e);
+            rt.set_animation_status(e, st.time, st.duration, st.playing);
+        }
+    }
+
     void redraw() {
         if (grove::Node* canvas = m_doc.find_by_id("viewport")) grove::redraw_canvas(m_doc, *canvas);
     }
@@ -642,15 +1198,20 @@ private:
         if (m_scene.body(e)) tags += "body";
         if (m_scene.colliders(e) && !m_scene.colliders(e)->empty()) tags += tags.empty() ? "collider" : " collider";
         if (!m_scene.script(e).empty()) tags += tags.empty() ? "script" : " script";
+        if (m_scene.model(e)) tags += tags.empty() ? "model" : " model";
+        if (m_scene.animator(e)) tags += tags.empty() ? "animated" : " animated";
+        if (!m_scene.bone(e).empty()) tags += (tags.empty() ? "on " : " on ") + clean(m_scene.bone(e));
         out += std::to_string(e.id()) + "\t" + (p.valid() ? std::to_string(p.id()) : std::string()) + "\t" + std::to_string(depth) + "\t" + clean(m_scene.name(e)) + "\t" + tags + "\n";
         for (orchard::Entity c : m_scene.children(e)) walk(c, depth + 1, out);
     }
 
     std::string category(orchard::Entity e) const {
+        if (m_scene.terrain(e)) return "containers";
+        if (m_scene.model(e) && !m_scene.body(e)) return "models";
         if (m_scene.light(e)) return "lights";
         if (m_scene.fluid(e)) return "fluids";
         if (m_scene.emitter(e) && (!m_scene.colliders(e) || m_scene.colliders(e)->empty()) && !m_scene.body(e)) return "particles";
-        if (m_scene.name(e).find("Camera") != std::string::npos) return "cameras";
+        if (m_scene.camera(e) || m_scene.name(e).find("Camera") != std::string::npos) return "cameras";
         const std::vector<orchard::Collider>* cs = m_scene.colliders(e);
         const bool shapes = cs && !cs->empty();
         bool all_sensors = shapes;
@@ -765,7 +1326,27 @@ private:
         if (m_light_dirty || !m_light_built) {
             if (m_project) {
                 m_gpu.set_texture_folder(m_project->folder());
-                m_light_world.set_texture_loader(m_gpu.lighting_textures());
+                const auto base_textures = m_gpu.lighting_textures();
+                m_light_world.set_texture_loader([this, base_textures](const std::string& path, bool color) -> std::shared_ptr<const fizmo::lighting::Texture> {
+                    if (orchard::editor::is_builtin_terrain_texture(path)) {
+                        std::shared_ptr<const fizmo::lighting::Texture>& slot = m_trace_builtin[path];
+                        if (!slot) {
+                            orchard::editor::ParticlePixels px = orchard::editor::generate_builtin_terrain_texture(path, 256);
+                            if (px.width > 0 && px.height > 0) slot = std::make_shared<fizmo::lighting::Texture>(fizmo::lighting::Texture::from_rgba8(static_cast<unsigned>(px.width), static_cast<unsigned>(px.height), std::move(px.rgba), fizmo::lighting::ColorSpace::srgb));
+                        }
+                        return slot;
+                    }
+                    return base_textures ? base_textures(path, color) : nullptr;
+                });
+                m_light_world.set_asset_root(m_project->folder());
+                m_light_world.set_terrain_source(m_gpu.terrain().source());
+                m_light_world.set_model_source([this](orchard::Entity e, const std::string& source) -> std::shared_ptr<const chlorophyll::ModelGeometry> {
+                    const fizmo::graphics::Model3D* model = m_gpu.models().model(source);
+                    if (!model) return nullptr;
+                    const orchard::Animator* an = e.valid() && m_scene.alive(e) ? m_scene.animator(e) : nullptr;
+                    if (!an || pref("viewport.trace", "off") == "off") return m_trace_poser.rest(*model);
+                    return m_trace_poser.posed(e, *model, an->clip, m_gpu.models().state(e).time);
+                });
                 if (!m_light_built) {
                     m_light_world.build(m_scene, m_project->info(), true);
                     m_light_built = true;
@@ -1070,6 +1651,177 @@ private:
             out += field("anim.phase", "Offset (0 to 1, to chase other lights)", "slider", number(a.phase), "0.05");
         }
 
+        group("Camera");
+        const orchard::Camera* cam = m_scene.camera(e);
+        out += field("has_camera", "Game camera (Play looks through it)", "bool", yesno(cam != nullptr));
+        if (cam) {
+            out += field("camera.active", "Player view (Play looks through it)", "bool", yesno(cam->active));
+            out += field("camera.control", "Built-in controls", "select", orchard::to_string(cam->control), options_of({{"none", "None (scripts move it)"}, {"fly", "Fly (W A S D, Q / E, drag to look)"}, {"walk", "Walk (W A S D, Space jumps, drag to look)"}}));
+            if (cam->control != orchard::CameraControl::none) {
+                out += field("camera.move_speed", "Speed (m/s, Shift is 3x)", "float", number(cam->move_speed), "0.5");
+                out += field("camera.mouse_look", "Drag to look around", "bool", yesno(cam->mouse_look));
+                out += field("camera.look_speed", "Look speed (degrees per pixel)", "float", number(cam->look_speed), "0.05");
+                if (cam->control == orchard::CameraControl::walk) out += field("camera.eye_height", "Eye height (m)", "float", number(cam->eye_height), "0.1");
+            }
+            out += field("camera.priority", "Priority (highest active one wins)", "float", std::to_string(cam->priority), "1");
+            if (m_scene.dimension() == orchard::Dimension::two_d) {
+                out += field("camera.view_height", "Shows this much height (m)", "float", number(cam->view_height), "0.5");
+            } else {
+                out += field("camera.fov", "Field of view (degrees)", "float", number(cam->fov), "1");
+                out += field("camera.near_clip", "Nearest it draws (m)", "float", number(cam->near_clip), "0.01");
+                out += field("camera.far_clip", "Farthest it draws (m)", "float", number(cam->far_clip), "10");
+            }
+            out += field("camera_from_view", "Move it to where the view is now", "button", "1");
+        }
+
+        if (!flat) {
+            orchard::editor::ModelView& models = const_cast<orchard::editor::GpuView&>(m_gpu).models();
+            group("Model");
+            const orchard::Model* md = m_scene.model(e);
+            out += field("has_model", "3D model (.glb, .gltf or .obj)", "bool", yesno(md != nullptr), "", "What you see. Colliders stay separate: they're what physics uses.");
+            orchard::editor::ModelInfo info;
+            if (md) {
+                info = models.info(md->source);
+                std::vector<std::pair<std::string, std::string>> files = {{"", "Pick a model file"}};
+                bool listed = md->source.empty();
+                if (m_project)
+                    for (const std::string& f : m_project->models()) {
+                        files.emplace_back(f, f);
+                        listed = listed || f == md->source;
+                    }
+                if (!listed) files.emplace_back(md->source, md->source);
+                std::string about;
+                if (!info.ok) about = info.error.empty() ? std::string("Import a model with Files > Import, or put it in Assets.") : info.error;
+                else {
+                    about = std::to_string(info.triangles) + " triangles, " + std::to_string(info.textures) + (info.textures == 1 ? " texture" : " textures");
+                    if (!info.clips.empty()) about += ", " + std::to_string(info.clips.size()) + (info.clips.size() == 1 ? " animation" : " animations");
+                    if (!info.bones.empty()) about += ", skeleton with " + std::to_string(info.bones.size()) + " bones";
+                    const orchard::Vec3 sz = info.high - info.low;
+                    about += ". Size " + number(sz.x) + " x " + number(sz.y) + " x " + number(sz.z) + " m.";
+                }
+                out += field("model.source", "File", "select", md->source, options_of(files), about);
+                out += field("model.visible", "Visible", "bool", yesno(md->visible));
+                out += field("model.cast_shadows", "Casts shadows", "bool", yesno(md->cast_shadows));
+                if (info.ok) {
+                    std::string shape = "none";
+                    if (const std::vector<orchard::Collider>* cs = m_scene.colliders(e))
+                        for (const orchard::Collider& c : *cs) {
+                            if (c.source == md->source) shape = c.shape == orchard::ColliderShape::mesh ? "mesh" : "hull";
+                            else if (shape == "none") shape = c.shape == orchard::ColliderShape::capsule ? "capsule" : c.shape == orchard::ColliderShape::box ? "box" : "custom";
+                        }
+                    std::vector<std::pair<std::string, std::string>> fits = {{"none", "None (walk through it)"}, {"box", "Box around it (fast)"}, {"capsule", "Capsule around it (characters)"}, {"hull", "Wrapped shape (convex hull)"}, {"mesh", "Exact shape (static things, maps)"}};
+                    if (shape == "custom") fits.emplace_back("custom", "Custom colliders");
+                    out += field("model.collision", "Collision", "select", shape, options_of(fits), "Box and wrapped shapes can move. The exact shape is for things that never move, like buildings and maps.");
+                    if (!info.bones.empty()) {
+                        out += field("model.hitboxes", "Add hitboxes on the skeleton", "select", "", options_of({{"", "Choose..."}, {"basic", "One capsule"}, {"head-and-body", "Head and body"}, {"full-body", "Head, torso, arms, legs"}, {"detailed", "Every limb, bones and organs"}}), "Colliders that follow the animated bones, for hit detection.");
+                        out += field("model.attach_parts", "Attach child colliders to the nearest bones", "button", "1");
+                    }
+                }
+                if (info.ok && !info.clips.empty()) {
+                    group("Animation");
+                    const orchard::Animator* an = m_scene.animator(e);
+                    out += field("has_animator", "Plays animations", "bool", yesno(an != nullptr));
+                    if (an) {
+                        std::vector<std::pair<std::string, std::string>> clips;
+                        float length = 0.0f;
+                        for (const orchard::editor::ModelClip& c : info.clips) {
+                            clips.emplace_back(c.name, c.name + " (" + number(c.duration) + " s)");
+                            if (c.name == an->clip || (an->clip.empty() && length == 0.0f)) length = c.duration;
+                        }
+                        out += field("anim_clip", "Animation", "select", an->clip.empty() ? info.clips.front().name : an->clip, options_of(clips));
+                        out += field("anim_playing", "Playing", "bool", yesno(an->playing));
+                        out += field("anim_loop", "Loop", "bool", yesno(an->loop));
+                        out += field("anim_speed", "Speed (1 = normal, below 0 = backwards)", "float", number(an->speed), "0.1");
+                        out += field("anim_blend", "Blend into the next one (s)", "float", number(an->blend), "0.05");
+                        out += field("anim_start", "Starts at (s); also the pose shown in the editor", "float", number(an->start), "0.05", "The animation is " + number(length) + " s long.");
+                        std::string evs;
+                        const std::string current = an->clip.empty() ? info.clips.front().name : an->clip;
+                        for (const orchard::AnimationEvent& ev : an->events)
+                            if (ev.clip == current) evs += (evs.empty() ? "" : ", ") + number(ev.time) + " " + ev.name;
+                        out += field("anim_events", "Events in this animation (time name, ...)", "string", evs, "", "e.g. 0.3 footstep, 0.8 footstep. Scripts read them with animation_event(entity).");
+                        out += field("anim_preview", "Preview in the editor (also previews particles)", "bool", yesno(pref("preview_effects", "0") == "1"));
+                    }
+                }
+            }
+            const orchard::Entity owner = [&]() {
+                for (orchard::Entity at = m_scene.parent(e); m_scene.alive(at); at = m_scene.parent(at))
+                    if (m_scene.model(at)) return at;
+                return orchard::Entity{};
+            }();
+            if (m_scene.alive(owner)) {
+                const orchard::editor::ModelInfo oi = models.info(m_scene.model(owner)->source);
+                if (oi.ok && !oi.nodes.empty()) {
+                    std::vector<std::pair<std::string, std::string>> bones = {{"", "Nothing (stays where it is)"}};
+                    for (const std::string& b : oi.bones.empty() ? oi.nodes : oi.bones) bones.emplace_back(b, b);
+                    out += field("bone", "Follows bone of " + clean(m_scene.name(owner)), "select", m_scene.bone(e), options_of(bones), "It keeps its offset from the bone and moves with the animation while playing.");
+                }
+            }
+        }
+
+        if (!flat) {
+            group("Terrain");
+            const orchard::Terrain* tr = m_scene.terrain(e);
+            out += field("has_terrain", "Terrain (ground with hills you can sculpt)", "bool", yesno(tr != nullptr));
+            if (tr) {
+                std::vector<std::pair<std::string, std::string>> presets = {{"", "Pick a preset..."}};
+                for (const std::string& p : orchard::terrain_presets()) presets.emplace_back(p, p);
+                out += field("terrain.preset", "Quick pick", "select", "", options_of(presets));
+                std::vector<std::pair<std::string, std::string>> gens;
+                for (const std::string& g : orchard::terrain_generators()) gens.emplace_back(g, g);
+                out += field("terrain.generator", "Shape", "select", tr->generator, options_of(gens), "Changing it regenerates the heights and replaces sculpting.");
+                out += field("terrain.seed", "Seed", "float", std::to_string(tr->seed), "1");
+                out += field("terrain.roughness", "Roughness", "slider", number(tr->roughness), "0.05");
+                out += field("terrain.size", "Size (width, max height, depth in m)", "vec3", vec_text(tr->size), "1");
+                out += field("terrain.resolution", "Detail (samples per side)", "select", std::to_string(tr->resolution), options_of({{"65", "65"}, {"129", "129"}, {"257", "257"}, {"513", "513"}, {"1025", "1025 (large worlds)"}, {"2049", "2049 (huge, slow)"}}));
+                out += field("terrain.friction", "Friction", "float", number(tr->friction), "0.05");
+                out += field("terrain.bounce", "Bounce", "slider", number(tr->restitution), "0.05");
+                out += field("terrain.heightmap", "Heightmap image (16-bit PNG, PGM or .r16 in Assets)", "string", tr->heightmap);
+                out += field("terrain_import", "Import the heightmap (replaces sculpting)", "button", "1");
+                out += field("terrain_regenerate", "Regenerate from the shape and seed", "button", "1");
+                out += field("terrain.data", "Sculpted heights file (saved with the project)", "string", tr->data);
+                for (std::size_t i = 0; i < tr->layers.size(); ++i) {
+                    const orchard::TerrainLayer& l = tr->layers[i];
+                    const std::string b = "terrain.layer:" + std::to_string(i) + ":";
+                    group("Terrain layer " + std::to_string(i + 1) + (i == 0 ? " (base)" : ""));
+                    std::vector<std::pair<std::string, std::string>> layer_images = {{"", "None (just the colour)"}};
+                    for (const orchard::editor::BuiltinTerrainTexture& bt : orchard::editor::builtin_terrain_textures()) layer_images.emplace_back(bt.name, std::string("Built-in: ") + bt.label);
+                    if (m_project)
+                        for (const std::string& img : m_project->images()) layer_images.emplace_back(img, img);
+                    out += field(b + "texture", "Texture", "select", l.texture, options_of(layer_images), "Built-in textures come with their own bumps. The colour tints the texture (white keeps it as it is).");
+                    out += field(b + "normal_map", "Bump map (normal map, optional)", "string", l.normal_map);
+                    out += field(b + "color", "Color", "color", hex_color(l.color));
+                    out += field(b + "tiling", "Texture repeats every (m)", "float", number(l.tiling), "0.5");
+                    if (i > 0) {
+                        out += field(b + "min_height", "From height (0 to 1)", "slider", number(l.min_height), "0.01");
+                        out += field(b + "max_height", "To height (0 to 1)", "slider", number(l.max_height), "0.01");
+                        out += field(b + "min_slope", "From slope (degrees)", "float", number(l.min_slope), "1");
+                        out += field(b + "max_slope", "To slope (degrees)", "float", number(l.max_slope), "1");
+                        out += field(b + "blend", "Blend", "slider", number(l.blend), "0.01");
+                    }
+                    out += field("terrain_remove_layer", "Remove this layer", "button", std::to_string(i));
+                }
+                out += field("terrain_add_layer", "Add a texture layer", "button", "1");
+                for (std::size_t i = 0; i < tr->scatter.size(); ++i) {
+                    const orchard::TerrainScatter& sc = tr->scatter[i];
+                    const std::string b = "terrain.scatter:" + std::to_string(i) + ":";
+                    group("Scatter " + std::to_string(i + 1));
+                    out += field(b + "model", "Model (glTF or OBJ)", "string", sc.model);
+                    out += field(b + "density", "How many per square metre", "float", number(sc.density), "0.001");
+                    out += field(b + "min_scale", "Smallest size", "float", number(sc.min_scale), "0.05");
+                    out += field(b + "max_scale", "Biggest size", "float", number(sc.max_scale), "0.05");
+                    out += field(b + "min_height", "From height (0 to 1)", "slider", number(sc.min_height), "0.01");
+                    out += field(b + "max_height", "To height (0 to 1)", "slider", number(sc.max_height), "0.01");
+                    out += field(b + "max_slope", "Steepest slope (degrees)", "float", number(sc.max_slope), "1");
+                    out += field(b + "align", "Lean with the slope", "bool", yesno(sc.align_to_slope));
+                    out += field(b + "collide", "Solid (the player bumps into it)", "bool", yesno(sc.collide));
+                    out += field(b + "draw_distance", "Draw distance (m)", "float", number(sc.draw_distance), "10");
+                    out += field(b + "seed", "Seed", "float", std::to_string(sc.seed), "1");
+                    out += field("terrain_remove_scatter", "Remove this scatter", "button", std::to_string(i));
+                }
+                out += field("terrain_add_scatter", "Scatter models (trees, rocks...)", "button", "1");
+            }
+        }
+
         group("Particles");
         const orchard::Emitter* pe = m_scene.emitter(e);
         out += field("has_emitter", "Particle emitter (sparks, smoke, fire...)", "bool", yesno(pe != nullptr));
@@ -1091,9 +1843,16 @@ private:
             out += field("emitter.direction", "Direction", "vec3", vec_text(pe->direction), "0.1");
             out += field("emitter.spread", "Spread (degrees, 180 = all around)", "float", number(pe->spread), "1");
             std::vector<std::pair<std::string, std::string>> shapes;
-            for (orchard::EmitterShape sh : orchard::emitter_shapes()) shapes.emplace_back(orchard::to_string(sh), orchard::to_string(sh));
+            for (orchard::EmitterShape sh : orchard::emitter_shapes()) shapes.emplace_back(orchard::to_string(sh), sh == orchard::EmitterShape::fluid_surface ? std::string("the water's surface") : sh == orchard::EmitterShape::parts ? std::string("its colliders (pick parts)") : std::string(orchard::to_string(sh)));
             out += field("emitter.shape", "Comes from", "select", orchard::to_string(pe->shape), options_of(shapes));
-            if (pe->shape != orchard::EmitterShape::point) out += field("emitter.shape_size", "Shape size (m)", "vec3", vec_text(pe->shape_size), "0.1");
+            if (pe->shape == orchard::EmitterShape::parts) {
+                std::string names;
+                for (orchard::Entity c : m_scene.subtree(e))
+                    if (m_scene.colliders(c) && !m_scene.colliders(c)->empty()) names += (names.empty() ? "" : ", ") + m_scene.name(c);
+                out += field("emitter.part", "Only these parts (names, comma separated; empty = all)", "string", pe->part, "", names.empty() ? std::string("This entity and its children have no colliders yet.") : "Parts: " + names);
+            } else if (pe->shape != orchard::EmitterShape::point && pe->shape != orchard::EmitterShape::fluid_surface) {
+                out += field("emitter.shape_size", "Shape size (m)", "vec3", vec_text(pe->shape_size), "0.1");
+            }
             out += field("emitter.gravity", "Gravity (1 = normal, below 0 rises)", "float", number(pe->gravity), "0.05");
             out += field("emitter.drag", "Air drag", "float", number(pe->drag), "0.05");
             out += field("emitter.wind", "Wind (m/s)", "vec3", vec_text(pe->wind), "0.1");
@@ -1106,6 +1865,8 @@ private:
             out += field("emitter.alpha_end", "See-through at the end", "slider", number(pe->alpha_end), "0.05");
             out += field("emitter.glow", "Glow", "float", number(pe->glow), "0.25");
             out += field("emitter.stretch", "Stretch along movement", "float", number(pe->stretch), "0.1");
+            out += field("emitter.soft", "Soft edges where it meets walls and floors", "select", pe->soft, options_of({{"auto", "Automatic (smoke, fire, steam, dust)"}, {"on", "On"}, {"off", "Off"}}));
+            if (pe->soft != "off") out += field("emitter.soft_distance", "Soft edge depth (m, 0 = automatic)", "float", number(pe->soft_distance), "0.05");
             out += field("emitter.blend", "Blend", "select", orchard::to_string(pe->blend), options_of({{"additive", "Adds light (sparks, fire)"}, {"alpha", "Covers (smoke, dust)"}}));
             out += field("emitter.lit", "Lit by the scene's lights", "bool", yesno(pe->lit));
             out += field("emitter.collide", "Bounces off things", "bool", yesno(pe->collide));
@@ -1114,11 +1875,13 @@ private:
                 out += field("emitter.friction", "Friction", "float", number(pe->friction), "0.05");
                 out += field("emitter.die_on_hit", "Disappear when they hit", "bool", yesno(pe->die_on_hit));
             }
-            std::vector<std::pair<std::string, std::string>> images = {{"", "Soft dot"}};
+            std::vector<std::pair<std::string, std::string>> images = {{"", "Automatic (the preset's built-in texture)"}};
+            for (const orchard::editor::BuiltinParticleTexture& b : orchard::editor::builtin_particle_textures()) images.emplace_back(b.name, std::string("Built-in: ") + b.label);
             if (m_project)
                 for (const std::string& img : m_project->images()) images.emplace_back(img, img);
-            out += field("emitter.texture", "Texture", "select", pe->texture, options_of(images));
-            if (!pe->texture.empty()) out += field("emitter.frames", "Frames in the texture (flipbook)", "float", std::to_string(pe->frames), "1");
+            out += field("emitter.texture", "Texture", "select", pe->texture, options_of(images), "Built-in textures animate and rotate by themselves. Images come from the project's Assets folder.");
+            if (!pe->texture.empty() && !orchard::editor::is_builtin_particle_texture(pe->texture))
+                out += field("emitter.frames", "Frames in the texture (flipbook)", "float", std::to_string(pe->frames), "1", "A strip or a grid of square frames, played over each particle's life. Columns and rows are worked out from the image's shape.");
             std::vector<std::pair<std::string, std::string>> deaths = {{"", "Nothing"}};
             for (const std::string& p : orchard::Emitter::presets()) deaths.emplace_back(p, p);
             out += field("emitter.on_death", "When one dies, it makes", "select", pe->on_death, options_of(deaths));
@@ -1153,6 +1916,8 @@ private:
             out += field("fluid.opacity", "Opacity", "slider", number(w->opacity), "0.05");
             out += field("fluid.current", "Current (m/s)", "vec3", vec_text(w->current), "0.1");
             out += field("fluid.wave_height", "Wind waves (m)", "float", number(w->wave_height), "0.05");
+            out += field("fluid.reflectivity", "Reflects (0 = none, 1 = mirror)", "slider", number(w->reflectivity), "0.05");
+            out += field("fluid.reflections", "Reflections", "select", orchard::to_string(w->reflections), reflection_options());
             out += field("fluid.resolution", "Cell or particle size (m, 0 = automatic)", "float", number(w->resolution), "0.05");
             out += field("fluid.infinite", "Refills itself (infinite source)", "bool", yesno(w->infinite));
             out += field("fluid.enabled", "On", "bool", yesno(w->enabled));
@@ -1174,6 +1939,7 @@ private:
             out += field("material.emission_strength", "Glow strength", "float", number(m->emission_strength), "0.5");
             out += field("material.opacity", "Opacity", "slider", number(m->opacity), "0.05");
             out += field("material.reflectivity", "Reflects (0 = matte, 1 = mirror)", "slider", number(m->reflectivity), "0.05");
+            out += field("material.reflections", "Reflections", "select", orchard::to_string(m->reflections), reflection_options());
             std::vector<std::pair<std::string, std::string>> images = {{"", "None"}};
             if (m_project)
                 for (const std::string& img : m_project->images()) images.emplace_back(img, img);
@@ -1305,6 +2071,8 @@ private:
                 w->wave_height = keep.wave_height;
                 w->resolution = keep.resolution;
                 w->infinite = keep.infinite;
+                w->reflectivity = keep.reflectivity;
+                w->reflections = keep.reflections;
                 return "rebuild";
             }
             if (k == "color") return parse_hex_color(value, w->color) ? "ok" : "";
@@ -1312,6 +2080,16 @@ private:
             if (k == "current") return parse_vec3(value, w->current) ? "ok" : "";
             if (k == "infinite") {
                 w->infinite = on;
+                return "ok";
+            }
+            if (k == "reflections") {
+                const auto rm = orchard::parse_reflection_mode(value);
+                if (!rm) return std::string();
+                w->reflections = *rm;
+                return "ok";
+            }
+            if (k == "reflectivity") {
+                w->reflectivity = std::clamp(v, 0.0f, 1.0f);
                 return "ok";
             }
             if (k == "enabled") {
@@ -1347,9 +2125,273 @@ private:
             m_scene.set_instance_of(e, std::string());
             return "rebuild";
         }
+        if (key == "has_terrain") {
+            if (on) {
+                if (!m_scene.terrain(e)) m_scene.add_terrain(e) = orchard::terrain_preset("hills");
+            } else {
+                m_scene.remove_terrain(e);
+            }
+            return "rebuild";
+        }
+        if (key == "terrain_import") {
+            const orchard::Terrain* tr = m_scene.terrain(e);
+            if (!tr || tr->heightmap.empty()) return std::string();
+            std::string error;
+            if (!m_gpu.terrain().import_heightmap(m_scene, e, tr->heightmap, &error)) return "error\t" + error;
+            m_dirty = true;
+            return "ok";
+        }
+        if (key == "terrain_regenerate") return m_gpu.terrain().regenerate(m_scene, e) ? "ok" : "";
+        if (key.rfind("terrain", 0) == 0) {
+            orchard::Terrain* tr = m_scene.terrain(e);
+            if (!tr) return std::string();
+            if (key == "terrain_add_layer") {
+                orchard::TerrainLayer l;
+                if (!tr->layers.empty()) l.min_slope = 35.0f;
+                tr->layers.push_back(l);
+                return "rebuild";
+            }
+            if (key == "terrain_remove_layer" || key == "terrain_remove_scatter") {
+                const std::size_t i = static_cast<std::size_t>(std::atoi(value.c_str()));
+                if (key == "terrain_remove_layer" && i < tr->layers.size()) tr->layers.erase(tr->layers.begin() + static_cast<std::ptrdiff_t>(i));
+                else if (key == "terrain_remove_scatter" && i < tr->scatter.size()) tr->scatter.erase(tr->scatter.begin() + static_cast<std::ptrdiff_t>(i));
+                else return std::string();
+                return "rebuild";
+            }
+            if (key == "terrain_add_scatter") {
+                orchard::TerrainScatter sc;
+                sc.seed = static_cast<std::uint32_t>(tr->scatter.size() + 1);
+                tr->scatter.push_back(sc);
+                return "rebuild";
+            }
+            if (key.rfind("terrain.layer:", 0) == 0 || key.rfind("terrain.scatter:", 0) == 0) {
+                const bool layer = key.rfind("terrain.layer:", 0) == 0;
+                const std::string rest = key.substr(layer ? 14 : 16);
+                const std::size_t colon = rest.find(':');
+                if (colon == std::string::npos) return std::string();
+                const std::size_t i = static_cast<std::size_t>(std::atoi(rest.substr(0, colon).c_str()));
+                const std::string k = rest.substr(colon + 1);
+                if (layer) {
+                    if (i >= tr->layers.size()) return std::string();
+                    orchard::TerrainLayer& l = tr->layers[i];
+                    if (k == "texture") l.texture = value;
+                    else if (k == "normal_map") l.normal_map = value;
+                    else if (k == "color") return parse_hex_color(value, l.color) ? "ok" : "";
+                    else if (k == "tiling") l.tiling = std::max(0.01f, v);
+                    else if (k == "min_height") l.min_height = v;
+                    else if (k == "max_height") l.max_height = v;
+                    else if (k == "min_slope") l.min_slope = v;
+                    else if (k == "max_slope") l.max_slope = v;
+                    else if (k == "blend") l.blend = std::max(0.0f, v);
+                    else return std::string();
+                    return "ok";
+                }
+                if (i >= tr->scatter.size()) return std::string();
+                orchard::TerrainScatter& sc = tr->scatter[i];
+                if (k == "model") sc.model = value;
+                else if (k == "density") sc.density = std::max(0.0f, v);
+                else if (k == "min_scale") sc.min_scale = std::max(0.001f, v);
+                else if (k == "max_scale") sc.max_scale = std::max(0.001f, v);
+                else if (k == "min_height") sc.min_height = v;
+                else if (k == "max_height") sc.max_height = v;
+                else if (k == "max_slope") sc.max_slope = v;
+                else if (k == "align") sc.align_to_slope = on;
+                else if (k == "collide") sc.collide = on;
+                else if (k == "draw_distance") sc.draw_distance = std::max(0.0f, v);
+                else if (k == "seed") sc.seed = static_cast<std::uint32_t>(std::max(0.0f, v));
+                else return std::string();
+                return "ok";
+            }
+            const std::string k = key.substr(8);
+            if (k == "preset") {
+                if (value.empty()) return std::string();
+                const orchard::Terrain keep = *tr;
+                *tr = orchard::terrain_preset(value);
+                tr->data = keep.data;
+                return "rebuild";
+            }
+            if (k == "generator") tr->generator = value;
+            else if (k == "seed") tr->seed = static_cast<std::uint32_t>(std::max(0.0f, v));
+            else if (k == "roughness") tr->roughness = std::clamp(v, 0.0f, 1.0f);
+            else if (k == "size") {
+                if (!parse_vec3(value, vec)) return std::string();
+                tr->size = {std::max(1.0f, vec.x), vec.y, std::max(1.0f, vec.z)};
+            } else if (k == "resolution") tr->resolution = orchard::clamp_terrain_resolution(std::atoi(value.c_str()));
+            else if (k == "friction") tr->friction = std::max(0.0f, v);
+            else if (k == "bounce") tr->restitution = std::max(0.0f, v);
+            else if (k == "heightmap") tr->heightmap = value;
+            else if (k == "data") tr->data = value;
+            else return std::string();
+            return "ok";
+        }
+        if (key == "has_model") {
+            if (on) {
+                if (!m_scene.model(e)) {
+                    orchard::Model& md = m_scene.add_model(e);
+                    if (m_project && !m_project->models().empty()) md.source = m_project->models().front();
+                }
+            } else {
+                m_scene.remove_model(e);
+                m_scene.remove_animator(e);
+            }
+            return "rebuild";
+        }
+        if (key.rfind("model.", 0) == 0) {
+            orchard::Model* md = m_scene.model(e);
+            if (!md) return std::string();
+            const std::string k = key.substr(6);
+            if (k == "source") {
+                const std::string old = md->source;
+                md->source = value;
+                if (std::vector<orchard::Collider>* cs = m_scene.colliders(e))
+                    for (orchard::Collider& c : *cs)
+                        if (c.source == old) c.source = value;
+                if (const fizmo::graphics::Model3D* model = m_gpu.models().model(value))
+                    if (!model->animations.empty() && !m_scene.animator(e)) m_scene.add_animator(e);
+                if (orchard::Animator* an = m_scene.animator(e)) an->clip.clear();
+                m_light_dirty = true;
+                return "rebuild";
+            }
+            if (k == "visible") md->visible = on;
+            else if (k == "cast_shadows") md->cast_shadows = on;
+            else if (k == "collision") {
+                if (value == "custom") return std::string();
+                fit_model_collider(e, value);
+                m_light_dirty = true;
+                return "rebuild";
+            } else if (k == "hitboxes") {
+                const std::optional<orchard::HumanoidKind> hk = orchard::parse_humanoid_kind(value);
+                if (!hk) return std::string();
+                add_character_hitboxes(e, *hk);
+                return "rebuild";
+            } else if (k == "attach_parts") {
+                attach_parts_to_bones(e);
+                return "rebuild";
+            }
+            m_light_dirty = true;
+            return "ok";
+        }
+        if (key == "bone") {
+            m_scene.set_bone(e, value);
+            if (!value.empty() && m_scene.colliders(e) && !m_scene.colliders(e)->empty()) {
+                if (!m_scene.body(e)) m_scene.add_body(e).type = orchard::BodyType::kinematic;
+            }
+            return "rebuild";
+        }
+        if (key == "has_animator") {
+            if (on) m_scene.add_animator(e);
+            else m_scene.remove_animator(e);
+            return "rebuild";
+        }
+        if (key == "anim_preview") {
+            m_prefs["preview_effects"] = on ? "1" : "0";
+            save_prefs();
+            m_preview_start = std::chrono::steady_clock::now();
+            m_gpu.models().reset_animation();
+            set_animating(wants_animation());
+            redraw();
+            return "ok";
+        }
+        if (key.rfind("anim_", 0) == 0) {
+            orchard::Animator* an = m_scene.animator(e);
+            if (!an) return std::string();
+            const std::string k = key.substr(5);
+            if (k == "clip") {
+                an->clip = value;
+                an->start = 0.0f;
+                ++an->restart;
+                return "rebuild";
+            }
+            if (k == "playing") an->playing = on;
+            else if (k == "loop") {
+                an->loop = on;
+                ++an->restart;
+            } else if (k == "speed") an->speed = v;
+            else if (k == "blend") an->blend = std::max(0.0f, v);
+            else if (k == "start") {
+                an->start = std::max(0.0f, v);
+                ++an->restart;
+            } else if (k == "events") {
+                std::string current = an->clip;
+                if (current.empty())
+                    if (const orchard::Model* md = m_scene.model(e)) {
+                        const orchard::editor::ModelInfo info = m_gpu.models().info(md->source);
+                        if (!info.clips.empty()) current = info.clips.front().name;
+                    }
+                an->events.erase(std::remove_if(an->events.begin(), an->events.end(), [&current](const orchard::AnimationEvent& ev) { return ev.clip == current; }), an->events.end());
+                std::string part;
+                std::istringstream in(value);
+                while (std::getline(in, part, ',')) {
+                    std::istringstream one(part);
+                    orchard::AnimationEvent ev;
+                    ev.clip = current;
+                    if (!(one >> ev.time >> ev.name)) continue;
+                    an->events.push_back(ev);
+                }
+            }
+            redraw();
+            return "ok";
+        }
+        if (key == "has_camera") {
+            if (on) {
+                if (!m_scene.camera(e)) m_scene.add_camera(e);
+            } else {
+                m_scene.remove_camera(e);
+            }
+            return "rebuild";
+        }
+        if (key == "camera_from_view") {
+            orchard::Transform* t = m_scene.transform(e);
+            if (!t) return std::string();
+            if (m_scene.dimension() == orchard::Dimension::two_d) {
+                t->position = orchard::Vec3{m_view.pan_camera().center.x, m_view.pan_camera().center.y, t->position.z};
+                if (orchard::Camera* c = m_scene.camera(e)) c->view_height = static_cast<float>(m_view.height()) / std::max(1.0f, m_view.pan_camera().pixels_per_unit);
+            } else {
+                const orchard::Vec3 eye = m_view.eye();
+                t->position = eye;
+                t->rotation = camera_rotation(m_view.orbit_camera().target - eye);
+                if (orchard::Camera* c = m_scene.camera(e)) c->fov = m_view.orbit_camera().fov;
+            }
+            return "rebuild";
+        }
+        if (key.rfind("camera.", 0) == 0) {
+            orchard::Camera* c = m_scene.camera(e);
+            if (!c) return std::string();
+            const std::string k = key.substr(7);
+            if (k == "active") {
+                c->active = on;
+                if (on)
+                    for (orchard::Entity other : m_scene.entities())
+                        if (other != e)
+                            if (orchard::Camera* oc = m_scene.camera(other)) oc->active = false;
+            } else if (k == "control") {
+                const auto cc = orchard::parse_camera_control(value);
+                if (!cc) return std::string();
+                c->control = *cc;
+                return std::string("rebuild");
+            } else if (k == "move_speed") c->move_speed = std::max(0.0f, v);
+            else if (k == "look_speed") c->look_speed = std::max(0.0f, v);
+            else if (k == "eye_height") c->eye_height = std::max(0.0f, v);
+            else if (k == "mouse_look") c->mouse_look = on;
+            else if (k == "priority") c->priority = std::atoi(value.c_str());
+            else if (k == "fov") c->fov = std::clamp(v, 1.0f, 179.0f);
+            else if (k == "near_clip") c->near_clip = std::max(0.0001f, v);
+            else if (k == "far_clip") c->far_clip = std::max(c->near_clip + 0.01f, v);
+            else if (k == "view_height") c->view_height = std::max(0.01f, v);
+            else return std::string();
+            return "ok";
+        }
         if (key == "has_emitter") {
             if (on) {
-                if (!m_scene.emitter(e)) m_scene.add_emitter(e);
+                if (!m_scene.emitter(e)) {
+                    orchard::Emitter& made = m_scene.add_emitter(e);
+                    if (m_scene.fluid(e)) {
+                        if (const std::optional<orchard::Emitter> steam = orchard::Emitter::named("steam")) made = *steam;
+                        made.shape = orchard::EmitterShape::fluid_surface;
+                    } else if (m_scene.colliders(e) && !m_scene.colliders(e)->empty()) {
+                        made.shape = orchard::EmitterShape::parts;
+                    }
+                }
             } else {
                 m_scene.remove_emitter(e);
             }
@@ -1375,8 +2417,14 @@ private:
                 pe->enabled = keep.enabled;
                 pe->autoplay = keep.autoplay;
                 pe->local_space = keep.local_space;
-                pe->texture = keep.texture;
-                pe->frames = keep.frames;
+                if (!keep.texture.empty() && !orchard::editor::is_builtin_particle_texture(keep.texture)) {
+                    pe->texture = keep.texture;
+                    pe->frames = keep.frames;
+                }
+                if (keep.shape == orchard::EmitterShape::fluid_surface || keep.shape == orchard::EmitterShape::parts) {
+                    pe->shape = keep.shape;
+                    pe->part = keep.part;
+                }
                 return "rebuild";
             }
             auto flag = [&](bool& b, bool rebuild) {
@@ -1389,6 +2437,14 @@ private:
             if (k == "lit") return flag(pe->lit, false);
             if (k == "collide") return flag(pe->collide, true);
             if (k == "die_on_hit") return flag(pe->die_on_hit, false);
+            if (k == "soft") {
+                pe->soft = value == "on" || value == "off" ? value : std::string("auto");
+                return std::string("rebuild");
+            }
+            if (k == "soft_distance") {
+                pe->soft_distance = std::max(0.0f, v);
+                return std::string("ok");
+            }
             if (k == "local_space") return flag(pe->local_space, false);
             if (k == "color") return parse_hex_color(value, pe->color) ? "ok" : "";
             if (k == "color_end") return parse_hex_color(value, pe->color_end) ? "ok" : "";
@@ -1408,12 +2464,17 @@ private:
                 return "ok";
             }
             if (k == "texture") {
-                const bool had = !pe->texture.empty();
+                auto image = [](const std::string& t) { return !t.empty() && !orchard::editor::is_builtin_particle_texture(t); };
+                const bool had = image(pe->texture);
                 pe->texture = value;
-                return had != !pe->texture.empty() ? "rebuild" : "ok";
+                return had != image(pe->texture) ? "rebuild" : "ok";
             }
             if (k == "on_death") {
                 pe->on_death = value;
+                return "ok";
+            }
+            if (k == "part") {
+                pe->part = value;
                 return "ok";
             }
             if (k == "burst") {
@@ -1597,6 +2658,12 @@ private:
             if (!m) return std::string();
             m_light_dirty = true;
             const std::string k = key.substr(9);
+            if (k == "reflections") {
+                const auto rm = orchard::parse_reflection_mode(value);
+                if (!rm) return std::string();
+                m->reflections = *rm;
+                return "ok";
+            }
             if (k == "preset") {
                 if (value.empty()) {
                     m->preset.clear();
@@ -1684,6 +2751,172 @@ private:
             return "ok";
         }
         return set_component(e, key, value) ? "ok" : "";
+    }
+
+    orchard::Vec3 camera_forward_axis() const {
+        return orchard::normalize(m_view.axis_system().from_render(orchard::Vec3{0.0f, 0.0f, -1.0f}));
+    }
+
+    orchard::Vec3 camera_up_axis() const {
+        return orchard::normalize(m_view.axis_system().from_render(orchard::Vec3{0.0f, 1.0f, 0.0f}));
+    }
+
+    static orchard::Quat quat_from_basis(orchard::Vec3 x, orchard::Vec3 y, orchard::Vec3 z) {
+        const float m00 = x.x, m10 = x.y, m20 = x.z, m01 = y.x, m11 = y.y, m21 = y.z, m02 = z.x, m12 = z.y, m22 = z.z;
+        orchard::Quat q;
+        const float tr = m00 + m11 + m22;
+        if (tr > 0.0f) {
+            const float s = std::sqrt(tr + 1.0f) * 2.0f;
+            q.w = 0.25f * s;
+            q.x = (m21 - m12) / s;
+            q.y = (m02 - m20) / s;
+            q.z = (m10 - m01) / s;
+        } else if (m00 > m11 && m00 > m22) {
+            const float s = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f;
+            q.w = (m21 - m12) / s;
+            q.x = 0.25f * s;
+            q.y = (m01 + m10) / s;
+            q.z = (m02 + m20) / s;
+        } else if (m11 > m22) {
+            const float s = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f;
+            q.w = (m02 - m20) / s;
+            q.x = (m01 + m10) / s;
+            q.y = 0.25f * s;
+            q.z = (m12 + m21) / s;
+        } else {
+            const float s = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f;
+            q.w = (m10 - m01) / s;
+            q.x = (m02 + m20) / s;
+            q.y = (m12 + m21) / s;
+            q.z = 0.25f * s;
+        }
+        return orchard::normalize(q);
+    }
+
+    orchard::Quat camera_rotation(orchard::Vec3 look) const {
+        const orchard::Vec3 up = camera_up_axis();
+        orchard::Vec3 f = orchard::normalize(look);
+        if (orchard::length(f) < 0.5f) f = camera_forward_axis();
+        orchard::Vec3 r = orchard::cross(f, up);
+        if (orchard::length(r) < 1e-4f) r = orchard::cross(f, camera_forward_axis());
+        r = orchard::normalize(r);
+        const orchard::Vec3 u = orchard::cross(r, f);
+        const orchard::Vec3 f0 = camera_forward_axis();
+        const orchard::Vec3 r0 = orchard::normalize(orchard::cross(f0, up));
+        const orchard::Vec3 u0 = orchard::cross(r0, f0);
+        const orchard::Quat target = quat_from_basis(r, u, f * -1.0f);
+        const orchard::Quat base = quat_from_basis(r0, u0, f0 * -1.0f);
+        const orchard::Quat base_inv{-base.x, -base.y, -base.z, base.w};
+        return orchard::normalize(target * base_inv);
+    }
+
+    std::string reflection_options() const {
+        std::vector<std::pair<std::string, std::string>> opts;
+        for (orchard::ReflectionMode rm : {orchard::ReflectionMode::highlights, orchard::ReflectionMode::surroundings, orchard::ReflectionMode::realistic}) opts.emplace_back(orchard::to_string(rm), orchard::reflection_label(rm));
+        return options_of(opts);
+    }
+
+    orchard::Vec3 look_direction(float yaw, float pitch) const {
+        const float y = orchard::radians(yaw), p = orchard::radians(pitch);
+        return orchard::normalize(m_view.axis_system().from_render(orchard::Vec3{-std::sin(y) * std::cos(p), std::sin(p), -std::cos(y) * std::cos(p)}));
+    }
+
+    void start_player_camera() {
+        m_player_ready = false;
+        const orchard::Entity cam = m_scene.active_camera();
+        const orchard::Camera* c = m_scene.camera(cam);
+        if (!c || c->control == orchard::CameraControl::none || m_view.dimension() != orchard::Dimension::three_d) return;
+        const orchard::Mat4 w = m_scene.world_matrix(cam);
+        orchard::Vec3 f = orchard::normalize(orchard::mul_direction(w, camera_forward_axis()));
+        if (orchard::length(f) < 0.5f) f = camera_forward_axis();
+        const orchard::Vec3 fr = orchard::normalize(m_view.axis_system().to_render(f));
+        m_player_pitch = orchard::degrees(std::asin(std::clamp(fr.y, -0.999f, 0.999f)));
+        m_player_yaw = orchard::degrees(std::atan2(-fr.x, -fr.z));
+        m_player_fall = 0.0f;
+        m_player_ready = true;
+    }
+
+    void drive_player_camera(float dt) {
+        if (!m_player_ready) start_player_camera();
+        if (!m_player_ready) return;
+        const orchard::Entity cam = m_scene.active_camera();
+        const orchard::Camera* c = m_scene.camera(cam);
+        orchard::Transform* t = m_scene.transform(cam);
+        if (!c || !t || c->control == orchard::CameraControl::none) return;
+        dt = std::clamp(dt, 0.0f, 0.1f);
+        orchard::ScriptRuntime& keys = m_session.scripts();
+        const float turn = 90.0f * dt;
+        if (keys.key_down("left")) m_player_yaw += turn;
+        if (keys.key_down("right")) m_player_yaw -= turn;
+        if (keys.key_down("up")) m_player_pitch += turn;
+        if (keys.key_down("down")) m_player_pitch -= turn;
+        m_player_pitch = std::clamp(m_player_pitch, -89.0f, 89.0f);
+        const orchard::Vec3 up = camera_up_axis();
+        const orchard::Vec3 look = look_direction(m_player_yaw, m_player_pitch);
+        const orchard::Vec3 flat_forward = look_direction(m_player_yaw, 0.0f);
+        const orchard::Vec3 right = orchard::normalize(orchard::cross(flat_forward, up));
+        const orchard::Vec3 forward = c->control == orchard::CameraControl::fly ? look : flat_forward;
+        orchard::Vec3 move{};
+        if (keys.key_down("w")) move += forward;
+        if (keys.key_down("s")) move += forward * -1.0f;
+        if (keys.key_down("d")) move += right;
+        if (keys.key_down("a")) move += right * -1.0f;
+        float speed = c->move_speed;
+        if (keys.key_down("shift")) speed *= 3.0f;
+        xylem::World* world = m_session.world();
+        if (c->control == orchard::CameraControl::fly) {
+            if (keys.key_down("e") || keys.key_down("space")) move += up;
+            if (keys.key_down("q")) move += up * -1.0f;
+            if (orchard::length(move) > 0.0f) t->position = t->position + orchard::normalize(move) * (speed * dt);
+        } else {
+            if (orchard::length(move) > 0.0f) {
+                const orchard::Vec3 dir = orchard::normalize(move);
+                float allowed = speed * dt;
+                float hit = 0.0f;
+                if (world && world->raycast(t->position + up * (-c->eye_height * 0.5f), dir, allowed + 0.3f, nullptr, nullptr, &hit).valid()) allowed = std::max(0.0f, hit - 0.3f);
+                if (world && world->raycast(t->position, dir, allowed + 0.3f, nullptr, nullptr, &hit).valid()) allowed = std::min(allowed, std::max(0.0f, hit - 0.3f));
+                t->position = t->position + dir * allowed;
+            }
+            float ground = 0.0f;
+            const bool has_ground = world && world->raycast(t->position, up * -1.0f, c->eye_height + 50.0f, nullptr, nullptr, &ground).valid();
+            const bool grounded = has_ground && ground <= c->eye_height + 0.05f && m_player_fall <= 0.0f;
+            if (!has_ground && m_player_fall <= 0.0f) {
+                m_player_fall = 0.0f;
+            } else if (grounded) {
+                m_player_fall = 0.0f;
+                t->position = t->position + up * (c->eye_height - ground);
+                if (keys.key_down("space")) m_player_fall = 5.0f;
+            } else {
+                m_player_fall -= 9.81f * dt;
+                float step = m_player_fall * dt;
+                if (step < 0.0f && has_ground && ground + step < c->eye_height) step = c->eye_height - ground;
+                t->position = t->position + up * step;
+            }
+        }
+        t->rotation = camera_rotation(look);
+        if (world) world->moved(cam);
+    }
+
+    void follow_game_camera() {
+        const orchard::Entity cam = m_scene.active_camera();
+        if (!m_scene.alive(cam)) return;
+        const orchard::Mat4 w = m_scene.world_matrix(cam);
+        const orchard::Vec3 pos = orchard::mul_point(w, orchard::Vec3{0.0f, 0.0f, 0.0f});
+        const orchard::Camera* settings = m_scene.camera(cam);
+        if (m_view.dimension() == orchard::Dimension::two_d) {
+            m_view.pan_camera().center = orchard::Vec2{pos.x, pos.y};
+            if (settings && m_view.height() > 0) m_view.pan_camera().pixels_per_unit = static_cast<float>(m_view.height()) / std::max(0.01f, settings->view_height);
+            return;
+        }
+        orchard::Vec3 f = orchard::normalize(orchard::mul_direction(w, camera_forward_axis()));
+        if (orchard::length(f) < 0.5f) f = camera_forward_axis();
+        const orchard::Vec3 fr = orchard::normalize(m_view.axis_system().to_render(f));
+        orchard::OrbitCamera& oc = m_view.orbit_camera();
+        oc.distance = 0.01f;
+        oc.target = pos + f * oc.distance;
+        oc.pitch = orchard::degrees(std::asin(std::clamp(-fr.y, -0.999f, 0.999f)));
+        oc.yaw = orchard::degrees(std::atan2(-fr.x, -fr.z));
+        if (settings) oc.fov = settings->fov;
     }
 
     orchard::Transform spawn_spot() {
@@ -1876,9 +3109,17 @@ private:
             items.push_back(grove::menu_item("add:ground", "Add a floor"));
             items.push_back(grove::menu_item("add:trigger", "Add a trigger zone"));
             items.push_back(grove::menu_item("add:light", "Add a light"));
+            items.push_back(grove::menu_item("add:camera", "Add a camera (from this view)"));
+            items.push_back(grove::menu_item("add:player-camera", "Add a player camera (walk with W A S D)"));
             items.push_back(grove::menu_item("add:water", "Add water"));
             items.push_back(grove::menu_item("add:pool", "Add a pool (walls and water)"));
             items.push_back(grove::menu_item("add:hemisphere", "Add a hemisphere"));
+            if (m_scene.dimension() == orchard::Dimension::three_d) {
+                items.push_back(grove::menu_item("add:terrain:hills", "Add terrain (hills; pick other shapes in its properties)"));
+                items.push_back(grove::menu_item("add:terrain:flat", "Add flat terrain (to sculpt with B)"));
+                items.push_back(grove::menu_item("add:terrain:forest", "Add a forest (1 km of hills with trees and rocks)"));
+            }
+            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) items.push_back(grove::menu_item(std::string("add:human:") + orchard::to_string(hk), std::string("Add a character: ") + orchard::humanoid_label(hk)));
             items.push_back(grove::menu_item("add:sparks", "Add sparks"));
             items.push_back(grove::menu_item("add:smoke", "Add smoke"));
             items.push_back(grove::menu_item("add:fire", "Add fire"));
@@ -1991,7 +3232,15 @@ private:
             return "select\t" + std::to_string(c.id());
         }
         if (action == "particles:on") {
-            if (!m_scene.emitter(e)) m_scene.add_emitter(e);
+            if (!m_scene.emitter(e)) {
+                orchard::Emitter& made = m_scene.add_emitter(e);
+                if (m_scene.fluid(e)) {
+                    if (const std::optional<orchard::Emitter> steam = orchard::Emitter::named("steam")) made = *steam;
+                    made.shape = orchard::EmitterShape::fluid_surface;
+                } else if (m_scene.colliders(e) && !m_scene.colliders(e)->empty()) {
+                    made.shape = orchard::EmitterShape::parts;
+                }
+            }
             touched();
             return "changed\t" + std::to_string(e.id());
         }
@@ -2161,7 +3410,7 @@ private:
                      + "\t" + (m_project ? orchard::combine_label(m_project->info().bounce_combine) : "Maximum")
                      + "\t" + number(c.rounding) + "\t" + number(c.rolling_friction) + "\t" + number(c.spinning_friction)
                      + "\t" + number(c.grip.x) + "\t" + number(c.grip.y) + "\t" + number(c.grip.z) + "\t" + shape_names(flat)
-                     + "\t" + number(c.polar_min) + "\t" + number(c.polar_max) + "\t" + number(c.azimuth_min) + "\t" + number(c.azimuth_max) + "\t" + number(c.shell) + "\n";
+                     + "\t" + number(c.polar_min) + "\t" + number(c.polar_max) + "\t" + number(c.azimuth_min) + "\t" + number(c.azimuth_max) + "\t" + number(c.shell) + "\t" + clean(c.source) + "\n";
             }
         }
         return out;
@@ -2284,6 +3533,8 @@ private:
                 const std::optional<orchard::ColliderShape> shape = orchard::parse_collider_shape(value);
                 if (!shape) return false;
                 c.shape = *shape;
+            } else if (what == "source") {
+                c.source = value;
             } else if (what == "sx") c.size.x = std::max(0.001f, v);
             else if (what == "sy") c.size.y = std::max(0.001f, v);
             else if (what == "sz") c.size.z = std::max(0.001f, v);
@@ -2340,12 +3591,44 @@ private:
 
     orchard::Entity add_preset(const std::string& kind, orchard::Entity parent) {
         const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
+        if (kind.rfind("human:", 0) == 0) {
+            const std::optional<orchard::HumanoidKind> hk = orchard::parse_humanoid_kind(kind.substr(6));
+            if (!hk) return orchard::Entity{};
+            const orchard::Entity e = orchard::add_humanoid(m_scene, *hk, parent, *hk == orchard::HumanoidKind::basic ? "Player" : "Character");
+            orchard::Transform* t = m_scene.transform(e);
+            if (flat) {
+                const orchard::Vec2 c = m_view.pan_camera().center;
+                t->position = {c.x, c.y, 0.0f};
+            } else {
+                t->position = m_view.orbit_camera().target;
+            }
+            return e;
+        }
+        if (kind.rfind("terrain:", 0) == 0) {
+            if (flat) return orchard::Entity{};
+            const std::string preset = kind.substr(8);
+            const orchard::Entity e = m_scene.create(preset == "forest" ? "Forest" : "Terrain", parent);
+            orchard::Terrain& t = m_scene.add_terrain(e);
+            t = orchard::terrain_preset(preset);
+            {
+                orchard::TerrainHeights heights;
+                orchard::generate_heights(t, heights);
+                m_scene.transform(e)->position = m_view.orbit_camera().target - camera_up_axis() * heights.height_at(0.0f, 0.0f);
+            }
+            if (m_project)
+                for (const orchard::TerrainScatter& sc : t.scatter)
+                    for (const std::string& b : orchard::editor::builtin_model_names())
+                        if (sc.model == "Assets/Models/" + b + ".glb" && !fs::exists(m_project->path_of(sc.model))) orchard::editor::write_builtin_model(b, m_project->path_of(sc.model));
+            return e;
+        }
         std::string name = "Entity";
         if (kind == "box") name = flat ? "Crate" : "Box";
         else if (kind == "ball") name = "Ball";
         else if (kind == "ground") name = "Ground";
         else if (kind == "trigger") name = "Trigger";
         else if (kind == "light") name = "Light";
+        else if (kind == "camera") name = "Camera";
+        else if (kind == "player-camera") name = "Player camera";
         else if (kind == "water") name = "Water";
         else if (kind == "pool") name = "Pool";
         else if (kind == "hemisphere") name = "Dome";
@@ -2371,6 +3654,29 @@ private:
         } else if (kind == "light") {
             m_scene.add_light(e);
             m_scene.transform(e)->position.y += 3.0f;
+        } else if (kind == "camera" || kind == "player-camera") {
+            for (orchard::Entity other : m_scene.entities())
+                if (orchard::Camera* oc = m_scene.camera(other)) oc->active = false;
+            m_scene.add_camera(e);
+            if (kind == "player-camera") m_scene.camera(e)->control = flat ? orchard::CameraControl::none : orchard::CameraControl::walk;
+            if (flat) {
+                m_scene.camera(e)->view_height = static_cast<float>(m_view.height()) / std::max(1.0f, m_view.pan_camera().pixels_per_unit);
+            } else {
+                const orchard::Vec3 eye = m_view.eye();
+                const orchard::Vec3 target = m_view.orbit_camera().target;
+                orchard::Transform* t = m_scene.transform(e);
+                t->position = eye;
+                t->rotation = camera_rotation(target - eye);
+                if (kind == "player-camera") {
+                    const orchard::Vec3 up = camera_up_axis();
+                    orchard::Vec3 look = target - eye;
+                    look = look - up * orchard::dot(look, up);
+                    if (orchard::length(look) < 1e-4f) look = orchard::cross(up, orchard::Vec3{1.0f, 0.0f, 0.0f});
+                    t->position = target + up * m_scene.camera(e)->eye_height;
+                    t->rotation = camera_rotation(look);
+                }
+                m_scene.camera(e)->fov = m_view.orbit_camera().fov;
+            }
         } else if (kind == "trigger") {
             m_scene.add_body(e).type = orchard::BodyType::fixed;
             orchard::Collider* c = m_scene.add_collider(e);
@@ -2409,6 +3715,190 @@ private:
     void register_natives() {
         native("state", [this](const std::vector<std::string>&) { return state(); });
 
+        native("graph_open", [this](const std::vector<std::string>& f) {
+            if (!m_project) return std::string("error\topen a project first");
+            const std::string rel = arg(f, 0);
+            if (rel.empty() || rel.find("..") != std::string::npos) return std::string("error\tbad graph path");
+            if (!m_graphs.count(rel)) {
+                std::string error;
+                orchard::editor::GraphView view;
+                if (!view.load_text(read_file(m_project->path_of(rel)), &error)) return "error\t" + rel + ": " + clean(error);
+                m_graphs[rel] = view;
+            }
+            m_graph_open = rel;
+            m_graph_close_warned.clear();
+            redraw_graph();
+            return "ok\t" + fs::path(rel).stem().string();
+        });
+
+        native("graph_show", [this](const std::vector<std::string>& f) {
+            const std::string rel = arg(f, 0);
+            if (!rel.empty() && !m_graphs.count(rel)) return std::string("error\tthat graph isn't open");
+            m_graph_open = rel;
+            if (rel.empty()) redraw();
+            else redraw_graph();
+            return std::string("ok");
+        });
+
+        native("graph_tabs", [this](const std::vector<std::string>&) {
+            std::string out;
+            for (const auto& kv : m_graphs) out += kv.first + "\t" + fs::path(kv.first).stem().string() + "\t" + (kv.second.dirty() ? "1" : "0") + "\n";
+            return out;
+        });
+
+        native("graph_close", [this](const std::vector<std::string>& f) {
+            const std::string rel = arg(f, 0);
+            const auto it = m_graphs.find(rel);
+            if (it == m_graphs.end()) return std::string("ok");
+            if (it->second.dirty() && m_graph_close_warned != rel && arg(f, 1) != "force") {
+                m_graph_close_warned = rel;
+                return std::string("dirty");
+            }
+            m_graphs.erase(it);
+            m_graph_close_warned.clear();
+            if (m_graph_open == rel) m_graph_open.clear();
+            return std::string("ok");
+        });
+
+        native("graph_save", [this](const std::vector<std::string>& f) {
+            if (!m_project) return std::string("error\tno project is open");
+            const std::string rel = arg(f, 0).empty() ? m_graph_open : arg(f, 0);
+            const auto it = m_graphs.find(rel);
+            if (it == m_graphs.end()) return std::string("error\tno graph is open");
+            std::ofstream out(m_project->path_of(rel), std::ios::binary | std::ios::trunc);
+            out << it->second.save_text();
+            if (!out) return "error\tcan't write " + rel;
+            it->second.mark_saved();
+            m_graph_close_warned.clear();
+            redraw_graph();
+            return std::string("ok");
+        });
+
+        native("graph_status", [this](const std::vector<std::string>&) { return graph_status_text(); });
+
+        native("graph_press", [this](const std::vector<std::string>& f) {
+            float x, y;
+            orchard::editor::GraphView* g = active_graph();
+            if (!g || !graph_point(arg(f, 0), arg(f, 1), x, y)) return std::string();
+            if (g->press(x, y, std::atoi(arg(f, 2).c_str()), arg(f, 3) == "1", arg(f, 4) == "1")) redraw_graph();
+            return std::string("ok");
+        });
+
+        native("graph_move", [this](const std::vector<std::string>& f) {
+            float x, y;
+            orchard::editor::GraphView* g = active_graph();
+            if (!g || !graph_point(arg(f, 0), arg(f, 1), x, y)) return std::string();
+            if (g->drag(x, y)) redraw_graph();
+            return std::string("ok");
+        });
+
+        native("graph_release", [this](const std::vector<std::string>& f) {
+            float x, y;
+            orchard::editor::GraphView* g = active_graph();
+            if (!g || !graph_point(arg(f, 0), arg(f, 1), x, y)) return std::string();
+            const orchard::editor::GraphEvent ev = g->release(x, y);
+            redraw_graph();
+            if (ev.kind == orchard::editor::GraphEventKind::menu) {
+                m_graph_menu_hit = ev.hit;
+                m_graph_menu_x = x;
+                m_graph_menu_y = y;
+                m_graph_menu_at_cursor = true;
+                if (grove::Node* canvas = m_doc.find_by_id("graph-canvas")) {
+                    const std::vector<grove::MenuItem> items = g->has_pending_link() ? graph_add_items() : graph_menu_items(ev.hit);
+                    grove::open_menu(m_doc, *canvas, items, std::atof(arg(f, 0).c_str()), std::atof(arg(f, 1).c_str()));
+                }
+                return std::string("menu");
+            }
+            return graph_event_text(ev);
+        });
+
+        native("graph_wheel", [this](const std::vector<std::string>& f) {
+            float x, y;
+            orchard::editor::GraphView* g = active_graph();
+            if (!g || !graph_point(arg(f, 0), arg(f, 1), x, y)) return std::string();
+            if (g->wheel(x, y, static_cast<float>(std::atof(arg(f, 2).c_str())))) redraw_graph();
+            return std::string("ok");
+        });
+
+        native("graph_key", [this](const std::vector<std::string>& f) {
+            orchard::editor::GraphView* g = active_graph();
+            if (!g) return std::string();
+            if (!g->key(arg(f, 0), arg(f, 1) == "1", arg(f, 2) == "1")) return std::string();
+            redraw_graph();
+            return std::string("changed");
+        });
+
+        native("graph_add_menu", [this](const std::vector<std::string>& f) {
+            orchard::editor::GraphView* g = active_graph();
+            grove::Node* canvas = m_doc.find_by_id("graph-canvas");
+            if (!g || !canvas) return std::string("error\topen a graph first");
+            g->clear_pending_link();
+            m_graph_menu_at_cursor = false;
+            grove::open_menu(m_doc, *canvas, graph_add_items(), std::atof(arg(f, 0).c_str()), std::atof(arg(f, 1).c_str()));
+            return std::string("ok");
+        });
+
+        native("graph_menu_action", [this](const std::vector<std::string>& f) {
+            orchard::editor::GraphView* g = active_graph();
+            if (!g) return std::string();
+            const std::string key = arg(f, 0);
+            std::string out = "changed";
+            if (key.rfind("add:", 0) == 0) {
+                const std::string type = key.substr(4);
+                const int id = m_graph_menu_at_cursor ? g->add_node(type, m_graph_menu_x, m_graph_menu_y) : g->add_node_centered(type);
+                if (!id) out = "error\tunknown node type " + type;
+            } else if (key == "delete") {
+                g->delete_selected();
+            } else if (key == "duplicate") {
+                g->duplicate_selected();
+            } else if (key == "unlink") {
+                g->remove_link(m_graph_menu_hit.link);
+            } else if (key.rfind("unpin:", 0) == 0) {
+                g->disconnect(m_graph_menu_hit.node, key.substr(6));
+            } else if (key == "frame") {
+                g->frame_all();
+                out = "redraw";
+            } else if (key == "frame_selected") {
+                g->frame_selected();
+                out = "redraw";
+            } else if (key == "undo") {
+                g->undo();
+            } else if (key == "redo") {
+                g->redo();
+            } else {
+                out = "none";
+            }
+            g->clear_pending_link();
+            m_graph_menu_at_cursor = false;
+            redraw_graph();
+            return out;
+        });
+
+        native("graph_set_value", [this](const std::vector<std::string>& f) {
+            orchard::editor::GraphView* g = active_graph();
+            if (!g || !m_graph_edit_node) return std::string("error\tnothing is being edited");
+            if (!g->set_value(m_graph_edit_node, m_graph_edit_pin, arg(f, 0))) return std::string("error\tcan't set that value");
+            redraw_graph();
+            return std::string("changed");
+        });
+
+        native("graph_walnut", [this](const std::vector<std::string>&) {
+            orchard::editor::GraphView* g = active_graph();
+            if (!g) return std::string();
+            const orchard::editor::GraphCompile c = g->compile();
+            std::string code;
+            for (const std::string& e : c.errors) code += "// error: " + e + "\n";
+            return code + c.code;
+        });
+
+        native("graph_catalog", [](const std::vector<std::string>&) {
+            std::string out;
+            for (const orchard::editor::GraphCategory& cat : orchard::editor::GraphView::catalog()) {
+                for (const orchard::editor::GraphCatalogEntry& t : cat.types) out += cat.name + "\t" + t.id + "\t" + t.title + "\n";
+            }
+            return out;
+        });
+
         native("new_project", [this](const std::vector<std::string>& f) {
             const std::optional<orchard::Dimension> d = orchard::parse_dimension(arg(f, 2));
             std::string error;
@@ -2428,6 +3918,10 @@ private:
             if (m_session.playing() || m_session.building()) return std::string("error\tstop playing before saving");
             std::string error;
             if (!m_project->save(&error)) return "error\t" + error;
+            std::vector<std::string> terrain_errors;
+            m_gpu.terrain().save_all(m_scene, &terrain_errors);
+            if (!terrain_errors.empty()) return "error\t" + terrain_errors.front();
+
             if (!m_template_path.empty() && m_main_scene) {
                 if (!m_scene.save_file(m_project->path_of(m_template_path))) return "error\tcan't write " + m_template_path;
                 if (m_main_scene->refresh_instances(m_template_path, m_scene)) m_main_dirty = true;
@@ -2602,9 +4096,11 @@ private:
             m_drag = true;
             m_drag_button = std::atoi(arg(f, 2).c_str());
             const bool shift = arg(f, 3) == "1";
-            m_drag_pan = arg(f, 2) != "1" || (shift && m_tool != "move") || m_tool == "pan";
+            m_drag_pan = arg(f, 2) != "1" || (shift && m_tool != "move" && m_tool != "rotate" && m_tool != "scale") || m_tool == "pan";
             m_move_entity = orchard::Entity{};
+            m_snap_rotation = shift;
             if (m_drag_button == 1 && m_tool == "move") begin_move(x, y, shift);
+            if (m_drag_button == 1 && (m_tool == "rotate" || m_tool == "scale")) begin_gizmo(x, y);
             m_last_x = m_start_x = x;
             m_last_y = m_start_y = y;
             return std::string("ok");
@@ -2618,6 +4114,17 @@ private:
                 m_last_x = x;
                 m_last_y = y;
                 return std::string("ok");
+            }
+            if (m_session.playing() && m_player_ready) {
+                const orchard::Camera* pc = m_scene.camera(m_scene.active_camera());
+                if (pc && pc->mouse_look && pc->control != orchard::CameraControl::none) {
+                    m_player_yaw -= (x - m_last_x) * pc->look_speed;
+                    m_player_pitch = std::clamp(m_player_pitch - (y - m_last_y) * pc->look_speed, -89.0f, 89.0f);
+                    m_last_x = x;
+                    m_last_y = y;
+                    redraw();
+                    return std::string("ok");
+                }
             }
             if (m_drag_pan) m_view.pan(x - m_last_x, y - m_last_y);
             else m_view.orbit(x - m_last_x, y - m_last_y);
@@ -2647,13 +4154,13 @@ private:
             if (!was || !to_canvas(arg(f, 0), arg(f, 1), x, y)) return std::string();
             const float moved = std::fabs(x - m_start_x) + std::fabs(y - m_start_y);
             if (moved <= 4.0f && m_drag_button == 2) {
-                const orchard::Entity hit = m_view.pick(m_scene, x, y);
+                const orchard::Entity hit = pick_entity(x, y);
                 if (m_scene.alive(hit)) m_selected = hit;
                 redraw();
                 return "menu	" + (m_scene.alive(hit) ? std::to_string(hit.id()) : std::string());
             }
             if (moved > 4.0f || m_drag_pan || m_tool == "orbit") return std::string("drag");
-            m_selected = m_view.pick(m_scene, x, y);
+            m_selected = pick_entity(x, y);
             redraw();
             return "pick\t" + (m_scene.alive(m_selected) ? std::to_string(m_selected.id()) : std::string());
         });
@@ -2953,9 +4460,72 @@ private:
             return std::string("ok");
         });
 
+        native("terrain_brush", [this](const std::vector<std::string>& f) {
+            if (const std::optional<orchard::TerrainBrushKind> k = orchard::parse_terrain_brush(arg(f, 0))) m_brush.kind = *k;
+            if (!arg(f, 1).empty()) m_brush.radius = std::max(0.1f, static_cast<float>(std::atof(arg(f, 1).c_str())));
+            if (!arg(f, 2).empty()) m_brush.strength = std::max(0.0f, static_cast<float>(std::atof(arg(f, 2).c_str())));
+            if (!arg(f, 3).empty()) m_brush.falloff = std::clamp(static_cast<float>(std::atof(arg(f, 3).c_str())), 0.0f, 1.0f);
+            if (!arg(f, 4).empty()) m_brush.target = static_cast<float>(std::atof(arg(f, 4).c_str()));
+            return std::string(orchard::to_string(m_brush.kind));
+        });
+
+        native("terrain_pick", [this](const std::vector<std::string>& f) {
+            float x, y;
+            orchard::Vec3 origin, dir, point;
+            orchard::Entity hit;
+            if (!to_canvas(arg(f, 0), arg(f, 1), x, y) || !m_view.ray(x, y, origin, dir) || !m_gpu.terrain().pick(m_scene, origin, dir, 1e5f, hit, point)) {
+                m_gpu.set_terrain_brush(orchard::Entity{}, {}, 0.0f, false);
+                redraw();
+                return std::string();
+            }
+            m_gpu.set_terrain_brush(hit, point, m_brush.radius, m_tool == "sculpt");
+            redraw();
+            return std::to_string(hit.id()) + "\t" + number(point.x) + "\t" + number(point.y) + "\t" + number(point.z) + "\t" + number(m_gpu.terrain().local_height(m_scene, hit, point));
+        });
+
+        native("terrain_sculpt", [this](const std::vector<std::string>& f) {
+            if (m_session.playing() || m_session.building()) return std::string("error\tstop playing before sculpting");
+            const orchard::Entity e = entity(arg(f, 0));
+            const orchard::Vec3 hit{static_cast<float>(std::atof(arg(f, 1).c_str())), static_cast<float>(std::atof(arg(f, 2).c_str())), static_cast<float>(std::atof(arg(f, 3).c_str()))};
+            orchard::TerrainBrush b = m_brush;
+            if (const std::optional<orchard::TerrainBrushKind> k = orchard::parse_terrain_brush(arg(f, 4))) b.kind = *k;
+            if (!arg(f, 5).empty()) b.radius = std::max(0.1f, static_cast<float>(std::atof(arg(f, 5).c_str())));
+            if (!arg(f, 6).empty()) b.strength = std::max(0.0f, static_cast<float>(std::atof(arg(f, 6).c_str())));
+            if (!arg(f, 7).empty()) b.falloff = std::clamp(static_cast<float>(std::atof(arg(f, 7).c_str())), 0.0f, 1.0f);
+            if (!arg(f, 8).empty()) b.target = static_cast<float>(std::atof(arg(f, 8).c_str()));
+            const std::string phase = arg(f, 9);
+            if (phase == "begin") {
+                m_sculpt_entity = e;
+                m_sculpting = true;
+                if (b.kind == orchard::TerrainBrushKind::flatten && arg(f, 8).empty()) m_brush.target = m_gpu.terrain().local_height(m_scene, e, hit);
+            }
+            if (phase == "end") {
+                m_sculpting = false;
+                return std::string("ok");
+            }
+            if (b.kind == orchard::TerrainBrushKind::flatten && arg(f, 8).empty()) b.target = m_brush.target;
+            if (!m_gpu.terrain().sculpt(m_scene, e, hit, b, 1.0f)) return std::string();
+            m_gpu.set_terrain_brush(e, hit, b.radius, true);
+            m_dirty = true;
+            redraw();
+            return std::string("ok");
+        });
+
+        native("terrain_import", [this](const std::vector<std::string>& f) {
+            const orchard::Entity e = entity(arg(f, 0));
+            orchard::Terrain* tr = m_scene.terrain(e);
+            if (!tr) return std::string("error\tpick a terrain first");
+            tr->heightmap = arg(f, 1);
+            std::string error;
+            if (!m_gpu.terrain().import_heightmap(m_scene, e, tr->heightmap, &error)) return "error\t" + error;
+            touched();
+            return std::string("ok");
+        });
+
         native("set_tool", [this](const std::vector<std::string>& f) {
             const std::string t = arg(f, 0);
-            if (t == "select" || t == "move" || t == "orbit" || t == "pan") m_tool = t;
+            if (t == "select" || t == "move" || t == "rotate" || t == "scale" || t == "orbit" || t == "pan" || t == "sculpt") m_tool = t;
+            if (m_tool != "sculpt") m_gpu.set_terrain_brush(orchard::Entity{}, {}, 0.0f, false);
             redraw();
             return m_tool;
         });
@@ -2987,7 +4557,108 @@ private:
             for (const std::string& s : m_project->scripts()) out += "script\t" + s + "\n";
             for (const std::string& s : m_project->graphs()) out += "graph\t" + s + "\n";
             for (const std::string& s : m_project->entity_templates()) out += "entity\t" + s + "\n";
+            for (const std::string& s : m_project->models()) out += "model\t" + s + "\n";
             return out;
+        });
+
+        native("place_model", [this](const std::vector<std::string>& f) {
+            if (!m_project) return std::string("error\topen a project first");
+            if (m_session.playing()) return std::string("error\tstop playing first");
+            const std::string rel = arg(f, 0);
+            if (rel.empty() || rel.find("..") != std::string::npos) return std::string("error\tbad model path");
+            std::string error;
+            if (!m_gpu.models().model(rel, &error)) return "error\t" + clean(error.empty() ? "can't read " + rel : error);
+            const orchard::Entity e = place_model(rel, orchard::Entity{});
+            m_selected = e;
+            m_light_dirty = true;
+            touched();
+            redraw();
+            return "select\t" + std::to_string(e.id());
+        });
+
+        native("import_files", [this](const std::vector<std::string>& f) {
+            std::string list;
+            for (std::size_t i = 0; i < f.size(); ++i) list += (i ? "\n" : "") + f[i];
+            return import_files(list);
+        });
+
+        native("read_text", [this](const std::vector<std::string>& f) {
+            if (!m_project) return std::string();
+            const std::string rel = arg(f, 0);
+            if (rel.find("..") != std::string::npos) return std::string();
+            return read_file(m_project->path_of(rel));
+        });
+
+        native("write_text", [this](const std::vector<std::string>& f) {
+            if (!m_project) return std::string("error\tno project is open");
+            const std::string rel = arg(f, 0);
+            if (rel.empty() || rel.find("..") != std::string::npos) return std::string("error\tbad file name");
+            std::string text;
+            for (std::size_t i = 1; i < f.size(); ++i) text += (i > 1 ? "\t" : "") + f[i];
+            std::ofstream out(m_project->path_of(rel), std::ios::binary | std::ios::trunc);
+            if (!out) return "error\tcan't write " + rel;
+            out << text;
+            if (!out) return "error\tcan't write " + rel;
+            return std::string("ok");
+        });
+
+        native("editor_command", [this](const std::vector<std::string>&) {
+            const std::string mine = pref("editor.command", "");
+            return mine.empty() ? default_editor_command() : mine;
+        });
+
+        native("open_external", [this](const std::vector<std::string>& f) {
+            if (!m_project) return std::string("error\tno project is open");
+            const std::string rel = arg(f, 0);
+            if (rel.find("..") != std::string::npos) return std::string("error\tbad file name");
+            std::string command = pref("editor.command", "");
+            if (command.empty()) command = default_editor_command();
+            const std::string file = m_project->path_of(rel);
+            std::string line;
+            if (command.find("{file}") != std::string::npos) {
+                line = command;
+                line.replace(line.find("{file}"), 6, shell_quote(file));
+            } else {
+                line = command + " " + shell_quote(file);
+            }
+            if (!launch_detached(line)) return "error\tcouldn't run: " + command;
+            return "ok\t" + command;
+        });
+
+        native("open_system", [this](const std::vector<std::string>& f) {
+            if (!m_project) return std::string("error\tno project is open");
+            const std::string rel = arg(f, 0);
+            if (rel.find("..") != std::string::npos) return std::string("error\tbad file name");
+#ifdef _WIN32
+            const std::string line = shell_quote(m_project->path_of(rel));
+#elif defined(__APPLE__)
+            const std::string line = "open " + shell_quote(m_project->path_of(rel));
+#else
+            const std::string line = "xdg-open " + shell_quote(m_project->path_of(rel));
+#endif
+            if (!launch_detached(line)) return std::string("error\tcouldn't open it");
+            return std::string("ok");
+        });
+
+        native("file_menu", [this](const std::vector<std::string>& f) {
+            grove::Node* owner = m_doc.find_by_id("files");
+            if (!owner) return std::string();
+            const std::string rel = arg(f, 0);
+            const bool graph = fs::path(rel).extension() == ".graph";
+            const bool scene_file = fs::path(rel).extension() == ".scene" || fs::path(rel).extension() == ".entity";
+            std::vector<grove::MenuItem> items;
+            if (orchard::is_model_file(rel)) {
+                items.push_back(grove::menu_item("place", "Place it in the scene"));
+                items.push_back(grove::menu_item("system", "Open it with my apps"));
+                const bool ok = grove::open_menu(m_doc, *owner, items, std::atof(arg(f, 1).c_str()), std::atof(arg(f, 2).c_str()));
+                return ok ? std::string("ok") : std::string();
+            }
+            if (graph) items.push_back(grove::menu_item("graph", "Open the graph"));
+            else if (!scene_file) items.push_back(grove::menu_item("here", "Edit in Orchard"));
+            items.push_back(grove::menu_item("external", "Open in my editor (" + (pref("editor.command", "").empty() ? default_editor_command() : pref("editor.command", "")) + ")"));
+            items.push_back(grove::menu_item("preview", graph ? "Show the Walnut it makes" : "Show it below"));
+            const bool ok = grove::open_menu(m_doc, *owner, items, std::atof(arg(f, 1).c_str()), std::atof(arg(f, 2).c_str()));
+            return ok ? std::string("ok") : std::string();
         });
 
         native("read_file", [this](const std::vector<std::string>& f) {
@@ -3011,7 +4682,7 @@ private:
         });
 
         native("outliner_prefs", [this](const std::vector<std::string>&) {
-            return pref("outliner.side", "left") + "\t" + pref("outliner.group", "sections") + "\t" + pref("outliner.sort", "scene") + "\t" + pref("outliner.empty_sections", "0") + "\t" + pref("outliner.collapsed", "") + "\t" + pref("preview_effects", "0") + "\t" + pref("details.open", "1") + "\t" + pref("viewport.trace", "off") + "\t" + pref("viewport.cull", "1") + "\t" + pref("viewport.shadows", "1") + "\t" + pref("viewport.lights", "1") + "\t" + pref("viewport.materials", "1") + "\t" + pref("viewport.particles", "1");
+            return pref("outliner.side", "left") + "\t" + pref("outliner.group", "sections") + "\t" + pref("outliner.sort", "scene") + "\t" + pref("outliner.empty_sections", "0") + "\t" + pref("outliner.collapsed", "") + "\t" + pref("preview_effects", "0") + "\t" + pref("details.open", "1") + "\t" + pref("viewport.trace", "off") + "\t" + pref("viewport.cull", "1") + "\t" + pref("viewport.shadows", "1") + "\t" + pref("viewport.lights", "1") + "\t" + pref("viewport.materials", "1") + "\t" + pref("viewport.particles", "1") + "\t" + pref("viewport.quality", "medium");
         });
 
         native("set_pref", [this](const std::vector<std::string>& f) {
@@ -3083,7 +4754,7 @@ private:
         native("viewport_pick", [this](const std::vector<std::string>& f) {
             float x, y;
             if (!to_canvas(arg(f, 0), arg(f, 1), x, y)) return std::string();
-            const orchard::Entity e = m_view.pick(m_scene, x, y);
+            const orchard::Entity e = pick_entity(x, y);
             return m_scene.alive(e) ? std::to_string(e.id()) : std::string();
         });
     }
@@ -3102,6 +4773,18 @@ private:
     orchard::editor::GpuView m_gpu;
     orchard::editor::AxesPreview m_axes_preview;
     orchard::editor::AxesChoice m_axes_choice;
+    bool m_animation_was_running = false;
+    unsigned m_model_check = 0;
+    std::map<std::string, orchard::editor::GraphView> m_graphs;
+    orchard::editor::GraphView m_no_graph;
+    std::string m_graph_open;
+    std::string m_graph_close_warned;
+    orchard::editor::GraphHit m_graph_menu_hit;
+    float m_graph_menu_x = 0.0f;
+    float m_graph_menu_y = 0.0f;
+    bool m_graph_menu_at_cursor = false;
+    int m_graph_edit_node = 0;
+    std::string m_graph_edit_pin;
     bool m_axes_drag = false;
     float m_axes_x = 0.0f;
     float m_axes_y = 0.0f;
@@ -3114,6 +4797,8 @@ private:
     bool m_drag_pan = false;
     std::map<std::string, std::string> m_prefs;
     chlorophyll::World m_light_world;
+    chlorophyll::ModelPoser m_trace_poser;
+    std::map<std::string, std::shared_ptr<const fizmo::lighting::Texture>> m_trace_builtin;
     bool m_light_built = false;
     bool m_light_dirty = true;
     std::chrono::steady_clock::time_point m_preview_start = std::chrono::steady_clock::now();
@@ -3125,13 +4810,25 @@ private:
     std::vector<xylem::FluidDraw> m_fluid_draws;
     std::vector<orchard::ParticleCommand> m_particle_commands;
     bool m_particles_were_playing = false;
+    std::optional<orchard::Viewport> m_view_before_play;
+    bool m_player_ready = false;
+    float m_player_yaw = 0.0f;
+    float m_player_pitch = 0.0f;
+    float m_player_fall = 0.0f;
     std::chrono::steady_clock::time_point m_particle_burst_until{};
     std::string m_template_path;
     std::optional<orchard::Scene> m_main_scene;
     orchard::Entity m_main_selected;
     bool m_main_dirty = false;
     std::string m_tool = "select";
+    orchard::TerrainBrush m_brush;
+    orchard::Entity m_sculpt_entity;
+    bool m_sculpting = false;
     orchard::Entity m_move_entity;
+    std::string m_gizmo_mode = "move";
+    orchard::Quat m_gizmo_start_rotation;
+    orchard::Vec3 m_gizmo_start_scale{1.0f, 1.0f, 1.0f};
+    bool m_snap_rotation = false;
     int m_move_axis = -1;
     bool m_move_moved = false;
     orchard::Vec3 m_move_start;
@@ -3161,6 +4858,7 @@ int simulate(const std::string& path, double seconds) {
     });
     scripts.set_toolchain(script_toolchain(project->folder()));
     xylem::World world(scene->dimension(), xylem::Settings::for_project(project->info()));
+    world.set_asset_root(project->folder());
     world.build(*scene);
     scripts.set_physics(&world);
     for (const orchard::ScriptBuildResult& r : scripts.build_all(*project, *scene)) {

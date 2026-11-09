@@ -151,6 +151,21 @@ public:
     static long long push_fluid(double x, double y, double radius, double vx, double vy) { return fluid_brush(ORCHARD_FLUID_PUSH, x, y, 0.0, radius, vx, vy, 0.0, 0); }
     static long long splash_fluid(double x, double y, double radius, double strength) { return fluid_brush(ORCHARD_FLUID_EXPLODE, x, y, 0.0, radius, strength, 0.0, 0.0, 0); }
     static long long paint_sand(double x, double y, double radius, long long cell) { return fluid_brush(ORCHARD_FLUID_SAND, x, y, 0.0, radius, 0.0, 0.0, 0.0, cell); }
+    static double animation(const Entity& e, long long action, const std::string& clip, double value) { return ORCHARD_HOST_HAS(detail::host(), animation) ? detail::host()->animation(e.id(), static_cast<int>(action), clip.c_str(), value) : 0.0; }
+    static void play_animation(const Entity& e, const std::string& clip, double fade) { animation(e, ORCHARD_ANIM_PLAY, clip, fade); }
+    static void play_animation_once(const Entity& e, const std::string& clip, double fade) { animation(e, ORCHARD_ANIM_PLAY_ONCE, clip, fade); }
+    static void stop_animation(const Entity& e) { animation(e, ORCHARD_ANIM_STOP, std::string(), 0.0); }
+    static void resume_animation(const Entity& e) { animation(e, ORCHARD_ANIM_RESUME, std::string(), 0.0); }
+    static void set_animation_speed(const Entity& e, double speed) { animation(e, ORCHARD_ANIM_SPEED, std::string(), speed); }
+    static double animation_time(const Entity& e) { return animation(e, ORCHARD_ANIM_TIME, std::string(), 0.0); }
+    static void set_animation_time(const Entity& e, double seconds) { animation(e, ORCHARD_ANIM_SET_TIME, std::string(), seconds); }
+    static double animation_length(const Entity& e) { return animation(e, ORCHARD_ANIM_LENGTH, std::string(), 0.0); }
+    static bool animation_playing(const Entity& e) { return animation(e, ORCHARD_ANIM_PLAYING, std::string(), 0.0) != 0.0; }
+    static std::string animation_event(const Entity& e) {
+        if (!ORCHARD_HOST_HAS(detail::host(), animation_event)) return std::string();
+        const char* s = detail::host()->animation_event(e.id());
+        return s ? std::string(s) : std::string();
+    }
     static void clear_particles(const Entity& e) { if (ORCHARD_HOST_HAS(detail::host(), particles)) detail::host()->particles(e.id(), ORCHARD_PARTICLES_CLEAR, 0); }
 
     static Entity raycast(double ox, double oy, double oz, double dx, double dy, double dz, double max_distance) {

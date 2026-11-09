@@ -161,7 +161,8 @@ public:
     std::size_t instance_count() const { return m_instances.size(); }
     Scene* scene() const { return m_scene; }
     ScriptPhysics* physics() const { return m_physics; }
-    bool key_down(const std::string& key) const { return m_keys.count(key) > 0; }
+    bool key_down(const std::string& key) const { return m_keys.count(key) > 0 || m_keys.count(key_name(key)) > 0; }
+    static std::string key_name(const std::string& key);
     void log(const std::string& message, bool error) const;
 
     static std::string entity_template_file(const std::string& name);
@@ -169,6 +170,10 @@ public:
     Entity instantiate(const std::string& entity_template, const Transform& at, Entity parent = Entity{});
     void particles(Entity e, int action, int count);
     std::vector<ParticleCommand> take_particle_commands();
+    double animation(Entity e, int action, const std::string& clip, double value);
+    std::string next_animation_event(Entity e);
+    void push_animation_event(Entity e, const std::string& name);
+    void set_animation_status(Entity e, double time, double length, bool playing);
 
     static ScriptHooks find_hooks(const std::string& source);
     static std::string with_hooks(const std::string& source, const ScriptHooks& hooks);
@@ -198,6 +203,14 @@ private:
     const Project* m_project = nullptr;
     std::map<std::string, std::optional<Scene>> m_templates;
     std::vector<ParticleCommand> m_particle_commands;
+    struct AnimationStatus {
+        double time = 0.0;
+        double length = 0.0;
+        bool playing = false;
+    };
+    std::map<std::uint64_t, AnimationStatus> m_animation_status;
+    std::map<std::uint64_t, std::vector<std::string>> m_animation_events;
+    std::string m_event_text;
     std::vector<std::size_t> m_pending_starts;
     int m_call_depth = 0;
     std::set<std::string> m_keys;

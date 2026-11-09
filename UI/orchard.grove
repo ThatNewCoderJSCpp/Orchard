@@ -51,8 +51,11 @@
                 <button id="view-2d" class="seg">2D</button>
                 <button id="view-3d" class="seg">3D</button>
                 <button id="reset-cam" class="ghost">Reset view</button>
-                <input_select id="render-mode" value="off" class="add-kind" title="Render the viewport with the GPU path tracer">
-                    <option value="off">Editor view</option>
+                <input_select id="render-mode" value="medium" class="add-kind" title="Lighting quality. Low to Ultra run at game speed (Ultra is like Voxelspire's Ultra). Path traced and Photons are slow, exact previews that clear up over time.">
+                    <option value="low">Lighting: Low</option>
+                    <option value="medium">Lighting: Medium</option>
+                    <option value="high">Lighting: High</option>
+                    <option value="ultra">Lighting: Ultra</option>
                     <option value="path">Path traced (GPU)</option>
                     <option value="photon">Photons (GPU)</option>
                 </input_select>
@@ -109,6 +112,14 @@
                             <option value="water">Water</option>
                             <option value="pool">Pool (walls and water)</option>
                             <option value="hemisphere">Hemisphere</option>
+                            <option value="human:basic">Character (one capsule)</option>
+                            <option value="human:head-and-body">Character (head and body)</option>
+                            <option value="human:full-body">Character (head, torso, arms, legs)</option>
+                            <option value="human:detailed">Character (limbs, bones, organs)</option>
+                            <option value="terrain:hills">Terrain (hills)</option>
+                            <option value="terrain:mountains">Terrain (mountains)</option>
+                            <option value="terrain:flat">Terrain (flat, for sculpting)</option>
+                            <option value="terrain:forest">Forest (terrain with trees)</option>
                             <option value="sparks">Sparks</option>
                             <option value="smoke">Smoke</option>
                             <option value="fire">Fire</option>
@@ -126,16 +137,77 @@
                         <button id="template-discard" class="small ghost">Discard changes</button>
                         <button id="template-done" class="small primary">Save and go back</button>
                     </row>
-                    <row class="viewbar">
+                    <row id="center-tabs" class="center-tabs hidden">
+                        <button id="tab-scene" class="ctab on">&#9635; Scene</button>
+                        <button id="tab-script" class="ctab hidden">Script</button>
+                        <button id="tab-script-close" class="ctab-x hidden" title="Close the script">&#215;</button>
+                        <button id="tab-graph" class="ctab hidden">Graph</button>
+                        <button id="tab-graph-close" class="ctab-x hidden" title="Close the graph">&#215;</button>
+                    </row>
+                    <column id="script-view" class="script-view hidden">
+                        <row class="viewbar">
+                            <text id="script-name" class="script-name">Script</text>
+                            <text id="script-state" class="muted"></text>
+                            <div class="grow"></div>
+                            <text class="muted">Open with</text>
+                            <input_string id="editor-command" class="editor-command" placeholder="code, kate, gedit..." />
+                            <button id="script-external" class="small ghost" title="Open this file in the editor named on the left (put {file} anywhere in the command to place the file name)">Open in my editor</button>
+                            <button id="script-reload" class="small ghost">Reload</button>
+                            <button id="script-save" class="small primary">Save</button>
+                        </row>
+                        <input_code id="script-editor" language="walnut" class="script-editor"></input_code>
+                    </column>
+                    <column id="graph-view" class="script-view hidden">
+                        <row class="viewbar">
+                            <button id="graph-save" class="small primary" title="Write the graph to its file (Ctrl+S)">Save</button>
+                            <button id="graph-add" class="small" title="Add a node in the middle of the view (or right-click empty space)">+ Add node</button>
+                            <button id="graph-frame" class="small ghost" title="Fit every node in the view (F)">Frame all</button>
+                            <button id="graph-undo" class="small ghost" title="Ctrl+Z">Undo</button>
+                            <button id="graph-redo" class="small ghost" title="Ctrl+Y">Redo</button>
+                            <button id="graph-walnut" class="small ghost" title="Show the Walnut this graph turns into">Show Walnut</button>
+                            <row id="graph-edit" class="graph-edit hidden">
+                                <text id="graph-edit-label" class="hint"></text>
+                                <input_string id="graph-edit-value" />
+                                <button id="graph-edit-ok" class="small primary">Set</button>
+                                <button id="graph-edit-cancel" class="small ghost">Cancel</button>
+                            </row>
+                            <div class="grow"></div>
+                            <text id="graph-status" class="hint"></text>
+                        </row>
+                        <gpu_canvas id="graph-canvas" tabindex="0"></gpu_canvas>
+                        <text class="hint overlay">Drag a header: move &#183; Drag from a pin: connect &#183; Click a value: edit &#183; Right-click: add &amp; options &#183; Right / middle drag: pan &#183; Wheel: zoom &#183; Del, Ctrl+D, Ctrl+Z, F</text>
+                    </column>
+                    <row class="viewbar" id="scene-bar">
                         <button id="tool-select" class="seg tool on" title="Click something to select it and see its details. Drag empty space to orbit.">&#10148; Select</button>
                         <button id="tool-move" class="seg tool" title="Drag something to slide it along the ground. Drag one of its arrows to move along that axis. Shift-drag moves it up and down. (G)">&#10021; Move</button>
-                        <button id="tool-orbit" class="seg tool" title="Drag anywhere to orbit around the view's center">&#10227; Orbit</button>
+                        <button id="tool-rotate" class="seg tool" title="Drag one of the rings to turn the selection around that axis. Hold Shift to snap to 15 degrees. (R)">&#10227; Rotate</button>
+                        <button id="tool-scale" class="seg tool" title="Drag a handle to stretch along that axis, or drag the middle to resize evenly. (T)">&#9635; Scale</button>
+                        <button id="tool-orbit" class="seg tool" title="Drag anywhere to orbit around the view's center">&#8635; Orbit</button>
                         <button id="tool-pan" class="seg tool" title="Drag anywhere to slide the view">&#9995; Pan</button>
+                        <button id="tool-sculpt" class="seg tool" title="Paint hills and valleys on a terrain. Drag on the ground. (B)">&#9968; Sculpt</button>
                         <div class="grow"></div>
-                        <text class="hint">W A S D or arrows: move &#183; Q / E: down / up &#183; Shift: faster</text>
+                        <text class="hint" title="W A S D or arrows: move · Q / E: down / up · Shift: faster">WASD: fly</text>
+                    </row>
+                    <row id="sculpt-bar" class="viewbar sculpt-bar hidden">
+                        <input_select id="brush-kind" value="raise" class="add-kind" title="What the brush does">
+                            <option value="raise">Raise</option>
+                            <option value="lower">Lower</option>
+                            <option value="smooth">Smooth</option>
+                            <option value="flatten">Flatten</option>
+                            <option value="noise">Roughen</option>
+                            <option value="set-height">Set height</option>
+                        </input_select>
+                        <text class="hint">Size</text>
+                        <input_float id="brush-radius" value="8" step="1" title="Brush radius (m)" />
+                        <text class="hint">Strength</text>
+                        <input_float id="brush-strength" value="0.5" step="0.1" title="Raise/lower: metres per dab. Smooth/flatten: 0 to 1" />
+                        <text class="hint">Softness</text>
+                        <input_float id="brush-falloff" value="0.5" step="0.1" title="0 = hard edge, 1 = soft all the way" />
+                        <text class="hint">Height</text>
+                        <input_float id="brush-height" value="0" step="0.5" title="Set-height target (m). Flatten uses the height you start on." />
                     </row>
                     <gpu_canvas id="viewport" tabindex="0"></gpu_canvas>
-                    <text class="hint overlay">Click: select &#183; Right-click: options &#183; Drag: orbit &#183; Right drag: pan &#183; Wheel: zoom &#183; Keys go to scripts while playing</text>
+                    <text id="scene-hint" class="hint overlay">Click: select &#183; Right-click: options &#183; Drag: orbit &#183; Right drag: pan &#183; Wheel: zoom &#183; Keys go to scripts while playing</text>
                 </column>
 
                 <column class="side right">
@@ -236,7 +308,13 @@
                     <div id="code-title" class="muted code-title">Pick a script or graph in Files. Graphs show the Walnut they turn into.</div>
                 </row>
                 <page id="files-page" current>
-                    <column id="files" class="scroll files"></column>
+                    <column class="files-page">
+                        <row class="files-bar">
+                            <input_file id="import-files" filter="Models and images: *.glb *.gltf *.obj *.fbx *.png *.jpg *.jpeg *.tga *.webp; Models: *.glb *.gltf *.obj *.fbx; All files: *" multiple hide-value title="Copy models (glTF/GLB from Blender, OBJ) and images into the project's Assets folder">Import...</input_file>
+                            <text class="muted">Blender: File &gt; Export &gt; glTF 2.0 (.glb). Click a model to place it, right-click for more.</text>
+                        </row>
+                        <column id="files" class="scroll files"></column>
+                    </column>
                 </page>
                 <page id="entities-page">
                     <column class="entities-page">

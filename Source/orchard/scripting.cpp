@@ -416,6 +416,16 @@ void host_particles(orchard_entity e, int action, int count) {
     if (g_runtime) rt().particles(entity_of(e), action, count);
 }
 
+double host_animation(orchard_entity e, int action, const char* clip, double value) {
+    return g_runtime ? rt().animation(entity_of(e), action, clip ? std::string(clip) : std::string(), value) : 0.0;
+}
+
+const char* host_animation_event(orchard_entity e) {
+    static std::string last;
+    last = g_runtime ? rt().next_animation_event(entity_of(e)) : std::string();
+    return last.c_str();
+}
+
 } // namespace
 
 void set_current_runtime(ScriptRuntime* runtime) {
@@ -449,6 +459,8 @@ const orchard_host_api& host_table() {
         t.instantiate = &host_instantiate;
         t.particles = &host_particles;
         t.fluid_brush = &host_fluid_brush;
+        t.animation = &host_animation;
+        t.animation_event = &host_animation_event;
         return t;
     }();
     return table;
@@ -878,9 +890,32 @@ std::vector<std::string> ScriptRuntime::loaded_modules() const {
     return out;
 }
 
+std::string ScriptRuntime::key_name(const std::string& key) {
+    std::string k;
+    for (char c : key)
+        if (c != ' ' && c != '_' && c != '-') k += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (k == "up" || k == "uparrow" || k == "arrowup") return "up";
+    if (k == "down" || k == "downarrow" || k == "arrowdown") return "down";
+    if (k == "left" || k == "leftarrow" || k == "arrowleft") return "left";
+    if (k == "right" || k == "rightarrow" || k == "arrowright") return "right";
+    if (k == "leftshift" || k == "rightshift" || k == "shiftleft" || k == "shiftright") return "shift";
+    if (k == "leftcontrol" || k == "rightcontrol" || k == "controlleft" || k == "controlright" || k == "control" || k == "leftctrl" || k == "rightctrl") return "ctrl";
+    if (k == "leftalt" || k == "rightalt" || k == "altleft" || k == "altright") return "alt";
+    if (k == " " || k == "spacebar" || k.empty()) return key == " " ? std::string("space") : k;
+    if (k == "return") return "enter";
+    if (k == "esc") return "escape";
+    return k;
+}
+
 void ScriptRuntime::set_key(const std::string& key, bool down) {
-    if (down) m_keys.insert(key);
-    else m_keys.erase(key);
+    const std::string k = key_name(key);
+    if (down) {
+        m_keys.insert(key);
+        m_keys.insert(k);
+    } else {
+        m_keys.erase(key);
+        m_keys.erase(k);
+    }
 }
 
 void ScriptRuntime::log(const std::string& message, bool error) const {
@@ -1241,6 +1276,74 @@ void ScriptRuntime::particles(Entity e, int action, int count) {
     if (m_particle_commands.size() < 100000) m_particle_commands.push_back(ParticleCommand{e, action, count});
 }
 
+double ScriptRuntime::animation(Entity e, int action, const std::string& clip, double value) {
+    if (!m_scene || !m_scene->alive(e)) return 0.0;
+    Entity target = e;
+    if (!m_scene->animator(target) && !m_scene->model(target)) {
+        for (Entity c : m_scene->subtree(e))
+            if (m_scene->animator(c) || m_scene->model(c)) {
+                target = c;
+                break;
+            }
+    }
+    const auto status = m_animation_status.find(target.id());
+    if (action == ORCHARD_ANIM_TIME) return status == m_animation_status.end() ? 0.0 : status->second.time;
+    if (action == ORCHARD_ANIM_LENGTH) return status == m_animation_status.end() ? 0.0 : status->second.length;
+    if (action == ORCHARD_ANIM_PLAYING) {
+        const Animator* a = m_scene->animator(target);
+        return a && a->playing && status != m_animation_status.end() && status->second.playing ? 1.0 : 0.0;
+    }
+    if (!m_scene->model(target) && !m_scene->animator(target)) return 0.0;
+    Animator& a = m_scene->add_animator(target);
+    switch (action) {
+    case ORCHARD_ANIM_PLAY:
+    case ORCHARD_ANIM_PLAY_ONCE:
+        if (!clip.empty()) a.clip = clip;
+        a.loop = action == ORCHARD_ANIM_PLAY;
+        a.blend = static_cast<float>(std::max(0.0, value));
+        a.start = 0.0f;
+        a.playing = true;
+        ++a.restart;
+        break;
+    case ORCHARD_ANIM_STOP: a.playing = false; break;
+    case ORCHARD_ANIM_RESUME: a.playing = true; break;
+    case ORCHARD_ANIM_SPEED: a.speed = static_cast<float>(value); break;
+    case ORCHARD_ANIM_SET_TIME:
+        a.start = static_cast<float>(std::max(0.0, value));
+        ++a.restart;
+        break;
+    default: break;
+    }
+    return 0.0;
+}
+
+std::string ScriptRuntime::next_animation_event(Entity e) {
+    auto it = m_animation_events.find(e.id());
+    if (it == m_animation_events.end() || it->second.empty()) {
+        if (m_scene && m_scene->alive(e))
+            for (Entity c : m_scene->subtree(e)) {
+                auto ci = m_animation_events.find(c.id());
+                if (ci != m_animation_events.end() && !ci->second.empty()) {
+                    it = ci;
+                    break;
+                }
+            }
+        if (it == m_animation_events.end() || it->second.empty()) return std::string();
+    }
+    const std::string out = it->second.front();
+    it->second.erase(it->second.begin());
+    return out;
+}
+
+void ScriptRuntime::push_animation_event(Entity e, const std::string& name) {
+    std::vector<std::string>& q = m_animation_events[e.id()];
+    if (q.size() < 256) q.push_back(name);
+}
+
+void ScriptRuntime::set_animation_status(Entity e, double time, double length, bool playing) {
+    m_animation_status[e.id()] = AnimationStatus{time, length, playing};
+}
+
 std::vector<ParticleCommand> ScriptRuntime::take_particle_commands() {
     std::vector<ParticleCommand> out;
     out.swap(m_particle_commands);
@@ -1253,6 +1356,8 @@ bool ScriptRuntime::start(const Project& project, Scene& scene) {
     m_project = &project;
     m_templates.clear();
     m_particle_commands.clear();
+    m_animation_status.clear();
+    m_animation_events.clear();
     m_pending_starts.clear();
     m_time = 0.0;
     m_instances.clear();

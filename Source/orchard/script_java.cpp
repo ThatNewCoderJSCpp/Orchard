@@ -79,6 +79,14 @@ jlong JNICALL n_instantiate(JNIEnv* env, jclass, jstring path, jdouble x, jdoubl
 void JNICALL n_particles(JNIEnv*, jclass, jlong e, jint action, jint count) {
     if (ORCHARD_HOST_HAS(&host(), particles)) host().particles(static_cast<orchard_entity>(e), action, count);
 }
+jdouble JNICALL n_animation(JNIEnv* env, jclass, jlong e, jint action, jstring clip, jdouble value) {
+    if (!ORCHARD_HOST_HAS(&host(), animation)) return 0.0;
+    return host().animation(static_cast<orchard_entity>(e), action, clip ? utf(env, clip).c_str() : "", value);
+}
+jstring JNICALL n_animation_event(JNIEnv* env, jclass, jlong e) {
+    const char* s = ORCHARD_HOST_HAS(&host(), animation_event) ? host().animation_event(static_cast<orchard_entity>(e)) : "";
+    return env->NewStringUTF(s ? s : "");
+}
 jint JNICALL n_fluid(JNIEnv*, jclass, jint brush, jdouble x, jdouble y, jdouble radius, jdouble vx, jdouble vy, jint material) {
     if (!ORCHARD_HOST_HAS(&host(), fluid_brush)) return 0;
     return host().fluid_brush(brush, x, y, 0.0, radius, vx, vy, 0.0, material);
@@ -207,6 +215,8 @@ JNIEnv* start_jvm(const ScriptToolchain& tools, const std::string& api_dir, std:
         {const_cast<char*>("instantiate"), const_cast<char*>("(Ljava/lang/String;DDDJ)J"), reinterpret_cast<void*>(&n_instantiate)},
         {const_cast<char*>("particles"), const_cast<char*>("(JII)V"), reinterpret_cast<void*>(&n_particles)},
         {const_cast<char*>("fluid"), const_cast<char*>("(IDDDDDI)I"), reinterpret_cast<void*>(&n_fluid)},
+        {const_cast<char*>("animation"), const_cast<char*>("(JILjava/lang/String;D)D"), reinterpret_cast<void*>(&n_animation)},
+        {const_cast<char*>("animationEvent"), const_cast<char*>("(J)Ljava/lang/String;"), reinterpret_cast<void*>(&n_animation_event)},
         {const_cast<char*>("exists"), const_cast<char*>("(J)Z"), reinterpret_cast<void*>(&n_exists)},
         {const_cast<char*>("destroy"), const_cast<char*>("(J)V"), reinterpret_cast<void*>(&n_destroy)},
         {const_cast<char*>("name"), const_cast<char*>("(J)Ljava/lang/String;"), reinterpret_cast<void*>(&n_name)},

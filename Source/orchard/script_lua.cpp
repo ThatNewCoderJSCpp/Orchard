@@ -372,6 +372,44 @@ int o_particles(lua_State* L) {
     return 0;
 }
 
+int o_animation(lua_State* L) {
+    const orchard_host_api& h = host();
+    const orchard_entity e = check_entity(L, 1);
+    const std::string what = luaL_optstring(L, 2, "play");
+    if (what == "event") {
+        if (!ORCHARD_HOST_HAS(&h, animation_event)) return 0;
+        const char* s = h.animation_event(e);
+        if (!s || !*s) return 0;
+        lua_pushstring(L, s);
+        return 1;
+    }
+    if (!ORCHARD_HOST_HAS(&h, animation)) return 0;
+    int action = ORCHARD_ANIM_PLAY;
+    std::string clip;
+    double value = 0.0;
+    if (what == "play" || what == "once") {
+        action = what == "once" ? ORCHARD_ANIM_PLAY_ONCE : ORCHARD_ANIM_PLAY;
+        clip = luaL_optstring(L, 3, "");
+        value = luaL_optnumber(L, 4, 0.25);
+    } else if (what == "stop") action = ORCHARD_ANIM_STOP;
+    else if (what == "resume") action = ORCHARD_ANIM_RESUME;
+    else if (what == "speed") { action = ORCHARD_ANIM_SPEED; value = luaL_optnumber(L, 3, 1.0); }
+    else if (what == "time") action = ORCHARD_ANIM_TIME;
+    else if (what == "set_time") { action = ORCHARD_ANIM_SET_TIME; value = luaL_optnumber(L, 3, 0.0); }
+    else if (what == "length") action = ORCHARD_ANIM_LENGTH;
+    else if (what == "playing") action = ORCHARD_ANIM_PLAYING;
+    const double r = h.animation(e, action, clip.c_str(), value);
+    if (action == ORCHARD_ANIM_PLAYING) {
+        lua_pushboolean(L, r != 0.0);
+        return 1;
+    }
+    if (action == ORCHARD_ANIM_TIME || action == ORCHARD_ANIM_LENGTH) {
+        lua_pushnumber(L, r);
+        return 1;
+    }
+    return 0;
+}
+
 int o_fluid(lua_State* L) {
     const orchard_host_api& h = host();
     if (!ORCHARD_HOST_HAS(&h, fluid_brush)) return 0;
@@ -428,7 +466,7 @@ void open_orchard(lua_State* L) {
     static const luaL_Reg api[] = {
         {"vec", o_vec}, {"log", o_log}, {"warn", o_warn}, {"time", o_time}, {"dt", o_dt}, {"is_2d", o_is_2d},
         {"key_down", o_key_down}, {"find", o_find}, {"spawn", o_spawn}, {"self", o_self},
-        {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {"instantiate", o_instantiate}, {"particles", o_particles}, {"fluid", o_fluid}, {nullptr, nullptr}};
+        {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {"instantiate", o_instantiate}, {"particles", o_particles}, {"animation", o_animation}, {"fluid", o_fluid}, {nullptr, nullptr}};
     luaL_newlib(L, api);
     lua_setglobal(L, "orchard");
     lua_pushcfunction(L, o_log);

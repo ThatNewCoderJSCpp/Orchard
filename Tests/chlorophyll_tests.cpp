@@ -1,9 +1,15 @@
 #include <chlorophyll/chlorophyll.hpp>
 #include <xylem/xylem.hpp>
 
+#include <fizmo/../../Source/Util Hpp/util_functions.hpp>
+#include <fizmo/../../Source/Graphics/model_3d.hpp>
+
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
 
 namespace {
@@ -179,6 +185,281 @@ void test_strobe() {
     check(lit > 0.1f && dark < lit * 0.5f && again > lit * 0.9f, "strobe: the lighting world follows the flashes (" + str(lit) + ", " + str(dark) + ", " + str(again) + ")");
 }
 
+
+double ms_since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+bool exists(const std::string& path) {
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
+}
+
+orchard::Scene sunny_floor() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity floor = s.create("Floor");
+    s.transform(floor)->position = {0.0f, -0.5f, 0.0f};
+    s.add_body(floor).type = orchard::BodyType::fixed;
+    s.add_collider(floor)->size = {40.0f, 1.0f, 40.0f};
+    const orchard::Entity sun = s.create("Sun");
+    s.transform(sun)->rotation = orchard::from_euler({-90.0f, 0.0f, 0.0f});
+    s.add_light(sun, orchard::LightType::directional).intensity = 3.0f;
+    return s;
+}
+
+float hit_height(chlorophyll::World& w, float x, float z) {
+    const fizmo::lighting::RayHit h = w.lighting_scene().intersect(fizmo::lighting::Vec3{x, 100.0, z}, fizmo::lighting::Vec3{0.0, -1.0, 0.0}, 1000.0f);
+    return h.hit ? static_cast<float>(h.position.y) : -1000.0f;
+}
+
+void test_instancing() {
+    namespace fl = fizmo::lighting;
+    fl::Scene sc;
+    const std::size_t box = sc.add_mesh(fl::Mesh::box({0.5f, 0.5f, 0.5f}));
+    const std::size_t mat = sc.add_material(fl::Material::diffuse(fl::Rgb(0.5f)));
+    for (int i = 0; i < 2000; ++i) {
+        fl::Instance inst;
+        inst.mesh = box;
+        inst.material = mat;
+        inst.instanced = true;
+        inst.transform = fl::Transform::translate(fl::Vec3{static_cast<double>(i % 50) * 2.0, 0.0, static_cast<double>(i / 50) * 2.0});
+        sc.add_instance(inst);
+    }
+    sc.add_object(fl::Mesh::plane(200.0f, 200.0f), fl::Material::diffuse(fl::Rgb(0.8f)), fl::Transform::translate(fl::Vec3{0.0, -0.5, 0.0}));
+    sc.commit();
+    check(sc.instanced_count() == 2000 && sc.blas_count() == 1 && sc.triangle_count() == 2, "instancing: 2000 boxes share one BLAS and stay out of the flat list (" + str(static_cast<double>(sc.instanced_count())) + ")");
+    check(sc.traced_triangle_count() == 2000u * 12u + 2u, "instancing: traced triangles count every instance");
+    fl::RayHit h = sc.intersect(fl::Vec3{10.0, 10.0, 10.0}, fl::Vec3{0.0, -1.0, 0.0});
+    check(h.hit && std::fabs(h.position.y - 0.5) < 1e-3 && h.instance == 5 * 50 + 5, "instancing: a ray hits the right instance (" + str(h.position.y) + ", " + str(static_cast<double>(h.instance)) + ")");
+    check(sc.occluded(fl::Vec3{10.0, 5.0, 10.0}, fl::Vec3{10.0, -0.4, 10.0}) && !sc.occluded(fl::Vec3{11.0, 5.0, 11.0}, fl::Vec3{11.0, -0.4, 11.0}), "instancing: instances cast shadows");
+    const std::uint64_t full = sc.full_builds(), blas = sc.blas_builds(), lighting = sc.lighting_version();
+    const auto t0 = std::chrono::steady_clock::now();
+    sc.move_instance(5 * 50 + 5, fl::Transform::translate(fl::Vec3{10.0, 3.0, 10.0}));
+    sc.commit();
+    const double move_ms = ms_since(t0);
+    h = sc.intersect(fl::Vec3{10.0, 10.0, 10.0}, fl::Vec3{0.0, -1.0, 0.0});
+    check(h.hit && std::fabs(h.position.y - 3.5) < 1e-3, "instancing: moving an instance moves its hit (" + str(h.position.y) + ")");
+    check(sc.full_builds() == full && sc.blas_builds() == blas && sc.lighting_version() == lighting, "instancing: a move touches only the instance, no rebuild or relight");
+    fl::Mesh tall = fl::Mesh::box({0.5f, 2.0f, 0.5f});
+    sc.replace_mesh(box, tall);
+    sc.commit();
+    h = sc.intersect(fl::Vec3{20.0, 10.0, 20.0}, fl::Vec3{0.0, -1.0, 0.0});
+    check(sc.full_builds() == full && std::fabs(h.position.y - 2.0) < 1e-3, "instancing: replacing a mesh rebuilds only its BLAS (" + str(h.position.y) + ")");
+    std::cout << "instancing: 2000-instance move+commit " << move_ms << " ms\n";
+    fl::Scene copy;
+    copy.add_mesh(fl::Mesh::box({0.5f, 0.5f, 0.5f}));
+    copy.add_material(fl::Material());
+    fl::Instance one;
+    one.instanced = true;
+    copy.add_instance(one);
+    copy.commit();
+    const std::uint64_t built = copy.blas_builds();
+    copy.clear();
+    copy.add_mesh(fl::Mesh::box({0.5f, 0.5f, 0.5f}));
+    copy.add_material(fl::Material());
+    copy.add_instance(one);
+    copy.commit();
+    check(copy.blas_builds() == built, "instancing: a cleared and refilled scene reuses BLASes for identical meshes");
+}
+
+void test_models() {
+    const std::string crate = "/tmp/glbtest/crate.glb";
+    const std::string character = "/tmp/glbtest/character.glb";
+    if (!chlorophyll::models_supported() || !exists(crate) || !exists(character)) {
+        std::cout << "models: skipped (no model support or no test files)\n";
+        return;
+    }
+    orchard::Scene s = sunny_floor();
+    const orchard::Entity box = s.create("Crate");
+    s.transform(box)->position = {0.0f, 0.0f, 0.0f};
+    s.add_model(box).source = crate;
+    const orchard::Entity hero = s.create("Hero");
+    s.transform(hero)->position = {6.0f, 0.0f, 0.0f};
+    s.add_model(hero).source = character;
+    chlorophyll::World w;
+    w.build(s, project(orchard::LightingLevel::shadowed));
+    const chlorophyll::Stats st = w.stats();
+    check(st.models == 2 && st.instanced >= 2 && st.traced_triangles > st.triangles, "models: both model entities are in the lighting scene (" + str(static_cast<double>(st.models)) + " models, " + str(static_cast<double>(st.traced_triangles)) + " traced triangles)");
+    const float top = hit_height(w, 0.0f, 0.0f);
+    const float bare = hit_height(w, -6.0f, 0.0f);
+    check(top > 0.2f && std::fabs(bare) < 1e-3f, "models: a ray finds the crate on the floor (" + str(top) + " vs " + str(bare) + ")");
+    check(hit_height(w, 6.0f, 0.0f) > 0.5f, "models: and the character (" + str(hit_height(w, 6.0f, 0.0f)) + ")");
+    const float shaded = w.light_level({0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+    const float open = w.light_level({-6.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+    check(shaded < open * 0.2f && open > 0.1f, "models: a model shades the light queries (" + str(shaded) + " vs " + str(open) + ")");
+    fizmo::lighting::Scene& ls = w.lighting_scene();
+    const std::uint64_t full = ls.full_builds(), blas = ls.blas_builds(), lighting = ls.lighting_version(), geometry = ls.geometry_version();
+    s.transform(box)->position = {-6.0f, 0.0f, 0.0f};
+    const auto t0 = std::chrono::steady_clock::now();
+    w.sync(s);
+    const double move_ms = ms_since(t0);
+    check(ls.geometry_version() != geometry && ls.full_builds() == full && ls.blas_builds() == blas && ls.lighting_version() == lighting, "models: moving a model updates only its instance");
+    check(hit_height(w, -6.0f, 0.0f) > 0.2f && std::fabs(hit_height(w, 0.0f, 0.0f)) < 1e-3f, "models: the moved crate is found at its new place");
+    std::cout << "models: move+sync " << move_ms << " ms\n";
+    fizmo::graphics::Model3D model;
+    fizmo::graphics::ModelImportOptions o;
+    o.z_up = false;
+    std::string why;
+    if (!fizmo::graphics::Model3D::load(character, model, &why, o) || model.animations.empty()) {
+        check(false, "models: the character loads with animations: " + why);
+        return;
+    }
+    chlorophyll::ModelPoser poser;
+    double t = 0.0;
+    w.set_model_source([&](orchard::Entity e, const std::string& source) -> std::shared_ptr<const chlorophyll::ModelGeometry> {
+        if (source == character) return poser.posed(e, model, "", t);
+        return chlorophyll::load_model(source, false);
+    });
+    w.build(s, project(orchard::LightingLevel::shadowed));
+    const std::uint64_t full2 = ls.full_builds(), blas2 = ls.blas_builds(), geometry2 = ls.geometry_version();
+    t = model.animations.front().duration * 0.37;
+    const auto t1 = std::chrono::steady_clock::now();
+    w.sync(s);
+    const double pose_ms = ms_since(t1);
+    check(ls.geometry_version() != geometry2 && ls.full_builds() == full2 && ls.blas_builds() == blas2, "models: a new pose refits the character's BLAS instead of rebuilding anything");
+    std::cout << "models: pose change sync " << pose_ms << " ms\n";
+    const std::uint64_t geometry3 = ls.geometry_version();
+    w.sync(s);
+    check(ls.geometry_version() == geometry3, "models: the same pose changes nothing");
+}
+
+void forest_terrain(orchard::Terrain& t, float size, int resolution) {
+    t = orchard::terrain_preset("forest");
+    t.size = {size, size * 0.06f, size};
+    t.resolution = resolution;
+}
+
+void test_terrain_and_scatter() {
+    const std::string root = "/tmp/proj_t";
+    if (!chlorophyll::models_supported() || !exists(root + "/Assets/Models/tree.glb")) {
+        std::cout << "terrain: skipped (no model support or no forest assets)\n";
+        return;
+    }
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity sun = s.create("Sun");
+    s.transform(sun)->rotation = orchard::from_euler({-90.0f, 0.0f, 0.0f});
+    s.add_light(sun, orchard::LightType::directional).intensity = 3.0f;
+    const orchard::Entity land = s.create("Land");
+    forest_terrain(s.add_terrain(land), 120.0f, 129);
+    chlorophyll::World w;
+    w.set_asset_root(root);
+    const auto t0 = std::chrono::steady_clock::now();
+    w.build(s, project(orchard::LightingLevel::shadowed));
+    const double build_ms = ms_since(t0);
+    const chlorophyll::Stats st = w.stats();
+    check(st.terrains == 1 && st.scatter > 10 && st.instanced >= st.scatter + 1, "terrain: the terrain and its scatter are in the lighting scene (" + str(static_cast<double>(st.scatter)) + " scatter, " + str(static_cast<double>(st.instanced)) + " instances)");
+    check(w.lighting_scene().blas_count() <= 8, "terrain: scatter shares a BLAS per model (" + str(static_cast<double>(w.lighting_scene().blas_count())) + ")");
+    orchard::TerrainHeights h;
+    orchard::generate_heights(*s.terrain(land), h);
+    const std::vector<orchard::ScatterInstance> trees = orchard::scatter_instances(*s.terrain(land), h);
+    const float ground = h.height_at(10.0f, 10.0f);
+    check(std::fabs(hit_height(w, 10.0f, 10.0f) - ground) < 0.5f || hit_height(w, 10.0f, 10.0f) > ground, "terrain: rays land on the terrain heights (" + str(hit_height(w, 10.0f, 10.0f)) + " vs " + str(ground) + ")");
+    const orchard::ScatterInstance* tree = nullptr;
+    for (const orchard::ScatterInstance& i : trees)
+        if (i.model.find("tree.glb") != std::string::npos && std::fabs(i.position.x) < 50.0f && std::fabs(i.position.z) < 50.0f) {
+            tree = &i;
+            break;
+        }
+    check(tree != nullptr, "terrain: the forest has trees");
+    if (tree) {
+        const float r = 0.9f * tree->scale;
+        orchard::Vec3 under{tree->position.x + r, 0.0f, tree->position.z};
+        under.y = h.height_at(under.x, under.z) + 0.05f;
+        float best = -1.0f;
+        orchard::Vec3 open{};
+        for (int k = 0; k < 400; ++k) {
+            const float x = -50.0f + 100.0f * static_cast<float>(k % 20) / 19.0f, z = -50.0f + 100.0f * static_cast<float>(k / 20) / 19.0f;
+            float nearest = 1e9f;
+            for (const orchard::ScatterInstance& i : trees) nearest = std::min(nearest, std::hypot(i.position.x - x, i.position.z - z));
+            if (nearest > best) {
+                best = nearest;
+                open = {x, h.height_at(x, z) + 0.05f, z};
+            }
+        }
+        const orchard::Vec3 n_under = h.normal_at(under.x, under.z), n_open = h.normal_at(open.x, open.z);
+        const float dark = w.light_level(under, n_under);
+        const float lit = w.light_level(open, n_open);
+        check(lit > 0.1f && dark < lit * 0.6f, "terrain: light under a tree is darker than in the open (" + str(dark) + " vs " + str(lit) + ")");
+    }
+    fizmo::lighting::Scene& ls = w.lighting_scene();
+    const std::uint64_t full = ls.full_builds(), blas = ls.blas_builds();
+    const float was = hit_height(w, 10.0f, 10.0f);
+    s.transform(land)->position = {0.0f, 1.0f, 0.0f};
+    const auto t1 = std::chrono::steady_clock::now();
+    w.sync(s);
+    const double move_ms = ms_since(t1);
+    check(ls.full_builds() == full && ls.blas_builds() == blas && std::fabs(hit_height(w, 10.0f, 10.0f) - was - 1.0f) < 1e-3f, "terrain: moving the terrain moves its instances without rebuilding (" + str(was) + " -> " + str(hit_height(w, 10.0f, 10.0f)) + ")");
+    std::cout << "terrain: 120 m forest build " << build_ms << " ms, move " << move_ms << " ms (" << st.scatter << " scatter)\n";
+
+    orchard::Scene bare(orchard::Dimension::three_d);
+    const orchard::Entity hill = bare.create("Hill");
+    orchard::Terrain& ht = bare.add_terrain(hill);
+    forest_terrain(ht, 60.0f, 65);
+    ht.scatter.clear();
+    auto sculpted = std::make_shared<orchard::TerrainHeights>();
+    orchard::generate_heights(ht, *sculpted);
+    chlorophyll::World bw;
+    bw.set_terrain_source([&](orchard::Entity, const orchard::Terrain&) -> std::shared_ptr<const orchard::TerrainHeights> { return sculpted; });
+    bw.build(bare, project(orchard::LightingLevel::shadowed));
+    const float before = hit_height(bw, 0.0f, 0.0f);
+    fizmo::lighting::Scene& bs = bw.lighting_scene();
+    const std::uint64_t bfull = bs.full_builds(), bblas = bs.blas_builds();
+    orchard::TerrainBrush brush;
+    brush.kind = orchard::TerrainBrushKind::raise;
+    brush.radius = 8.0f;
+    brush.strength = 4.0f;
+    orchard::apply_brush(*sculpted, brush, 0.0f, 0.0f, 1.0f);
+    bw.sync(bare);
+    const float after = hit_height(bw, 0.0f, 0.0f);
+    check(after > before + 0.1f && bs.full_builds() == bfull && bs.blas_builds() == bblas, "terrain: sculpting refits only the terrain (" + str(before) + " -> " + str(after) + ")");
+}
+
+void test_forest_perf() {
+    const std::string root = "/tmp/proj_t";
+    if (!chlorophyll::models_supported() || !exists(root + "/Assets/Models/tree.glb")) return;
+    const char* full_size = std::getenv("CHLOROPHYLL_PERF");
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity sun = s.create("Sun");
+    s.transform(sun)->rotation = orchard::from_euler({-60.0f, 20.0f, 0.0f});
+    s.add_light(sun, orchard::LightType::directional).intensity = 3.0f;
+    const orchard::Entity land = s.create("Land");
+    orchard::Terrain& t = s.add_terrain(land);
+    t = orchard::terrain_preset("forest");
+    if (!full_size) {
+        t.size = {300.0f, 18.0f, 300.0f};
+        t.resolution = 257;
+    }
+    const orchard::Entity crate = s.create("Crate");
+    s.add_collider(crate)->size = {1.0f, 1.0f, 1.0f};
+    chlorophyll::World w;
+    w.set_asset_root(root);
+    const auto t0 = std::chrono::steady_clock::now();
+    w.build(s, project(orchard::LightingLevel::shadowed));
+    const double build_ms = ms_since(t0);
+    const chlorophyll::Stats st = w.stats();
+    double frame_ms = 0.0;
+    const int frames = 20;
+    for (int i = 0; i < frames; ++i) {
+        s.transform(crate)->position = {static_cast<float>(i) * 0.1f, 2.0f, 0.0f};
+        const auto t1 = std::chrono::steady_clock::now();
+        w.sync(s);
+        frame_ms += ms_since(t1);
+    }
+    double idle_ms = 0.0;
+    for (int i = 0; i < frames; ++i) {
+        const auto t1 = std::chrono::steady_clock::now();
+        w.sync(s);
+        idle_ms += ms_since(t1);
+    }
+    const auto t2 = std::chrono::steady_clock::now();
+    s.transform(land)->position = {0.0f, 0.5f, 0.0f};
+    w.sync(s);
+    const double land_ms = ms_since(t2);
+    std::cout << "perf: moving the whole forest terrain " << land_ms << " ms\n";
+    std::cout << "perf: forest " << t.size.x << " m res " << t.resolution << ": build " << build_ms << " ms, " << st.scatter << " scatter, " << st.instanced << " instances, " << st.traced_triangles << " traced triangles; collider move sync " << frame_ms / frames << " ms/frame, idle sync " << idle_ms / frames << " ms/frame\n";
+    check(st.scatter > 100, "perf: the forest has scatter");
+}
+
 } // namespace
 
 int main() {
@@ -188,6 +469,10 @@ int main() {
     test_z_up();
     test_physics_and_light_together();
     test_strobe();
+    test_instancing();
+    test_models();
+    test_terrain_and_scatter();
+    test_forest_perf();
     std::cout << (checks - failures) << "/" << checks << " checks passed\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

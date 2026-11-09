@@ -72,6 +72,8 @@ const char* to_string(ColliderShape shape) {
     case ColliderShape::cone: return "cone";
     case ColliderShape::rounded_box: return "rounded-box";
     case ColliderShape::sphere_section: return "sphere-section";
+    case ColliderShape::convex_hull: return "convex-hull";
+    case ColliderShape::mesh: return "mesh";
     }
     return "box";
 }
@@ -84,16 +86,18 @@ std::optional<ColliderShape> parse_collider_shape(const std::string& text) {
     if (text == "cone") return ColliderShape::cone;
     if (text == "rounded-box" || text == "rounded_box" || text == "rounded") return ColliderShape::rounded_box;
     if (text == "sphere-section" || text == "sphere_section" || text == "hemisphere" || text == "dome" || text == "bowl" || text == "wedge") return ColliderShape::sphere_section;
+    if (text == "convex-hull" || text == "convex_hull" || text == "convex" || text == "hull") return ColliderShape::convex_hull;
+    if (text == "mesh" || text == "triangle-mesh" || text == "trimesh") return ColliderShape::mesh;
     return std::nullopt;
 }
 
 const std::vector<ColliderShape>& collider_shapes() {
-    static const std::vector<ColliderShape> all = {ColliderShape::box, ColliderShape::sphere, ColliderShape::capsule, ColliderShape::cylinder, ColliderShape::cone, ColliderShape::rounded_box, ColliderShape::sphere_section};
+    static const std::vector<ColliderShape> all = {ColliderShape::box, ColliderShape::sphere, ColliderShape::capsule, ColliderShape::cylinder, ColliderShape::cone, ColliderShape::rounded_box, ColliderShape::sphere_section, ColliderShape::convex_hull, ColliderShape::mesh};
     return all;
 }
 
 bool collider_shape_3d_only(ColliderShape shape) {
-    return shape == ColliderShape::cylinder || shape == ColliderShape::cone || shape == ColliderShape::sphere_section;
+    return shape == ColliderShape::cylinder || shape == ColliderShape::cone || shape == ColliderShape::sphere_section || shape == ColliderShape::convex_hull || shape == ColliderShape::mesh;
 }
 
 const char* to_string(BodyQuality q) {
@@ -604,6 +608,14 @@ std::vector<std::string> Material::texture_paths() const {
     return out;
 }
 
+bool is_model_file(const std::string& path) {
+    const std::size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = path.substr(dot + 1);
+    for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return ext == "glb" || ext == "gltf" || ext == "obj" || ext == "fbx";
+}
+
 bool is_image_file(const std::string& path) {
     const std::size_t dot = path.find_last_of('.');
     if (dot == std::string::npos) return false;
@@ -734,6 +746,11 @@ Entity Scene::create(const std::string& name, Entity parent) {
     s.material.reset();
     s.fluid.reset();
     s.emitter.reset();
+    s.camera.reset();
+    s.model.reset();
+    s.animator.reset();
+    s.terrain.reset();
+    s.bone.clear();
     s.instance_of.clear();
     ++m_alive;
     return {index, s.generation};
@@ -1008,6 +1025,138 @@ bool Scene::remove_fluid(Entity e) {
     return true;
 }
 
+Camera* Scene::camera(Entity e) {
+    Slot* s = slot(e);
+    return s && s->camera ? &*s->camera : nullptr;
+}
+
+const Camera* Scene::camera(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->camera ? &*s->camera : nullptr;
+}
+
+Camera& Scene::add_camera(Entity e) {
+    static Camera none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Camera{};
+        return none;
+    }
+    if (!s->camera) s->camera = Camera{};
+    return *s->camera;
+}
+
+bool Scene::remove_camera(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->camera) return false;
+    s->camera.reset();
+    return true;
+}
+
+Model* Scene::model(Entity e) {
+    Slot* s = slot(e);
+    return s && s->model ? &*s->model : nullptr;
+}
+
+const Model* Scene::model(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->model ? &*s->model : nullptr;
+}
+
+Model& Scene::add_model(Entity e) {
+    static Model none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Model{};
+        return none;
+    }
+    if (!s->model) s->model = Model{};
+    return *s->model;
+}
+
+bool Scene::remove_model(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->model) return false;
+    s->model.reset();
+    return true;
+}
+
+Animator* Scene::animator(Entity e) {
+    Slot* s = slot(e);
+    return s && s->animator ? &*s->animator : nullptr;
+}
+
+const Animator* Scene::animator(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->animator ? &*s->animator : nullptr;
+}
+
+Animator& Scene::add_animator(Entity e) {
+    static Animator none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Animator{};
+        return none;
+    }
+    if (!s->animator) s->animator = Animator{};
+    return *s->animator;
+}
+
+bool Scene::remove_animator(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->animator) return false;
+    s->animator.reset();
+    return true;
+}
+
+Terrain* Scene::terrain(Entity e) {
+    Slot* s = slot(e);
+    return s && s->terrain ? &*s->terrain : nullptr;
+}
+
+const Terrain* Scene::terrain(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->terrain ? &*s->terrain : nullptr;
+}
+
+Terrain& Scene::add_terrain(Entity e) {
+    static Terrain none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Terrain{};
+        return none;
+    }
+    if (!s->terrain) s->terrain = Terrain{};
+    return *s->terrain;
+}
+
+bool Scene::remove_terrain(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->terrain) return false;
+    s->terrain.reset();
+    return true;
+}
+
+Entity Scene::active_camera() const {
+    Entity best;
+    int best_priority = 0;
+    Entity named;
+    for (std::uint32_t i = 0; i < m_slots.size(); ++i) {
+        const Slot& s = m_slots[i];
+        if (!s.used) continue;
+        const Entity e{i, s.generation};
+        if (s.camera) {
+            if (s.camera->active && (!alive(best) || s.camera->priority > best_priority)) {
+                best = e;
+                best_priority = s.camera->priority;
+            }
+        } else if (!alive(named) && s.name.find("Camera") != std::string::npos && !s.light) {
+            named = e;
+        }
+    }
+    return alive(best) ? best : named;
+}
+
 Emitter* Scene::emitter(Entity e) {
     Slot* s = slot(e);
     return s && s->emitter ? &*s->emitter : nullptr;
@@ -1034,6 +1183,25 @@ bool Scene::remove_emitter(Entity e) {
     if (!s || !s->emitter) return false;
     s->emitter.reset();
     return true;
+}
+
+const std::string& Scene::bone(Entity e) const {
+    const Slot* s = slot(e);
+    return s ? s->bone : empty_name;
+}
+
+bool Scene::set_bone(Entity e, const std::string& bone_name) {
+    Slot* s = slot(e);
+    if (!s) return false;
+    s->bone = bone_name;
+    return true;
+}
+
+Entity Scene::bone_owner(Entity e) const {
+    if (bone(e).empty()) return Entity{};
+    for (Entity at = parent(e); alive(at); at = parent(at))
+        if (model(at)) return at;
+    return Entity{};
 }
 
 const std::string& Scene::instance_of(Entity e) const {
@@ -1081,6 +1249,11 @@ Entity Scene::copy_from(const Scene& other, Entity source, Entity parent) {
     dst->material = copy.material;
     dst->fluid = copy.fluid;
     dst->emitter = copy.emitter;
+    dst->camera = copy.camera;
+    dst->model = copy.model;
+    dst->animator = copy.animator;
+    dst->terrain = copy.terrain;
+    dst->bone = copy.bone;
     dst->instance_of = copy.instance_of;
     if (&other == this) {
         const Scene part = other.extract(source, true);
@@ -1160,6 +1333,11 @@ std::size_t Scene::refresh_instances(const std::string& template_path, const Sce
             dst->material = src.material;
             dst->fluid = src.fluid;
             dst->emitter = src.emitter;
+            dst->camera = src.camera;
+            dst->model = src.model;
+            dst->animator = src.animator;
+            dst->terrain = src.terrain;
+            dst->bone = src.bone;
             for (Entity c : entity_template.children(roots.front())) copy_from(entity_template, c, inst);
         } else {
             dst->body.reset();
@@ -1169,6 +1347,10 @@ std::size_t Scene::refresh_instances(const std::string& template_path, const Sce
             dst->material.reset();
             dst->fluid.reset();
             dst->emitter.reset();
+            dst->camera.reset();
+            dst->model.reset();
+            dst->animator.reset();
+            dst->terrain.reset();
             for (Entity r : roots) copy_from(entity_template, r, inst);
         }
         *transform(inst) = keep;
@@ -1177,6 +1359,211 @@ std::size_t Scene::refresh_instances(const std::string& template_path, const Sce
         ++n;
     }
     return n;
+}
+
+const char* to_string(ReflectionMode v) {
+    switch (v) {
+    case ReflectionMode::highlights: return "highlights";
+    case ReflectionMode::surroundings: return "surroundings";
+    case ReflectionMode::realistic: return "realistic";
+    }
+    return "surroundings";
+}
+
+std::optional<ReflectionMode> parse_reflection_mode(const std::string& text) {
+    const std::string s = lower_dash(text);
+    if (s == "highlights" || s == "basic" || s == "light" || s == "lights") return ReflectionMode::highlights;
+    if (s == "surroundings" || s == "environment" || s == "mirror") return ReflectionMode::surroundings;
+    if (s == "realistic" || s == "bounce" || s == "real") return ReflectionMode::realistic;
+    return std::nullopt;
+}
+
+const char* reflection_label(ReflectionMode v) {
+    switch (v) {
+    case ReflectionMode::highlights: return "Light highlights only (no surroundings)";
+    case ReflectionMode::surroundings: return "Surroundings (light doesn't bounce off)";
+    case ReflectionMode::realistic: return "Realistic (reflected light lights things up)";
+    }
+    return "Surroundings";
+}
+
+const char* to_string(CameraControl v) {
+    switch (v) {
+    case CameraControl::none: return "none";
+    case CameraControl::fly: return "fly";
+    case CameraControl::walk: return "walk";
+    }
+    return "none";
+}
+
+std::optional<CameraControl> parse_camera_control(const std::string& text) {
+    const std::string s = lower_dash(text);
+    if (s == "none" || s == "script" || s == "off") return CameraControl::none;
+    if (s == "fly" || s == "free" || s == "noclip") return CameraControl::fly;
+    if (s == "walk" || s == "first-person" || s == "fps" || s == "player") return CameraControl::walk;
+    return std::nullopt;
+}
+
+const char* to_string(HumanoidKind v) {
+    switch (v) {
+    case HumanoidKind::basic: return "basic";
+    case HumanoidKind::head_and_body: return "head-and-body";
+    case HumanoidKind::full_body: return "full-body";
+    case HumanoidKind::detailed: return "detailed";
+    }
+    return "basic";
+}
+
+std::optional<HumanoidKind> parse_humanoid_kind(const std::string& text) {
+    const std::string s = lower_dash(text);
+    for (HumanoidKind v : humanoid_kinds())
+        if (s == to_string(v)) return v;
+    if (s == "capsule" || s == "simple") return HumanoidKind::basic;
+    if (s == "two-capsules" || s == "head-body") return HumanoidKind::head_and_body;
+    if (s == "ragdoll" || s == "limbs") return HumanoidKind::full_body;
+    if (s == "gore" || s == "organs" || s == "advanced") return HumanoidKind::detailed;
+    return std::nullopt;
+}
+
+const std::vector<HumanoidKind>& humanoid_kinds() {
+    static const std::vector<HumanoidKind> all = {HumanoidKind::basic, HumanoidKind::head_and_body, HumanoidKind::full_body, HumanoidKind::detailed};
+    return all;
+}
+
+const char* humanoid_label(HumanoidKind v) {
+    switch (v) {
+    case HumanoidKind::basic: return "Basic (one capsule)";
+    case HumanoidKind::head_and_body: return "Head and body (two capsules)";
+    case HumanoidKind::full_body: return "Full body (head, torso, arms, legs)";
+    case HumanoidKind::detailed: return "Detailed (every limb, bones and organs)";
+    }
+    return "Basic (one capsule)";
+}
+
+Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent, const std::string& name, float height) {
+    const float h = std::max(0.2f, height);
+    const float k = h / 1.8f;
+    const bool flat = scene.dimension() == Dimension::two_d;
+    const Entity root = scene.create(name.empty() ? std::string("Character") : name, parent);
+    Body& body = scene.add_body(root);
+    body.type = BodyType::dynamic;
+    body.set(body_lock_rotation_x, !flat);
+    body.set(body_lock_rotation_z, true);
+    body.angular_damping = 0.5f;
+    auto depth = [flat](float d) { return flat ? 1.0f : d; };
+    auto part = [&](Entity owner, const std::string& part_name, ColliderShape shape, Vec3 size, Vec3 at, float roll, bool sensor, float density) {
+        const Entity e = scene.create(part_name, owner);
+        Transform* t = scene.transform(e);
+        t->position = at * k;
+        if (roll != 0.0f) t->rotation = from_euler(Vec3{0.0f, 0.0f, roll});
+        Collider& c = *scene.add_collider(e, shape);
+        c.size = Vec3{size.x * k, size.y * k, depth(size.z) * (flat ? 1.0f : k)};
+        c.sensor = sensor;
+        c.density = density;
+        c.friction = 0.6f;
+        return e;
+    };
+    auto capsule = [&](Entity owner, const std::string& n, float diameter, float length, Vec3 at, float roll = 0.0f) {
+        return part(owner, n, ColliderShape::capsule, Vec3{diameter, length, diameter}, at, roll, false, 985.0f);
+    };
+    auto ball = [&](Entity owner, const std::string& n, float diameter, Vec3 at, float density = 1050.0f) {
+        return part(owner, n, ColliderShape::sphere, Vec3{diameter, diameter, diameter}, at, 0.0f, false, density);
+    };
+    auto box = [&](Entity owner, const std::string& n, Vec3 size, Vec3 at, float density = 985.0f) {
+        return part(owner, n, ColliderShape::box, size, at, 0.0f, false, density);
+    };
+    auto organ = [&](Entity owner, const std::string& n, ColliderShape shape, Vec3 size, Vec3 at) {
+        return part(owner, n, shape, size, at, 0.0f, true, 1.0f);
+    };
+    if (kind == HumanoidKind::basic) {
+        Collider* c = scene.add_collider(root, ColliderShape::capsule);
+        c->size = Vec3{0.6f * k, h, depth(0.6f * k)};
+        c->offset = Vec3{0.0f, h * 0.5f, 0.0f};
+        c->density = 985.0f;
+        c->friction = 0.6f;
+        return root;
+    }
+    if (kind == HumanoidKind::head_and_body) {
+        capsule(root, "Body", 0.56f, 1.42f, Vec3{0.0f, 0.71f, 0.0f});
+        capsule(root, "Head", 0.26f, 0.32f, Vec3{0.0f, 1.62f, 0.0f});
+        return root;
+    }
+    if (kind == HumanoidKind::full_body) {
+        capsule(root, "Head", 0.24f, 0.28f, Vec3{0.0f, 1.64f, 0.0f});
+        capsule(root, "Neck", 0.12f, 0.14f, Vec3{0.0f, 1.47f, 0.0f});
+        capsule(root, "Torso", 0.38f, 0.62f, Vec3{0.0f, 1.12f, 0.0f});
+        for (int side = 0; side < 2; ++side) {
+            const float x = side == 0 ? -1.0f : 1.0f;
+            const std::string s = side == 0 ? "Left " : "Right ";
+            capsule(root, s + "upper arm", 0.11f, 0.32f, Vec3{0.25f * x, 1.22f, 0.0f});
+            capsule(root, s + "forearm", 0.09f, 0.28f, Vec3{0.25f * x, 0.92f, 0.0f});
+            ball(root, s + "hand", 0.09f, Vec3{0.25f * x, 0.73f, 0.0f});
+            capsule(root, s + "thigh", 0.16f, 0.44f, Vec3{0.1f * x, 0.66f, 0.0f});
+            capsule(root, s + "shin", 0.12f, 0.42f, Vec3{0.1f * x, 0.27f, 0.0f});
+            box(root, s + "foot", Vec3{0.1f, 0.06f, 0.24f}, Vec3{0.1f * x, 0.03f, 0.05f});
+        }
+        return root;
+    }
+    const Entity head = capsule(root, "Head", 0.22f, 0.26f, Vec3{0.0f, 1.65f, 0.0f});
+    capsule(root, "Jaw", 0.12f, 0.12f, Vec3{0.0f, 1.55f, 0.04f}, 90.0f);
+    capsule(root, "Neck", 0.11f, 0.14f, Vec3{0.0f, 1.48f, 0.0f});
+    const Entity chest = box(root, "Chest", Vec3{0.36f, 0.3f, 0.22f}, Vec3{0.0f, 1.27f, 0.0f});
+    const Entity belly = box(root, "Abdomen", Vec3{0.32f, 0.2f, 0.2f}, Vec3{0.0f, 1.02f, 0.0f});
+    const Entity pelvis = box(root, "Pelvis", Vec3{0.34f, 0.16f, 0.2f}, Vec3{0.0f, 0.86f, 0.0f});
+    for (int side = 0; side < 2; ++side) {
+        const float x = side == 0 ? -1.0f : 1.0f;
+        const std::string s = side == 0 ? "Left " : "Right ";
+        ball(root, s + "shoulder", 0.11f, Vec3{0.21f * x, 1.38f, 0.0f});
+        capsule(root, s + "upper arm", 0.1f, 0.3f, Vec3{0.25f * x, 1.2f, 0.0f});
+        ball(root, s + "elbow", 0.08f, Vec3{0.25f * x, 1.04f, 0.0f});
+        capsule(root, s + "forearm", 0.085f, 0.26f, Vec3{0.25f * x, 0.9f, 0.0f});
+        box(root, s + "hand", Vec3{0.08f, 0.1f, 0.04f}, Vec3{0.25f * x, 0.72f, 0.0f});
+        box(root, s + "fingers", Vec3{0.08f, 0.08f, 0.03f}, Vec3{0.25f * x, 0.63f, 0.0f});
+        ball(root, s + "hip", 0.13f, Vec3{0.1f * x, 0.8f, 0.0f});
+        capsule(root, s + "thigh", 0.15f, 0.4f, Vec3{0.1f * x, 0.62f, 0.0f});
+        ball(root, s + "knee", 0.1f, Vec3{0.1f * x, 0.45f, 0.02f});
+        capsule(root, s + "shin", 0.11f, 0.38f, Vec3{0.1f * x, 0.25f, 0.0f});
+        ball(root, s + "ankle", 0.07f, Vec3{0.1f * x, 0.07f, 0.0f});
+        box(root, s + "foot", Vec3{0.09f, 0.05f, 0.16f}, Vec3{0.1f * x, 0.025f, 0.04f});
+        box(root, s + "toes", Vec3{0.09f, 0.04f, 0.06f}, Vec3{0.1f * x, 0.02f, 0.15f});
+    }
+    const Entity organs = scene.create("Organs", root);
+    const Entity bones = scene.create("Bones", root);
+    static_cast<void>(head);
+    static_cast<void>(chest);
+    static_cast<void>(belly);
+    static_cast<void>(pelvis);
+    organ(organs, "Brain", ColliderShape::sphere, Vec3{0.15f, 0.15f, 0.15f}, Vec3{0.0f, 1.69f, 0.0f});
+    organ(organs, "Left eye", ColliderShape::sphere, Vec3{0.025f, 0.025f, 0.025f}, Vec3{-0.032f, 1.64f, 0.095f});
+    organ(organs, "Right eye", ColliderShape::sphere, Vec3{0.025f, 0.025f, 0.025f}, Vec3{0.032f, 1.64f, 0.095f});
+    organ(organs, "Windpipe", ColliderShape::capsule, Vec3{0.03f, 0.14f, 0.03f}, Vec3{0.0f, 1.48f, 0.03f});
+    organ(organs, "Heart", ColliderShape::sphere, Vec3{0.1f, 0.1f, 0.1f}, Vec3{-0.03f, 1.27f, 0.04f});
+    organ(organs, "Left lung", ColliderShape::capsule, Vec3{0.11f, 0.22f, 0.11f}, Vec3{-0.09f, 1.3f, 0.0f});
+    organ(organs, "Right lung", ColliderShape::capsule, Vec3{0.12f, 0.22f, 0.12f}, Vec3{0.09f, 1.3f, 0.0f});
+    organ(organs, "Liver", ColliderShape::box, Vec3{0.16f, 0.08f, 0.1f}, Vec3{0.07f, 1.1f, 0.03f});
+    organ(organs, "Stomach", ColliderShape::sphere, Vec3{0.1f, 0.1f, 0.1f}, Vec3{-0.07f, 1.08f, 0.04f});
+    organ(organs, "Left kidney", ColliderShape::capsule, Vec3{0.05f, 0.1f, 0.05f}, Vec3{-0.07f, 1.02f, -0.06f});
+    organ(organs, "Right kidney", ColliderShape::capsule, Vec3{0.05f, 0.1f, 0.05f}, Vec3{0.07f, 1.02f, -0.06f});
+    organ(organs, "Intestines", ColliderShape::box, Vec3{0.22f, 0.14f, 0.12f}, Vec3{0.0f, 0.95f, 0.03f});
+    organ(organs, "Bladder", ColliderShape::sphere, Vec3{0.06f, 0.06f, 0.06f}, Vec3{0.0f, 0.86f, 0.05f});
+    organ(organs, "Aorta", ColliderShape::capsule, Vec3{0.025f, 0.4f, 0.025f}, Vec3{0.0f, 1.1f, -0.04f});
+    for (int side = 0; side < 2; ++side) {
+        const float x = side == 0 ? -1.0f : 1.0f;
+        const std::string s = side == 0 ? "Left " : "Right ";
+        organ(organs, s + "carotid artery", ColliderShape::capsule, Vec3{0.015f, 0.12f, 0.015f}, Vec3{0.03f * x, 1.48f, 0.03f});
+        organ(organs, s + "femoral artery", ColliderShape::capsule, Vec3{0.015f, 0.3f, 0.015f}, Vec3{0.1f * x, 0.66f, 0.04f});
+        organ(bones, s + "femur", ColliderShape::capsule, Vec3{0.04f, 0.42f, 0.04f}, Vec3{0.1f * x, 0.62f, 0.0f});
+        organ(bones, s + "shin bone", ColliderShape::capsule, Vec3{0.03f, 0.38f, 0.03f}, Vec3{0.1f * x, 0.25f, 0.0f});
+        organ(bones, s + "upper arm bone", ColliderShape::capsule, Vec3{0.03f, 0.3f, 0.03f}, Vec3{0.25f * x, 1.2f, 0.0f});
+        organ(bones, s + "forearm bones", ColliderShape::capsule, Vec3{0.03f, 0.26f, 0.03f}, Vec3{0.25f * x, 0.9f, 0.0f});
+    }
+    organ(bones, "Skull", ColliderShape::sphere, Vec3{0.2f, 0.2f, 0.2f}, Vec3{0.0f, 1.67f, 0.0f});
+    organ(bones, "Neck spine", ColliderShape::capsule, Vec3{0.03f, 0.14f, 0.03f}, Vec3{0.0f, 1.48f, -0.03f});
+    organ(bones, "Upper spine", ColliderShape::capsule, Vec3{0.035f, 0.3f, 0.035f}, Vec3{0.0f, 1.27f, -0.08f});
+    organ(bones, "Lower spine", ColliderShape::capsule, Vec3{0.04f, 0.24f, 0.04f}, Vec3{0.0f, 1.0f, -0.07f});
+    organ(bones, "Ribs", ColliderShape::box, Vec3{0.32f, 0.26f, 0.2f}, Vec3{0.0f, 1.27f, 0.0f});
+    organ(bones, "Hip bone", ColliderShape::box, Vec3{0.3f, 0.12f, 0.16f}, Vec3{0.0f, 0.86f, 0.0f});
+    return root;
 }
 
 const char* to_string(EmitterShape v) {
@@ -1188,6 +1575,8 @@ const char* to_string(EmitterShape v) {
     case EmitterShape::box: return "box";
     case EmitterShape::circle: return "circle";
     case EmitterShape::line: return "line";
+    case EmitterShape::fluid_surface: return "fluid-surface";
+    case EmitterShape::parts: return "parts";
     }
     return "point";
 }
@@ -1200,11 +1589,13 @@ std::optional<EmitterShape> parse_emitter_shape(const std::string& text) {
     if (s == "dome") return EmitterShape::hemisphere;
     if (s == "rect" || s == "cube") return EmitterShape::box;
     if (s == "ring" || s == "disc" || s == "disk") return EmitterShape::circle;
+    if (s == "fluid" || s == "water" || s == "surface") return EmitterShape::fluid_surface;
+    if (s == "colliders" || s == "body" || s == "part") return EmitterShape::parts;
     return std::nullopt;
 }
 
 const std::vector<EmitterShape>& emitter_shapes() {
-    static const std::vector<EmitterShape> all = {EmitterShape::point, EmitterShape::sphere, EmitterShape::hemisphere, EmitterShape::cone, EmitterShape::box, EmitterShape::circle, EmitterShape::line};
+    static const std::vector<EmitterShape> all = {EmitterShape::point, EmitterShape::sphere, EmitterShape::hemisphere, EmitterShape::cone, EmitterShape::box, EmitterShape::circle, EmitterShape::line, EmitterShape::fluid_surface, EmitterShape::parts};
     return all;
 }
 
@@ -1229,78 +1620,81 @@ std::optional<Emitter> Emitter::named(const std::string& preset) {
     Emitter e;
     e.preset = s;
     if (s == "sparks") {
-        e.collide = true;
+        e.rate = 45.0f; e.lifetime = 0.7f; e.lifetime_spread = 0.3f; e.speed = 6.0f; e.speed_spread = 3.0f; e.spread = 30.0f;
+        e.gravity = 1.0f; e.drag = 0.35f; e.size = 0.035f; e.size_end = 0.012f; e.color = {1.0f, 0.92f, 0.65f}; e.color_end = {1.0f, 0.35f, 0.05f};
+        e.glow = 3.0f; e.stretch = 0.045f; e.collide = true; e.bounce = 0.35f; e.texture = "builtin:spark";
         return e;
     }
     if (s == "smoke") {
-        e.rate = 14.0f; e.lifetime = 3.5f; e.lifetime_spread = 1.0f; e.speed = 0.8f; e.speed_spread = 0.3f; e.spread = 18.0f;
-        e.gravity = -0.08f; e.drag = 0.6f; e.turbulence = 0.6f; e.size = 0.35f; e.size_end = 1.6f;
-        e.color = {0.35f, 0.35f, 0.37f}; e.color_end = {0.6f, 0.6f, 0.62f}; e.alpha = 0.55f; e.alpha_end = 0.0f;
+        e.rate = 10.0f; e.lifetime = 4.5f; e.lifetime_spread = 1.2f; e.speed = 0.9f; e.speed_spread = 0.3f; e.spread = 15.0f;
+        e.gravity = -0.08f; e.drag = 0.55f; e.turbulence = 0.45f; e.size = 0.55f; e.size_end = 2.4f;
+        e.color = {0.32f, 0.32f, 0.34f}; e.color_end = {0.58f, 0.58f, 0.6f}; e.alpha = 0.6f; e.alpha_end = 0.0f;
         e.glow = 0.0f; e.stretch = 0.0f; e.blend = ParticleBlend::alpha; e.lit = true; e.shape = EmitterShape::circle; e.shape_size = {0.25f, 0.25f, 0.25f};
-        e.max_particles = 400;
+        e.max_particles = 500; e.texture = "builtin:smoke";
         return e;
     }
     if (s == "fire") {
-        e.rate = 60.0f; e.lifetime = 0.9f; e.lifetime_spread = 0.3f; e.speed = 1.4f; e.speed_spread = 0.5f; e.spread = 12.0f;
-        e.gravity = -0.35f; e.drag = 0.8f; e.turbulence = 0.9f; e.size = 0.3f; e.size_end = 0.05f;
-        e.color = {1.0f, 0.75f, 0.25f}; e.color_end = {0.9f, 0.15f, 0.02f}; e.alpha = 0.9f; e.glow = 3.0f; e.stretch = 0.1f;
-        e.shape = EmitterShape::circle; e.shape_size = {0.3f, 0.3f, 0.3f}; e.on_death = "smoke"; e.max_particles = 600;
+        e.rate = 40.0f; e.lifetime = 0.85f; e.lifetime_spread = 0.25f; e.speed = 1.1f; e.speed_spread = 0.4f; e.spread = 10.0f;
+        e.gravity = -0.3f; e.drag = 0.8f; e.turbulence = 0.5f; e.size = 0.55f; e.size_end = 0.3f;
+        e.color = {1.0f, 0.82f, 0.6f}; e.color_end = {1.0f, 0.4f, 0.15f}; e.alpha = 0.85f; e.glow = 1.0f; e.stretch = 0.0f;
+        e.shape = EmitterShape::circle; e.shape_size = {0.25f, 0.25f, 0.25f}; e.on_death = "smoke"; e.max_particles = 400; e.texture = "builtin:fire";
         return e;
     }
     if (s == "explosion") {
-        e.loop = false; e.rate = 0.0f; e.burst = 160; e.duration = 0.1f; e.lifetime = 1.1f; e.lifetime_spread = 0.5f;
-        e.speed = 9.0f; e.speed_spread = 5.0f; e.spread = 180.0f; e.shape = EmitterShape::sphere; e.shape_size = {0.3f, 0.3f, 0.3f};
-        e.gravity = 0.6f; e.drag = 1.6f; e.size = 0.25f; e.size_end = 0.6f; e.color = {1.0f, 0.85f, 0.45f}; e.color_end = {0.6f, 0.15f, 0.05f};
-        e.glow = 4.0f; e.stretch = 0.2f; e.on_death = "smoke"; e.collide = true; e.max_particles = 400; e.priority = 3;
+        e.loop = false; e.rate = 0.0f; e.burst = 30; e.duration = 0.1f; e.lifetime = 1.3f; e.lifetime_spread = 0.4f;
+        e.speed = 3.5f; e.speed_spread = 2.0f; e.spread = 180.0f; e.shape = EmitterShape::sphere; e.shape_size = {0.4f, 0.4f, 0.4f};
+        e.gravity = -0.15f; e.drag = 2.6f; e.turbulence = 0.3f; e.size = 1.1f; e.size_end = 2.8f; e.color = {1.0f, 0.82f, 0.6f}; e.color_end = {0.8f, 0.32f, 0.12f};
+        e.alpha = 0.6f; e.glow = 1.0f; e.stretch = 0.0f; e.on_death = "smoke"; e.max_particles = 160; e.priority = 3; e.texture = "builtin:explosion";
         return e;
     }
     if (s == "dust") {
         e.rate = 10.0f; e.lifetime = 4.0f; e.lifetime_spread = 1.5f; e.speed = 0.2f; e.speed_spread = 0.15f; e.spread = 180.0f;
-        e.gravity = 0.02f; e.drag = 1.0f; e.turbulence = 0.3f; e.size = 0.04f; e.size_end = 0.04f;
-        e.color = {0.75f, 0.68f, 0.55f}; e.color_end = e.color; e.alpha = 0.5f; e.glow = 0.0f; e.stretch = 0.0f;
-        e.blend = ParticleBlend::alpha; e.lit = true; e.shape = EmitterShape::box; e.shape_size = {3.0f, 1.0f, 3.0f}; e.max_particles = 300;
+        e.gravity = 0.02f; e.drag = 1.0f; e.turbulence = 0.3f; e.size = 0.05f; e.size_end = 0.05f;
+        e.color = {0.8f, 0.72f, 0.58f}; e.color_end = e.color; e.alpha = 0.45f; e.glow = 0.0f; e.stretch = 0.0f;
+        e.blend = ParticleBlend::alpha; e.lit = true; e.shape = EmitterShape::box; e.shape_size = {3.0f, 1.0f, 3.0f}; e.max_particles = 300; e.texture = "builtin:dust";
         return e;
     }
     if (s == "rain") {
         e.rate = 600.0f; e.lifetime = 1.4f; e.lifetime_spread = 0.2f; e.speed = 12.0f; e.speed_spread = 2.0f; e.direction = {0.0f, -1.0f, 0.0f}; e.spread = 3.0f;
-        e.gravity = 1.0f; e.drag = 0.1f; e.size = 0.015f; e.size_end = 0.015f; e.color = {0.7f, 0.8f, 0.95f}; e.color_end = e.color;
-        e.alpha = 0.5f; e.alpha_end = 0.5f; e.glow = 0.0f; e.stretch = 1.5f; e.blend = ParticleBlend::alpha; e.shape = EmitterShape::box;
+        e.gravity = 1.0f; e.drag = 0.1f; e.size = 0.02f; e.size_end = 0.02f; e.color = {0.78f, 0.84f, 0.95f}; e.color_end = e.color;
+        e.alpha = 0.4f; e.alpha_end = 0.4f; e.glow = 0.0f; e.stretch = 0.035f; e.blend = ParticleBlend::alpha; e.shape = EmitterShape::box; e.texture = "builtin:rain";
         e.shape_size = {20.0f, 0.1f, 20.0f}; e.collide = true; e.die_on_hit = true; e.on_death = ""; e.max_particles = 4000; e.priority = 0;
         return e;
     }
     if (s == "snow") {
         e.rate = 120.0f; e.lifetime = 8.0f; e.lifetime_spread = 2.0f; e.speed = 0.6f; e.speed_spread = 0.2f; e.direction = {0.0f, -1.0f, 0.0f}; e.spread = 20.0f;
-        e.gravity = 0.05f; e.drag = 1.2f; e.turbulence = 0.5f; e.size = 0.04f; e.size_end = 0.04f; e.color = {1.0f, 1.0f, 1.0f}; e.color_end = e.color;
+        e.gravity = 0.05f; e.drag = 1.2f; e.turbulence = 0.5f; e.size = 0.06f; e.size_end = 0.06f; e.color = {1.0f, 1.0f, 1.0f}; e.color_end = e.color; e.texture = "builtin:snow";
         e.alpha = 0.9f; e.alpha_end = 0.9f; e.glow = 0.0f; e.stretch = 0.0f; e.blend = ParticleBlend::alpha; e.lit = true;
         e.shape = EmitterShape::box; e.shape_size = {20.0f, 0.1f, 20.0f}; e.collide = true; e.max_particles = 3000; e.priority = 0;
         return e;
     }
     if (s == "magic") {
         e.rate = 50.0f; e.lifetime = 1.4f; e.speed = 0.6f; e.speed_spread = 0.4f; e.spread = 180.0f; e.gravity = -0.1f; e.drag = 0.5f; e.turbulence = 1.2f;
-        e.size = 0.05f; e.size_end = 0.0f; e.color = {0.6f, 0.4f, 1.0f}; e.color_end = {0.2f, 0.9f, 1.0f}; e.glow = 3.0f; e.stretch = 0.0f;
+        e.size = 0.14f; e.size_end = 0.0f; e.color = {0.7f, 0.5f, 1.0f}; e.color_end = {0.3f, 0.9f, 1.0f}; e.glow = 3.0f; e.stretch = 0.0f; e.texture = "builtin:magic";
         e.shape = EmitterShape::sphere; e.shape_size = {0.5f, 0.5f, 0.5f}; e.max_particles = 500;
         return e;
     }
     if (s == "debris") {
         e.loop = false; e.rate = 0.0f; e.burst = 40; e.duration = 0.1f; e.lifetime = 3.0f; e.lifetime_spread = 1.0f; e.speed = 5.0f; e.speed_spread = 2.0f; e.spread = 60.0f;
-        e.gravity = 1.0f; e.drag = 0.1f; e.size = 0.08f; e.size_end = 0.08f; e.color = {0.45f, 0.38f, 0.3f}; e.color_end = e.color; e.alpha_end = 1.0f;
+        e.gravity = 1.0f; e.drag = 0.1f; e.size = 0.12f; e.size_end = 0.12f; e.color = {0.62f, 0.54f, 0.45f}; e.color_end = e.color; e.alpha_end = 1.0f; e.texture = "builtin:debris";
         e.glow = 0.0f; e.stretch = 0.0f; e.blend = ParticleBlend::alpha; e.lit = true; e.collide = true; e.bounce = 0.35f; e.friction = 0.6f; e.max_particles = 200;
         return e;
     }
     if (s == "bubbles") {
         e.rate = 12.0f; e.lifetime = 2.5f; e.speed = 0.5f; e.speed_spread = 0.2f; e.spread = 15.0f; e.gravity = -0.25f; e.drag = 1.5f; e.turbulence = 0.4f;
-        e.size = 0.04f; e.size_end = 0.07f; e.color = {0.8f, 0.92f, 1.0f}; e.color_end = e.color; e.alpha = 0.6f; e.alpha_end = 0.3f; e.glow = 0.5f; e.stretch = 0.0f;
+        e.size = 0.06f; e.size_end = 0.09f; e.color = {0.9f, 0.96f, 1.0f}; e.color_end = e.color; e.alpha = 0.85f; e.alpha_end = 0.6f; e.glow = 0.5f; e.stretch = 0.0f; e.texture = "builtin:bubble";
         e.blend = ParticleBlend::alpha; e.max_particles = 200;
         return e;
     }
     if (s == "steam") {
         Emitter m = *named("smoke");
-        m.preset = s; m.color = {0.92f, 0.94f, 0.96f}; m.color_end = {1.0f, 1.0f, 1.0f}; m.alpha = 0.35f; m.lifetime = 2.0f; m.speed = 1.5f; m.gravity = -0.25f;
+        m.preset = s; m.color = {0.95f, 0.96f, 0.98f}; m.color_end = {1.0f, 1.0f, 1.0f}; m.alpha = 0.3f; m.lifetime = 1.6f; m.lifetime_spread = 0.5f; m.speed = 1.5f; m.gravity = -0.2f;
+        m.rate = 18.0f; m.size = 0.3f; m.size_end = 1.5f; m.turbulence = 0.7f; m.texture = "builtin:steam";
         return m;
     }
     if (s == "embers") {
         e.rate = 8.0f; e.lifetime = 2.5f; e.lifetime_spread = 1.0f; e.speed = 1.2f; e.speed_spread = 0.6f; e.spread = 25.0f; e.gravity = -0.15f; e.drag = 0.4f; e.turbulence = 1.0f;
-        e.size = 0.025f; e.size_end = 0.01f; e.color = {1.0f, 0.6f, 0.2f}; e.color_end = {0.8f, 0.15f, 0.0f}; e.glow = 3.0f; e.stretch = 0.2f; e.shape = EmitterShape::circle;
+        e.size = 0.04f; e.size_end = 0.015f; e.color = {1.0f, 0.65f, 0.25f}; e.color_end = {0.85f, 0.18f, 0.02f}; e.glow = 3.0f; e.stretch = 0.03f; e.shape = EmitterShape::circle; e.texture = "builtin:ember";
         e.shape_size = {0.3f, 0.3f, 0.3f}; e.max_particles = 200;
         return e;
     }
@@ -1541,6 +1935,8 @@ std::string fluid_line(std::size_t n, const Fluid& v) {
     f("opacity", v.opacity, d.opacity);
     if (!same(v.current, d.current)) out += " current:" + vec_token(v.current);
     f("wave-height", v.wave_height, d.wave_height);
+    f("reflectivity", v.reflectivity, d.reflectivity);
+    if (v.reflections != d.reflections) out += std::string(" reflections:") + to_string(v.reflections);
     f("resolution", v.resolution, d.resolution);
     if (v.infinite) out += " infinite:1";
     if (!v.enabled) out += " enabled:0";
@@ -1605,6 +2001,9 @@ std::string emitter_line(std::size_t n, const Emitter& v) {
     i("priority", v.priority, d.priority);
     b("local", v.local_space, d.local_space);
     f("inherit", v.inherit_velocity, d.inherit_velocity);
+    if (!v.part.empty()) out += " part:" + escape_token(v.part);
+    if (v.soft != "auto") out += " soft:" + escape_token(v.soft);
+    if (v.soft_distance > 0.0f) out += " soft-distance:" + number(v.soft_distance);
     if (!v.on_death.empty()) out += " on-death:" + escape_token(v.on_death);
     else if (v.on_death != d.on_death) out += " on-death:none";
     return out + "\n";
@@ -1659,6 +2058,9 @@ void read_emitter(std::istringstream& row, Emitter& v) {
         else if (key == "priority") v.priority = std::clamp(n, 0, 3);
         else if (key == "local") v.local_space = s != "0";
         else if (key == "inherit") v.inherit_velocity = x;
+        else if (key == "part") v.part = unescape_token(s);
+        else if (key == "soft") v.soft = s == "on" || s == "off" ? s : std::string("auto");
+        else if (key == "soft-distance") v.soft_distance = std::max(0.0f, x);
         else if (key == "on-death") v.on_death = s == "none" ? std::string() : unescape_token(s);
     }
 }
@@ -1687,6 +2089,10 @@ void read_fluid(std::istringstream& row, Fluid& v) {
         else if (key == "opacity") v.opacity = std::clamp(x, 0.0f, 1.0f);
         else if (key == "current") parse_vec_token(s, v.current);
         else if (key == "wave-height") v.wave_height = std::max(0.0f, x);
+        else if (key == "reflectivity") v.reflectivity = std::clamp(x, 0.0f, 1.0f);
+        else if (key == "reflections") {
+            if (const auto rm = parse_reflection_mode(s)) v.reflections = *rm;
+        }
         else if (key == "resolution") v.resolution = std::max(0.0f, x);
         else if (key == "infinite") v.infinite = s != "0";
         else if (key == "enabled") v.enabled = s != "0";
@@ -1717,6 +2123,7 @@ std::string material_line(std::size_t n, const Material& m) {
     f("absorption-distance", m.absorption_distance, d.absorption_distance);
     f("opacity", m.opacity, d.opacity);
     f("reflectivity", m.reflectivity, d.reflectivity);
+    if (m.reflections != d.reflections) out += std::string(" reflections:") + to_string(m.reflections);
     auto t = [&out](const char* key, const std::string& v) {
         if (!v.empty()) out += std::string(" ") + key + ":" + escape_token(v);
     };
@@ -1837,6 +2244,9 @@ void read_material(std::istringstream& row, Material& m) {
         else if (key == "absorption-distance") m.absorption_distance = x;
         else if (key == "opacity") m.opacity = x;
         else if (key == "reflectivity") m.reflectivity = x;
+        else if (key == "reflections") {
+            if (const auto rm = parse_reflection_mode(v)) m.reflections = *rm;
+        }
         else if (key == "base-map") m.base_map = unescape_token(v);
         else if (key == "normal-map") m.normal_map = unescape_token(v);
         else if (key == "orm-map") m.orm_map = unescape_token(v);
@@ -1916,12 +2326,50 @@ std::string Scene::save() const {
             if (c.grip.x != 1.0f || c.grip.y != 1.0f || c.grip.z != 1.0f) out << " grip:" << number(c.grip.x) << "," << number(c.grip.y) << "," << number(c.grip.z);
             if (c.shape == ColliderShape::sphere_section) out << " arc:" << number(c.polar_min) << "," << number(c.polar_max) << "," << number(c.azimuth_min) << "," << number(c.azimuth_max);
             if (c.shell != base.shell) out << " shell:" << number(c.shell);
+            if (!c.source.empty()) out << " source:" << escape_token(c.source);
             out << "\n";
         }
         if (s.light) out << light_line(n, *s.light);
         if (s.material) out << material_line(n, *s.material);
         if (s.fluid) out << fluid_line(n, *s.fluid);
         if (s.emitter) out << emitter_line(n, *s.emitter);
+        if (s.camera) {
+            const Camera d;
+            out << "camera " << n;
+            if (s.camera->active != d.active) out << " active:" << (s.camera->active ? 1 : 0);
+            if (s.camera->priority != d.priority) out << " priority:" << s.camera->priority;
+            if (s.camera->fov != d.fov) out << " fov:" << number(s.camera->fov);
+            if (s.camera->near_clip != d.near_clip) out << " near:" << number(s.camera->near_clip);
+            if (s.camera->far_clip != d.far_clip) out << " far:" << number(s.camera->far_clip);
+            if (s.camera->view_height != d.view_height) out << " height:" << number(s.camera->view_height);
+            if (s.camera->control != d.control) out << " control:" << to_string(s.camera->control);
+            if (s.camera->move_speed != d.move_speed) out << " speed:" << number(s.camera->move_speed);
+            if (s.camera->look_speed != d.look_speed) out << " look:" << number(s.camera->look_speed);
+            if (s.camera->eye_height != d.eye_height) out << " eye:" << number(s.camera->eye_height);
+            if (s.camera->mouse_look != d.mouse_look) out << " mouse:" << (s.camera->mouse_look ? 1 : 0);
+            out << "\n";
+        }
+        if (s.model) {
+            const Model d;
+            out << "model " << n << " source:" << escape_token(s.model->source);
+            if (s.model->visible != d.visible) out << " visible:" << (s.model->visible ? 1 : 0);
+            if (s.model->cast_shadows != d.cast_shadows) out << " shadows:" << (s.model->cast_shadows ? 1 : 0);
+            out << "\n";
+        }
+        if (s.animator) {
+            const Animator d;
+            out << "animator " << n;
+            if (!s.animator->clip.empty()) out << " clip:" << escape_token(s.animator->clip);
+            if (s.animator->playing != d.playing) out << " playing:" << (s.animator->playing ? 1 : 0);
+            if (s.animator->loop != d.loop) out << " loop:" << (s.animator->loop ? 1 : 0);
+            if (s.animator->speed != d.speed) out << " speed:" << number(s.animator->speed);
+            if (s.animator->blend != d.blend) out << " blend:" << number(s.animator->blend);
+            if (s.animator->start != d.start) out << " start:" << number(s.animator->start);
+            out << "\n";
+            for (const AnimationEvent& ev : s.animator->events) out << "anim-event " << n << " " << escape_token(ev.clip) << " " << number(ev.time) << " " << escape_token(ev.name) << "\n";
+        }
+        if (s.terrain) out << terrain_lines(n, *s.terrain);
+        if (!s.bone.empty()) out << "bone " << n << " " << escape_token(s.bone) << "\n";
         if (!s.instance_of.empty()) out << "instance " << n << " " << s.instance_of << "\n";
     }
     return out.str();
@@ -1954,7 +2402,7 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
         std::string kind;
         std::size_t num = 0, parent = 0;
         row >> kind >> num;
-        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material" || kind == "fluid" || kind == "emitter" || kind == "instance") {
+        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material" || kind == "fluid" || kind == "emitter" || kind == "instance" || kind == "camera" || kind == "model" || kind == "animator" || kind == "anim-event" || kind == "bone" || is_terrain_line(kind)) {
             const auto owner = by_number.find(num);
             if (!row || owner == by_number.end()) {
                 if (error) *error = "line " + std::to_string(line_no) + ": " + kind + " for an entity that isn't there";
@@ -1968,6 +2416,79 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     return std::nullopt;
                 }
                 scene.add_light(owner->second, l.type) = l;
+                continue;
+            }
+            if (kind == "model") {
+                Model& m = scene.add_model(owner->second);
+                for (std::string token; row >> token;) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    const std::string key = token.substr(0, colon), v = token.substr(colon + 1);
+                    if (key == "source") m.source = unescape_token(v);
+                    else if (key == "visible") m.visible = v != "0";
+                    else if (key == "shadows") m.cast_shadows = v != "0";
+                }
+                continue;
+            }
+            if (kind == "animator") {
+                Animator& a = scene.add_animator(owner->second);
+                for (std::string token; row >> token;) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    const std::string key = token.substr(0, colon), v = token.substr(colon + 1);
+                    const float x = static_cast<float>(std::atof(v.c_str()));
+                    if (key == "clip") a.clip = unescape_token(v);
+                    else if (key == "playing") a.playing = v != "0";
+                    else if (key == "loop") a.loop = v != "0";
+                    else if (key == "speed") a.speed = x;
+                    else if (key == "blend") a.blend = std::max(0.0f, x);
+                    else if (key == "start") a.start = std::max(0.0f, x);
+                }
+                continue;
+            }
+            if (kind == "bone") {
+                std::string b;
+                row >> b;
+                scene.set_bone(owner->second, unescape_token(b));
+                continue;
+            }
+            if (kind == "anim-event") {
+                AnimationEvent ev;
+                std::string clip, name;
+                row >> clip >> ev.time >> name;
+                ev.clip = unescape_token(clip);
+                ev.name = unescape_token(name);
+                scene.add_animator(owner->second).events.push_back(ev);
+                continue;
+            }
+            if (is_terrain_line(kind)) {
+                std::string bad;
+                if (!read_terrain_line(kind, row, scene.add_terrain(owner->second), &bad)) {
+                    if (error) *error = "line " + std::to_string(line_no) + ": " + bad;
+                    return std::nullopt;
+                }
+                continue;
+            }
+            if (kind == "camera") {
+                Camera& c = scene.add_camera(owner->second);
+                for (std::string token; row >> token;) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    const std::string key = token.substr(0, colon), v = token.substr(colon + 1);
+                    const float x = static_cast<float>(std::atof(v.c_str()));
+                    if (key == "active") c.active = v != "0";
+                    else if (key == "priority") c.priority = std::atoi(v.c_str());
+                    else if (key == "fov") c.fov = std::clamp(x, 1.0f, 179.0f);
+                    else if (key == "near") c.near_clip = std::max(0.0001f, x);
+                    else if (key == "far") c.far_clip = std::max(0.01f, x);
+                    else if (key == "height") c.view_height = std::max(0.01f, x);
+                    else if (key == "control") {
+                        if (const auto cc = parse_camera_control(v)) c.control = *cc;
+                    } else if (key == "speed") c.move_speed = std::max(0.0f, x);
+                    else if (key == "look") c.look_speed = std::max(0.0f, x);
+                    else if (key == "eye") c.eye_height = std::max(0.0f, x);
+                    else if (key == "mouse") c.mouse_look = v != "0";
+                }
                 continue;
             }
             if (kind == "emitter") {
@@ -2049,6 +2570,10 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     if (colon == std::string::npos) continue;
                     const std::string key = extra.substr(0, colon);
                     const std::string val = extra.substr(colon + 1);
+                    if (key == "source") {
+                        c.source = unescape_token(val);
+                        continue;
+                    }
                     if (key == "arc") {
                         float a[4] = {c.polar_min, c.polar_max, c.azimuth_min, c.azimuth_max};
                         std::size_t at = 0;

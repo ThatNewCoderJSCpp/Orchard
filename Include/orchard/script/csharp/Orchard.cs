@@ -116,6 +116,16 @@ namespace Orchard
         public static void StopParticles(Entity e) => Native.Particles(e?.Id ?? 0, 0, 0);
         public static void BurstParticles(Entity e, int count) => Native.Particles(e?.Id ?? 0, 2, count);
         public static void ClearParticles(Entity e) => Native.Particles(e?.Id ?? 0, 3, 0);
+        public static void PlayAnimation(Entity e, string clip, double fade = 0.25) => Native.Animation(e?.Id ?? 0, 0, clip, fade);
+        public static void PlayAnimationOnce(Entity e, string clip, double fade = 0.25) => Native.Animation(e?.Id ?? 0, 1, clip, fade);
+        public static void StopAnimation(Entity e) => Native.Animation(e?.Id ?? 0, 2, "", 0.0);
+        public static void ResumeAnimation(Entity e) => Native.Animation(e?.Id ?? 0, 3, "", 0.0);
+        public static void SetAnimationSpeed(Entity e, double speed) => Native.Animation(e?.Id ?? 0, 4, "", speed);
+        public static double AnimationTime(Entity e) => Native.Animation(e?.Id ?? 0, 5, "", 0.0);
+        public static void SetAnimationTime(Entity e, double seconds) => Native.Animation(e?.Id ?? 0, 6, "", seconds);
+        public static double AnimationLength(Entity e) => Native.Animation(e?.Id ?? 0, 7, "", 0.0);
+        public static bool AnimationPlaying(Entity e) => Native.Animation(e?.Id ?? 0, 8, "", 0.0) != 0.0;
+        public static string AnimationEvent(Entity e) => Native.AnimationEvent(e?.Id ?? 0);
         public static int PourFluid(double x, double y, double radius) => Native.Fluid(0, x, y, radius, 0, 0, 0);
         public static int EraseFluid(double x, double y, double radius) => Native.Fluid(1, x, y, radius, 0, 0, 0);
         public static int PushFluid(double x, double y, double radius, double vx, double vy) => Native.Fluid(2, x, y, radius, vx, vy, 0);
@@ -150,6 +160,8 @@ namespace Orchard
         public delegate* unmanaged<byte*, double, double, double, ulong, ulong> instantiate;
         public delegate* unmanaged<ulong, int, int, void> particles;
         public delegate* unmanaged<int, double, double, double, double, double, double, double, int, int> fluid_brush;
+        public delegate* unmanaged<ulong, int, byte*, double, double> animation;
+        public delegate* unmanaged<ulong, byte*> animation_event;
     }
 
     internal static unsafe class Native
@@ -201,6 +213,18 @@ namespace Orchard
         {
             if (!Has((int)Marshal.OffsetOf<HostApi>("particles"), sizeof(nint)) || Host->particles == null) return;
             Host->particles(e, action, count);
+        }
+
+        public static double Animation(ulong e, int action, string clip, double value)
+        {
+            if (!Has((int)Marshal.OffsetOf<HostApi>("animation"), sizeof(nint)) || Host->animation == null) return 0.0;
+            fixed (byte* p = Utf8(clip)) return Host->animation(e, action, p, value);
+        }
+
+        public static string AnimationEvent(ulong e)
+        {
+            if (!Has((int)Marshal.OffsetOf<HostApi>("animation_event"), sizeof(nint)) || Host->animation_event == null) return "";
+            return Text(Host->animation_event(e));
         }
 
         public static int Fluid(int brush, double x, double y, double radius, double vx, double vy, int material)

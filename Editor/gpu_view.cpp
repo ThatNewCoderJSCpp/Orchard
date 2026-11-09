@@ -121,7 +121,7 @@ Color material_color(const Material& m) {
 fg::Material3D material_3d(const Material& m) {
     fg::Material3D out = fg::Material3D::physical(std::clamp(m.metallic, 0.0f, 1.0f), std::clamp(m.roughness, 0.0f, 1.0f));
     out.cull = m.double_sided ? fg::Cull3D::None : fg::Cull3D::Back;
-    out.reflectivity = std::clamp(std::max(m.reflectivity, m.metallic * (1.0f - m.roughness) * 0.6f), 0.0f, 1.0f);
+    out.reflectivity = m.reflections == ReflectionMode::highlights ? 0.0f : std::clamp(std::max(m.reflectivity, m.metallic * (1.0f - m.roughness) * 0.6f), 0.0f, 1.0f);
     const float glow = std::max({m.emission.x, m.emission.y, m.emission.z}) * m.emission_strength;
     if (glow > 0.0f) {
         out.emissive = Color(to_byte(m.emission.x), to_byte(m.emission.y), to_byte(m.emission.z));
@@ -443,6 +443,7 @@ struct GpuView::Meshes {
 GpuView::GpuView() : m_meshes(std::make_unique<Meshes>()) {
     Meshes* mm = m_meshes.get();
     m_particles.set_texture_lookup([mm](const std::string& file) { return mm->texture(file, fg::TextureRole::Color, false); });
+    m_terrain.set_texture_lookup([mm](const std::string& file) { return mm->texture(file, fg::TextureRole::Color, false); });
 }
 
 void GpuView::set_lights(const fizmo::lighting::Scene* lights) {
@@ -462,8 +463,10 @@ std::function<std::shared_ptr<const fizmo::lighting::Texture>(const std::string&
 }
 
 void GpuView::set_texture_folder(const std::string& folder) {
+    m_terrain.set_asset_root(folder);
     if (m_meshes->texture_folder == folder) return;
     m_meshes->texture_folder = folder;
+    m_models.set_root(folder);
     m_meshes->loaded.clear();
     m_meshes->textures.clear();
 }
@@ -507,6 +510,8 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
         fg::Camera3D cam(vector3d{eye.x, eye.y, eye.z}, f.viewport_width, f.viewport_height, oc.fov, 0.05, 5000.0);
         cam.set_axes(fizmo_axes(axes));
         cam.look_at(vector3d{oc.target.x, oc.target.y, oc.target.z});
+        m_terrain.set_up(axes.up());
+        m_terrain.sync(scene);
         auto wv = [&axes](float x, float y, float z) {
             const Vec3 p = axes.from_render({x, y, z});
             return vector3d{p.x, p.y, p.z};
@@ -518,16 +523,94 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 m_meshes->tick_textures();
                 for (Entity e : scene.entities()) {
                     const Material* mm = scene.material(e);
-                    if (mm && (mm->reflectivity > 0.02f || mm->metallic * (1.0f - mm->roughness) > 0.05f || mm->transmission > 0.0f || mm->opacity < 1.0f)) any_reflective = true;
+                    if (mm && mm->reflections != ReflectionMode::highlights && (mm->reflectivity > 0.02f || mm->metallic * (1.0f - mm->roughness) > 0.05f || mm->transmission > 0.0f || mm->opacity < 1.0f)) any_reflective = true;
                 }
             }
+            if (m_meshes->fluids)
+                for (const xylem::FluidDraw& d : *m_meshes->fluids)
+                    if (d.reflections != ReflectionMode::highlights && d.reflectivity > 0.02f) any_reflective = true;
+            const bool bounce_light = m_options.scene_lights && m_meshes->lights && m_options.materials;
+            const int quality = std::clamp(m_options.lighting_quality, 0, 3);
+            if (quality >= 2) any_reflective = true;
             if (m_options.shadows || (m_options.scene_lights && m_meshes->lights) || any_reflective) {
-                fg::SunShadow3D sun = m_options.shadows ? fg::SunShadow3D::medium() : fg::SunShadow3D::off();
-                sun.distance = std::max(1.0, m_options.shadow_distance);
+                fg::SunShadow3D sun = fg::SunShadow3D::off();
+                if (m_options.shadows) {
+                    if (quality == 0) sun = fg::SunShadow3D::low();
+                    else if (quality == 1) sun = fg::SunShadow3D::medium();
+                    else sun = fg::SunShadow3D::high();
+                    if (quality == 3) {
+                        sun.resolution = 4096;
+                        sun.max_softness = 14.0f;
+                        sun.filter_taps = 6;
+                        sun.light_size = 1.8f;
+                    }
+                }
+                sun.distance = std::max(1.0, m_options.shadow_distance * (quality >= 3 ? 2.5 : quality == 2 ? 2.0 : 1.0));
                 fg::SceneLighting3D lighting = fg::SceneLighting3D::daylight(sun);
+                lighting.atmosphere.glow_spread = 8.0f;
+                lighting.atmosphere.glow_focus = 400.0f;
+                lighting.atmosphere.glow_strength = 0.35f;
+                lighting.atmosphere.fog_density = 0.0025f;
+                lighting.atmosphere.fog_start = 32.0f;
+                if (quality >= 1) {
+                    lighting.sun_intensity = quality >= 3 ? 1.1f : 1.0f;
+                    lighting.sky_intensity = quality >= 3 ? 0.55f : 0.58f;
+                    lighting.max_light = quality >= 3 ? 2.5f : 2.2f;
+                    lighting.sun_shadow.soft = m_options.shadows;
+                    lighting.sun_shadow.strength = quality >= 3 ? 0.92f : 0.85f;
+                    lighting.tone_map.enabled = true;
+                    lighting.tone_map.exposure = 0.9f;
+                    lighting.tone_map.saturation = quality >= 3 ? 1.2f : 1.15f;
+                    lighting.capsule_shadows.enabled = m_options.shadows;
+                    lighting.capsule_shadows.strength = lighting.sun_shadow.strength;
+                    lighting.capsule_shadows.sun_size = 1.0f;
+                    lighting.capsule_shadows.point_size = 0.2f;
+                    lighting.ambient_occlusion.enabled = m_options.ambient_occlusion;
+                    lighting.ambient_occlusion.radius = quality >= 3 ? 1.0f : 0.8f;
+                    lighting.ambient_occlusion.strength = quality >= 3 ? 1.15f : 1.0f;
+                    lighting.ambient_occlusion.samples = quality >= 3 ? 16 : quality == 2 ? 12 : 8;
+                    lighting.ambient_occlusion.half_resolution = quality < 3;
+                    if (m_options.shadows) {
+                        for (Entity e : scene.entities()) {
+                            const std::vector<Collider>* cs = scene.colliders(e);
+                            if (!cs || !scene.body(e) || scene.body(e)->type == BodyType::fixed) continue;
+                            const Mat4 w = scene.world_matrix(e);
+                            for (const Collider& c : *cs) {
+                                if (c.shape != ColliderShape::capsule || c.sensor || !c.enabled) continue;
+                                if (lighting.capsule_shadows.capsules.size() >= 64) break;
+                                const float rad = std::max(c.size.x, c.size.z) * 0.5f;
+                                const float half = std::max(0.0f, c.size.y * 0.5f - rad);
+                                const vector3d a = point(w, c.offset + Vec3{0.0f, -half, 0.0f});
+                                const vector3d b = point(w, c.offset + Vec3{0.0f, half, 0.0f});
+                                const float sx = length(Vec3{w.at(0, 0), w.at(1, 0), w.at(2, 0)});
+                                lighting.capsule_shadows.capsules.emplace_back(a, b, rad * sx);
+                            }
+                        }
+                    }
+                }
+                if (quality >= 2) {
+                    lighting.point_shadows = quality >= 3 ? fg::PointShadows3D::high() : fg::PointShadows3D::medium();
+                    lighting.point_shadows.enabled = m_options.shadows;
+                    lighting.shafts.enabled = true;
+                    lighting.shafts.samples = quality >= 3 ? 64u : 48u;
+                    lighting.shafts.strength = quality >= 3 ? 0.3f : 0.25f;
+                    lighting.shafts.focus = 24.0f;
+                    lighting.volumetrics.enabled = true;
+                    lighting.volumetrics.steps = quality >= 3 ? 48u : 24u;
+                    lighting.volumetrics.cell_size = quality >= 3 ? 6u : 8u;
+                    lighting.volumetrics.density = quality >= 3 ? 0.06f : 0.04f;
+                    lighting.volumetrics.intensity = quality >= 3 ? 2.0f : 1.0f;
+                    lighting.volumetrics.anisotropy = 0.5f;
+                    lighting.volumetrics.distance = 96.0f;
+                }
+                if (quality >= 3) {
+                    lighting.sun_shadow.resolution = 4096;
+                    lighting.sun_shadow.filter_taps = 6;
+                    lighting.sun_shadow.light_size = 1.5f;
+                }
                 if (any_reflective) {
                     lighting.surfaces.screen_reflections = true;
-                    lighting.surfaces.reflection_steps = 24;
+                    lighting.surfaces.reflection_steps = quality >= 3 ? 48 : quality == 2 ? 32 : 24;
                     lighting.surfaces.reflection_distance = static_cast<float>(std::max(16.0, static_cast<double>(view.orbit_camera().distance) * 4.0));
                 }
                 if (m_options.scene_lights && m_meshes->lights) {
@@ -537,6 +620,46 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                         fg::PointLight3D p = fg::to_point_light(l);
                         p.casts_shadows = p.casts_shadows && m_options.shadows;
                         lighting.point_lights.push_back(p);
+                    }
+                }
+                if (bounce_light) {
+                    struct Mirror {
+                        Vec3 point;
+                        Vec3 normal;
+                        float amount;
+                    };
+                    std::vector<Mirror> mirrors;
+                    for (Entity e : scene.entities()) {
+                        const Material* mm = scene.material(e);
+                        if (!mm || mm->reflections != ReflectionMode::realistic || mm->reflectivity < 0.05f) continue;
+                        const Mat4 w = scene.world_matrix(e);
+                        Vec3 size{1.0f, 1.0f, 1.0f};
+                        if (const std::vector<Collider>* cs = scene.colliders(e))
+                            if (!cs->empty()) size = cs->front().size;
+                        const Vec3 cols[3] = {Vec3{w.at(0, 0), w.at(1, 0), w.at(2, 0)}, Vec3{w.at(0, 1), w.at(1, 1), w.at(2, 1)}, Vec3{w.at(0, 2), w.at(1, 2), w.at(2, 2)}};
+                        const float extent[3] = {length(cols[0]) * size.x, length(cols[1]) * size.y, length(cols[2]) * size.z};
+                        int thin = 0;
+                        for (int a = 1; a < 3; ++a)
+                            if (extent[a] < extent[thin]) thin = a;
+                        mirrors.push_back({mul_point(w, Vec3{0.0f, 0.0f, 0.0f}), normalize(cols[thin]), mm->reflectivity});
+                    }
+                    if (m_meshes->fluids)
+                        for (const xylem::FluidDraw& d : *m_meshes->fluids)
+                            if (!d.flat && d.reflections == ReflectionMode::realistic && d.reflectivity > 0.02f) mirrors.push_back({d.origin + d.axis_up * d.level_height, normalize(d.axis_up), d.reflectivity});
+                    const std::size_t real_lights = lighting.point_lights.size();
+                    for (const Mirror& mr : mirrors) {
+                        for (std::size_t li = 0; li < real_lights; ++li) {
+                            if (lighting.point_lights.size() >= fg::SceneLighting3D::MAX_POINT_LIGHTS) break;
+                            fg::PointLight3D p = lighting.point_lights[li];
+                            const Vec3 lp{static_cast<float>(p.position.x), static_cast<float>(p.position.y), static_cast<float>(p.position.z)};
+                            const float side = dot(lp - mr.point, mr.normal);
+                            if (std::fabs(side) < 1e-3f) continue;
+                            const Vec3 image = lp - mr.normal * (2.0f * side);
+                            p.position = vector3d{image.x, image.y, image.z};
+                            p.intensity *= std::clamp(mr.amount, 0.0f, 1.0f) * 0.85f;
+                            p.casts_shadows = false;
+                            lighting.point_lights.push_back(p);
+                        }
                     }
                 }
                 lighting.sun_direction = wv(-0.4f, -1.0f, -0.6f);
@@ -559,6 +682,11 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 if (std::fabs(x) >= step * 0.5f) r.draw_line_3d(wv(x, 0.0f, cz - extent), wv(x, 0.0f, cz + extent), line_color, 1.0f, true);
                 if (std::fabs(z) >= step * 0.5f) r.draw_line_3d(wv(cx - extent, 0.0f, z), wv(cx + extent, 0.0f, z), line_color, 1.0f, true);
             }
+            struct OverlayLine {
+                vector3d a, b;
+                Color c;
+            };
+            std::vector<OverlayLine> overlay_axes;
             {
                 const Vec3 world_x = axes.from_render({1.0f, 0.0f, 0.0f});
                 const Vec3 world_z = axes.from_render({0.0f, 0.0f, 1.0f});
@@ -572,8 +700,8 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 const float reach = extent * 1.5f;
                 const float height = std::max(step * 3.0f, oc.distance * 0.35f);
                 auto origin_axis = [&](vector3d a, vector3d b, Color c) {
-                    r.draw_line_3d(a, b, with_alpha(c, 70), 2.0f, false);
                     r.draw_line_3d(a, b, c, 3.0f, true);
+                    overlay_axes.push_back({a, b, c});
                 };
                 origin_axis(wv(-reach, lift, 0.0f), wv(reach, lift, 0.0f), render_x);
                 origin_axis(wv(0.0f, lift, -reach), wv(0.0f, lift, reach), render_z);
@@ -597,10 +725,20 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 bool selected;
             };
             std::vector<Icon> icons;
+            m_models.set_z_up(axes.up().z > 0.5f);
+            auto model_owner = [&scene](Entity e) {
+                for (Entity at = e; scene.alive(at); at = scene.parent(at))
+                    if (const Model* md = scene.model(at))
+                        if (md->visible && !md->source.empty()) return at;
+                return Entity{};
+            };
             for (Entity e : scene.entities()) {
                 const Mat4 world = scene.world_matrix(e);
                 const std::uint64_t base = static_cast<std::uint64_t>(e.id()) << 20;
                 const std::vector<Collider>* cs = scene.colliders(e);
+                const Entity shown_by = model_owner(e);
+                const bool as_model = scene.alive(shown_by);
+                const bool hint_parts = !playing && as_model && scene.alive(selected) && (selected == e || selected == shown_by || model_owner(selected) == shown_by);
                 if (cs && !cs->empty()) {
                     for (std::size_t ci = 0; ci < cs->size(); ++ci) {
                         const Collider& c = (*cs)[ci];
@@ -608,6 +746,30 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                         const Material* mat = m_options.materials ? scene.material(e) : nullptr;
                         if (mat && !mat->visible) continue;
                         const Color col = mat ? material_color(*mat) : body_color(scene, e, c);
+                        if (c.shape == ColliderShape::mesh || c.shape == ColliderShape::convex_hull) {
+                            const Mat4 placed = world * translation(c.offset) * scaling(c.size);
+                            if (!as_model && !c.source.empty()) {
+                                fg::Material3D over;
+                                const fg::Material3D* use = nullptr;
+                                if (mat) {
+                                    over = material_3d(*mat);
+                                    m_meshes->apply_textures(*mat, over);
+                                    use = &over;
+                                }
+                                m_models.draw_source(r, c.source, placed, use, true);
+                            } else if (hint_parts) {
+                                Vec3 lo, hi;
+                                if (m_models.local_bounds(c.source, lo, hi)) box_edges(r, placed * translation((lo + hi) * 0.5f) * scaling(hi - lo), with_alpha(col, 120), 1.0f, true);
+                            }
+                            continue;
+                        }
+                        if (as_model) {
+                            if (hint_parts) {
+                                if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, with_alpha(col, 150), 1.2f, false);
+                                else ring_edges(r, m, with_alpha(col, 150), 1.2f, false);
+                            }
+                            continue;
+                        }
                         const std::uint64_t key = base | (static_cast<std::uint64_t>(ci & 0xffff) << 4);
                         if (c.sensor || !c.enabled) {
                             if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, with_alpha(col, c.enabled ? 255 : 110), 1.5f, true);
@@ -632,7 +794,9 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                             if (body_h > 0.0f) items.push_back({Kind::cube, world * translation(c.offset) * scaling({rad * 0.85f, body_h, rad * 0.85f}), col, key | 3, mat});
                         }
                     }
-                } else if (named(scene, e, "Camera")) {
+                } else if (as_model) {
+                    continue;
+                } else if ((scene.camera(e) || named(scene, e, "Camera"))) {
                     if (playing) continue;
                     const vector3d o = point(world, {0, 0, 0});
                     const Vec3 tip[4] = {{-0.5f, -0.32f, -0.9f}, {0.5f, -0.32f, -0.9f}, {0.5f, 0.32f, -0.9f}, {-0.5f, 0.32f, -0.9f}};
@@ -666,7 +830,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                     }
                 } else if (scene.emitter(e)) {
                     if (!playing) icons.push_back({point(world, {0, 0, 0}), 2, particle_color, e == selected});
-                } else if (!scene.fluid(e)) {
+                } else if (!scene.fluid(e) && !scene.terrain(e)) {
                     items.push_back({Kind::cube, world, plain, base | 0xf});
                 }
             }
@@ -825,16 +989,52 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 }
             }
 
+            {
+                auto visible = [&cam](const Mat4& world, Vec3 lo, Vec3 hi) {
+                    vector3d a{1e30, 1e30, 1e30}, b{-1e30, -1e30, -1e30};
+                    for (int i = 0; i < 8; ++i) {
+                        const vector3d p = point(world, {(i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z});
+                        a = vector3d{std::min(a.x, p.x), std::min(a.y, p.y), std::min(a.z, p.z)};
+                        b = vector3d{std::max(b.x, p.x), std::max(b.y, p.y), std::max(b.z, p.z)};
+                    }
+                    return cam.is_visible(a, b);
+                };
+                Meshes& meshes = *m_meshes;
+                const bool use_materials = m_options.materials;
+                auto material_for = [&scene, &meshes, use_materials](Entity e, fg::Material3D& out) {
+                    const Material* mat = use_materials ? scene.material(e) : nullptr;
+                    if (!mat) return false;
+                    out = material_3d(*mat);
+                    meshes.apply_textures(*mat, out);
+                    return true;
+                };
+                m_models.draw(r, scene, visible, material_for);
+                m_terrain.draw(r, cam, scene, playing ? Entity{} : selected);
+                m_terrain.visible_scatter(cam, m_scatter_visible);
+                m_scatter_models.clear();
+                m_scatter_models.reserve(m_scatter_visible.size());
+                for (std::size_t i : m_scatter_visible) {
+                    const TerrainScatterDraw& d = m_terrain.scatter()[i];
+                    m_scatter_models.push_back({*d.model, d.matrix, true});
+                }
+                if (!m_scatter_models.empty()) m_models.draw_instances(r, m_scatter_models, visible);
+                if (m_brush_visible && !playing) m_terrain.draw_brush(r, scene, m_brush_entity, m_brush_point, m_brush_radius);
+                if (m_extra_models) m_models.draw_instances(r, *m_extra_models, visible);
+            }
             if (scene.alive(selected) && !playing) {
                 const Mat4 world = scene.world_matrix(selected);
                 const std::vector<Collider>* cs = scene.colliders(selected);
-                if (cs && !cs->empty()) {
+                Vec3 mlo, mhi;
+                if (scene.model(selected) && m_models.local_bounds(scene.model(selected)->source, mlo, mhi)) {
+                    box_edges(r, world * translation((mlo + mhi) * 0.5f) * scaling((mhi - mlo) * 1.01f), selected_color, 2.0f, false);
+                    if (m_options.show_bones) m_models.draw_bones(r, scene, selected);
+                } else if (cs && !cs->empty()) {
                     for (const Collider& c : *cs) {
                         const Mat4 m = shape_matrix(world, c);
                         if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, selected_color, 2.0f, false);
                         else ring_edges(r, m, selected_color, 2.0f, false);
                     }
-                } else if (!named(scene, selected, "Camera") && !scene.light(selected) && !named(scene, selected, "Light")) {
+                } else if (!(scene.camera(selected) || named(scene, selected, "Camera")) && !scene.light(selected) && !named(scene, selected, "Light")) {
                     box_edges(r, world * scaling({1.04f, 1.04f, 1.04f}), selected_color, 2.0f, false);
                 }
             }
@@ -850,7 +1050,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 auto liquid = [](const xylem::FluidDraw& d) {
                     fg::Material3D mat = fg::Material3D::physical(0.0f, 0.06f);
                     mat.cull = fg::Cull3D::None;
-                    mat.reflectivity = 0.3f;
+                    mat.reflectivity = d.reflections == ReflectionMode::highlights ? 0.0f : std::clamp(d.reflectivity, 0.0f, 1.0f);
                     mat.shadow = fg::Shadow3D::None;
                     if (d.opacity < 0.999f) {
                         mat.blend = fg::Blend3D::Alpha;
@@ -966,6 +1166,25 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                         r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
                         continue;
                     }
+                    if (d.level == FluidLevel::realistic && !d.mesh_indices.empty() && d.mesh_normals.size() == d.mesh_positions.size()) {
+                        fg::Mesh3D& m = fresh();
+                        const float fr = static_cast<float>(col.red()), fgc = static_cast<float>(col.green()), fb = static_cast<float>(col.blue()), fa = static_cast<float>(col.alpha());
+                        for (std::size_t i = 0; i < d.mesh_positions.size(); ++i) {
+                            const float foam = i < d.mesh_foam.size() ? std::clamp(d.mesh_foam[i], 0.0f, 1.0f) : 0.0f;
+                            const Color c(static_cast<std::uint8_t>(std::lround(fr + (255.0f - fr) * foam * 0.85f)), static_cast<std::uint8_t>(std::lround(fgc + (255.0f - fgc) * foam * 0.85f)), static_cast<std::uint8_t>(std::lround(fb + (255.0f - fb) * foam * 0.85f)), static_cast<std::uint8_t>(std::min(255.0f, fa + (255.0f - fa) * foam * 0.6f)));
+                            put(m, d.mesh_positions[i], d.mesh_normals[i], c);
+                        }
+                        for (std::size_t i = 0; i + 2 < d.mesh_indices.size(); i += 3) m.add_triangle(d.mesh_indices[i], d.mesh_indices[i + 1], d.mesh_indices[i + 2]);
+                        r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
+                        if (!d.spray.empty()) {
+                            std::vector<fg::Instance3D> drops;
+                            drops.reserve(d.spray.size());
+                            const float s = std::max(d.radius, 0.01f) * 1.4f;
+                            for (const Vec3& p : d.spray) drops.emplace_back(p.x, p.y, p.z, s, col);
+                            r.draw_instances(mm.sphere_lod[1], vector3d{0.0, 0.0, 0.0}, drops, mat);
+                        }
+                        continue;
+                    }
                     if (d.level == FluidLevel::realistic && !d.particles.empty()) {
                         std::vector<fg::Instance3D> drops;
                         drops.reserve(d.particles.size());
@@ -980,6 +1199,8 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 if (m_options.particles_running) m_particles.step_3d(f.dt, cam);
                 m_particles.draw_3d(r);
             }
+            if (!playing)
+                for (const OverlayLine& l : overlay_axes) r.draw_line_3d(l.a, l.b, with_alpha(l.c, 150), 2.0f, false);
             if (m_options.move_gizmo && scene.alive(selected) && !playing) {
                 const Vec4 c4 = scene.world_matrix(selected) * Vec4{0.0f, 0.0f, 0.0f, 1.0f};
                 const Vec3 at{c4.x, c4.y, c4.z};
@@ -998,6 +1219,50 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                     r.draw_line_3d(vector3d{at.x, at.y, at.z}, vector3d{tip.x, tip.y, tip.z}, c, hot ? 5.0f : 4.0f, false);
                     r.draw_line_3d(vector3d{tip.x, tip.y, tip.z}, vector3d{back.x + side.x, back.y + side.y, back.z + side.z}, c, 4.0f, false);
                     r.draw_line_3d(vector3d{tip.x, tip.y, tip.z}, vector3d{back.x - side.x, back.y - side.y, back.z - side.z}, c, 4.0f, false);
+                }
+            }
+            if ((m_options.rotate_gizmo || m_options.scale_gizmo) && scene.alive(selected) && !playing) {
+                const Mat4 sw = scene.world_matrix(selected);
+                const Vec4 c4 = sw * Vec4{0.0f, 0.0f, 0.0f, 1.0f};
+                const Vec3 at{c4.x, c4.y, c4.z};
+                const float len = view.units_per_pixel(at) * 90.0f;
+                const Color colors[3] = {axis_x, axis_y, axis_z};
+                auto v3 = [](Vec3 p) { return vector3d{p.x, p.y, p.z}; };
+                if (m_options.rotate_gizmo) {
+                    for (int i = 0; i < 3; ++i) {
+                        Vec3 a{}, b{};
+                        (i == 0 ? a.y : i == 1 ? a.z : a.x) = 1.0f;
+                        (i == 0 ? b.z : i == 1 ? b.x : b.y) = 1.0f;
+                        const Color c = m_options.hot_axis == i ? selected_color : colors[i];
+                        Vec3 prev = at + a * len;
+                        for (int k = 1; k <= 64; ++k) {
+                            const float t = static_cast<float>(k) / 64.0f * 6.2831853f;
+                            const Vec3 next = at + (a * std::cos(t) + b * std::sin(t)) * len;
+                            r.draw_line_3d(v3(prev), v3(next), c, m_options.hot_axis == i ? 4.0f : 3.0f, false);
+                            prev = next;
+                        }
+                    }
+                } else {
+                    for (int i = 0; i < 3; ++i) {
+                        Vec3 local{};
+                        (i == 0 ? local.x : i == 1 ? local.y : local.z) = 1.0f;
+                        const Vec3 d = normalize(mul_direction(sw, local));
+                        const bool hot = m_options.hot_axis == i || m_options.hot_axis == 3;
+                        const Color c = hot ? selected_color : colors[i];
+                        const Vec3 tip = at + d * len;
+                        r.draw_line_3d(v3(at), v3(tip), c, hot ? 5.0f : 4.0f, false);
+                        const float h = len * 0.07f;
+                        const Vec3 corners[4] = {Vec3{-h, -h, 0.0f}, Vec3{h, -h, 0.0f}, Vec3{h, h, 0.0f}, Vec3{-h, h, 0.0f}};
+                        Vec3 u = normalize(cross(d, view.view_direction()));
+                        if (length(u) < 0.5f) u = normalize(cross(d, Vec3{0.3f, 0.5f, 0.8f}));
+                        const Vec3 w = normalize(cross(d, u));
+                        for (int k = 0; k < 4; ++k) {
+                            const Vec3 p0 = tip + u * corners[k].x + w * corners[k].y;
+                            const Vec3 p1 = tip + u * corners[(k + 1) % 4].x + w * corners[(k + 1) % 4].y;
+                            r.draw_line_3d(v3(p0), v3(p1), c, 4.0f, false);
+                            r.draw_line_3d(v3(p0), v3(tip + u * corners[(k + 2) % 4].x + w * corners[(k + 2) % 4].y), c, 2.0f, false);
+                        }
+                    }
                 }
             }
             r.end_3d();
@@ -1167,7 +1432,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 }
             }
         } else if (!scene.fluid(e)) {
-            const Color col = named(scene, e, "Camera") ? camera_color : plain;
+            const Color col = (scene.camera(e) || named(scene, e, "Camera")) ? camera_color : plain;
             quad(world, with_alpha(col, 50), sel ? selected_color : col, sel ? 2u : 1u);
         }
     }

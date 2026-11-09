@@ -1,4 +1,5 @@
 #include "particle_view.hpp"
+#include "particle_textures.hpp"
 
 #ifndef FIZMO
 #define FIZMO
@@ -10,7 +11,11 @@
 #include <fizmo/../particles.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cmath>
+#include <future>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -33,6 +38,8 @@ fp::EmissionShape to_fizmo(EmitterShape s) {
     case EmitterShape::box: return fp::EmissionShape::Box;
     case EmitterShape::circle: return fp::EmissionShape::Circle;
     case EmitterShape::line: return fp::EmissionShape::Line;
+    case EmitterShape::fluid_surface: return fp::EmissionShape::Box;
+    case EmitterShape::parts: return fp::EmissionShape::Box;
     }
     return fp::EmissionShape::Point;
 }
@@ -54,7 +61,148 @@ vector3d dv(Vec3 v) {
     return vector3d{v.x, v.y, v.z};
 }
 
+std::unique_ptr<fg::Texture> make_texture(const ParticlePixels& p) {
+    if (p.width <= 0 || p.height <= 0) return nullptr;
+    fizmo::images::BitmapImage img(static_cast<unsigned>(p.width), static_cast<unsigned>(p.height));
+    std::vector<fizmo::colors::Color>& px = img.mutable_pixels();
+    const std::size_t n = std::min(px.size(), p.rgba.size() / 4);
+    for (std::size_t i = 0; i < n; ++i) px[i] = fizmo::colors::Color(p.rgba[i * 4], p.rgba[i * 4 + 1], p.rgba[i * 4 + 2], p.rgba[i * 4 + 3]);
+    auto tex = std::make_unique<fg::Texture>(std::move(img), fg::SampleFilter::Bilinear, fg::WrapMode::Clamp);
+    tex->set_mipmaps(true);
+    return tex;
+}
+
+struct BuiltinCache {
+    std::mutex mutex;
+    std::unordered_map<std::string, std::unique_ptr<fg::Texture>> ready;
+    std::future<std::vector<std::pair<std::string, ParticlePixels>>> warming;
+};
+
+BuiltinCache& builtin_cache() {
+    static BuiltinCache cache;
+    return cache;
+}
+
+void warm_builtin_textures() {
+    BuiltinCache& c = builtin_cache();
+    std::lock_guard<std::mutex> lock(c.mutex);
+    if (c.warming.valid() || !c.ready.empty()) return;
+    c.warming = std::async(std::launch::async, [] {
+        std::vector<std::pair<std::string, ParticlePixels>> out;
+        for (const BuiltinParticleTexture& t : builtin_particle_textures()) out.emplace_back(t.name, generate_builtin_particle_texture(t.name));
+        return out;
+    });
+}
+
+std::string effective_texture(const Emitter& e) {
+    if (!e.texture.empty()) return e.texture;
+    if (const char* b = builtin_particle_texture_for_preset(e.preset)) return b;
+    return std::string();
+}
+
+void flipbook_grid(int frames, unsigned width, unsigned height, int& columns, int& rows) {
+    columns = std::max(1, frames);
+    rows = 1;
+    if (frames <= 1 || width == 0 || height == 0) return;
+    float best = 1e30f;
+    for (int c = 1; c <= frames; ++c) {
+        const int r = (frames + c - 1) / c;
+        if (c * r - frames >= c) continue;
+        const float aspect = (static_cast<float>(width) / static_cast<float>(c)) / (static_cast<float>(height) / static_cast<float>(r));
+        const float score = std::fabs(std::log(aspect));
+        if (score < best - 1e-4f) {
+            best = score;
+            columns = c;
+            rows = r;
+        }
+    }
+}
+
+void apply_builtin(fp::EmitterSettings& s, const BuiltinParticleTexture& b, float up_sign) {
+    s.frames_x = std::max(1, b.columns);
+    s.frames_y = std::max(1, b.rows);
+    s.frame_count = s.frames_x * s.frames_y;
+    s.random_start_frame = false;
+    switch (b.mode) {
+    case ParticleFlipbook::single: s.flipbook = fp::FlipbookMode::OverLife; break;
+    case ParticleFlipbook::over_life: s.flipbook = fp::FlipbookMode::OverLife; break;
+    case ParticleFlipbook::random: s.flipbook = fp::FlipbookMode::Random; break;
+    case ParticleFlipbook::fps:
+        s.flipbook = fp::FlipbookMode::Fps;
+        s.frame_fps = b.fps;
+        s.random_start_frame = true;
+        break;
+    }
+    const bool billboard = s.render_mode == fp::RenderMode::Billboard;
+    if (billboard && b.rotation > 0.0f) s.rotation = b.rotation >= 360.0f ? fp::RangeF(0.0f, 360.0f) : fp::RangeF(-b.rotation, b.rotation);
+    if (billboard && b.spin > 0.0f) s.spin = fp::RangeF(-b.spin, b.spin);
+    const float a0 = s.alpha_over_life.keys[0].v;
+    const float a1 = s.alpha_over_life.evaluate(1.0f);
+    const float r = s.size_over_life.evaluate(1.0f);
+    const std::string_view name = b.name;
+    auto mixf = [](float x, float y, float t) { return x + (y - x) * t; };
+    if (name == "builtin:smoke" || name == "builtin:steam" || name == "builtin:dust") {
+        s.alpha_over_life = fp::LifeCurve::constant(0.0f);
+        s.alpha_over_life.add(name == "builtin:dust" ? 0.25f : 0.1f, a0).add(0.5f, mixf(a0, a1, 0.4f)).add(1.0f, a1);
+        s.size_over_life = fp::LifeCurve::constant(1.0f);
+        s.size_over_life.add(0.3f, 1.0f + (r - 1.0f) * 0.55f).add(1.0f, r);
+        s.spin_over_life = fp::LifeCurve::linear(1.0f, 0.3f);
+        s.soft = true;
+        s.soft_distance = 0.6f;
+        if (name != "builtin:dust") s.pivot_y = 0.22f * up_sign;
+    } else if (name == "builtin:fire") {
+        s.alpha_over_life = fp::LifeCurve::constant(0.0f);
+        s.alpha_over_life.add(0.08f, a0).add(0.55f, mixf(a0, a1, 0.35f)).add(1.0f, a1);
+        s.size_over_life = fp::LifeCurve::constant(0.75f);
+        s.size_over_life.add(0.2f, 1.0f).add(1.0f, r);
+        s.soft = true;
+        s.soft_distance = 0.3f;
+        s.pivot_y = 0.36f * up_sign;
+    } else if (name == "builtin:explosion") {
+        s.alpha_over_life = fp::LifeCurve::constant(a0);
+        s.alpha_over_life.add(0.3f, a0).add(1.0f, a1);
+        s.size_over_life = fp::LifeCurve::constant(0.45f);
+        s.size_over_life.add(0.25f, 1.0f + (r - 1.0f) * 0.45f).add(1.0f, r);
+        s.spin_over_life = fp::LifeCurve::linear(1.0f, 0.2f);
+        s.soft = true;
+        s.soft_distance = 0.6f;
+    } else if (name == "builtin:magic") {
+        s.alpha_over_life = fp::LifeCurve::constant(0.0f);
+        s.alpha_over_life.add(0.12f, a0).add(1.0f, a1);
+        s.size_over_life = fp::LifeCurve::constant(0.2f);
+        s.size_over_life.add(0.15f, 1.0f).add(1.0f, r);
+    } else if (name == "builtin:bubble") {
+        s.alpha_over_life = fp::LifeCurve::constant(0.0f);
+        s.alpha_over_life.add(0.1f, a0).add(0.92f, a1).add(1.0f, 0.0f);
+        s.size_over_life = fp::LifeCurve::constant(0.3f);
+        s.size_over_life.add(0.12f, 1.0f).add(1.0f, r);
+    } else if (name == "builtin:snow" || name == "builtin:ember") {
+        s.alpha_over_life = fp::LifeCurve::constant(0.0f);
+        s.alpha_over_life.add(0.06f, a0).add(1.0f, a1);
+    }
+}
+
 } // namespace
+
+const fg::Texture* builtin_particle_texture(const std::string& name) {
+    const BuiltinParticleTexture* info = find_builtin_particle_texture(name);
+    if (!info) return nullptr;
+    BuiltinCache& c = builtin_cache();
+    std::lock_guard<std::mutex> lock(c.mutex);
+    const auto found = c.ready.find(name);
+    if (found != c.ready.end()) return found->second.get();
+    if (c.warming.valid() && c.warming.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        for (const auto& [n, pixels] : c.warming.get())
+            if (!c.ready.count(n))
+                if (auto t = make_texture(pixels)) c.ready.emplace(n, std::move(t));
+        const auto again = c.ready.find(name);
+        if (again != c.ready.end()) return again->second.get();
+    }
+    auto t = make_texture(generate_builtin_particle_texture(info->name));
+    const fg::Texture* out = t.get();
+    if (t) c.ready.emplace(name, std::move(t));
+    return out;
+}
 
 fp::EmitterSettings particle_settings(const Emitter& e, bool flat, Vec3 up, int depth) {
     fp::EmitterSettings s;
@@ -110,10 +258,20 @@ fp::EmitterSettings particle_settings(const Emitter& e, bool flat, Vec3 up, int 
     s.blend = additive ? fp::ParticleBlend::Additive : fp::ParticleBlend::Alpha;
     s.lit = e.lit;
     s.near_fade = flat ? 0.0f : 0.3f;
-    s.texture = e.texture;
+    s.texture = effective_texture(e);
     s.frames_x = std::max(1, e.frames);
     s.frames_y = 1;
     s.frame_count = std::max(1, e.frames);
+    if (const BuiltinParticleTexture* b = find_builtin_particle_texture(s.texture)) apply_builtin(s, *b, flat && up.y < 0.0f ? -1.0f : 1.0f);
+    const bool soft_look = e.preset == "fire" || e.preset == "smoke" || e.preset == "steam" || e.preset == "explosion" || e.preset == "dust";
+    if (flat || e.soft == "off") {
+        s.soft = false;
+    } else if (soft_look || s.soft || e.soft == "on") {
+        s.soft = true;
+        const float base = e.preset == "fire" ? 0.3f : (e.preset == "dust" ? 0.4f : 0.6f);
+        s.soft_distance = std::clamp(std::max({s.soft_distance, base, size * 0.45f}), 0.05f, 4.0f);
+        if (e.soft_distance > 0.0f) s.soft_distance = e.soft_distance;
+    }
     s.collide = e.collide;
     s.bounce = std::clamp(e.bounce, 0.0f, 1.0f);
     s.friction = std::max(0.0f, e.friction);
@@ -143,18 +301,50 @@ struct ParticleView::Impl {
     fp::ParticleSystem system;
     fp::DrawList3D list3;
     fp::DrawList2D list2;
-    struct Slot {
+    struct Area {
         fp::Emitter* emitter = nullptr;
         fp::EmitterSettings settings;
+    };
+    struct Slot {
+        std::vector<Area> areas;
         std::string texture;
+        const fg::Texture* tex = nullptr;
+        bool resolved = false;
         bool seen = false;
+    };
+    struct Place {
+        Vec3 position;
+        Vec3 right{1.0f, 0.0f, 0.0f};
+        Vec3 up{0.0f, 1.0f, 0.0f};
+        Vec3 forward{0.0f, 0.0f, 1.0f};
+        EmitterShape shape = EmitterShape::point;
+        Vec3 size;
+        float share = 1.0f;
     };
     std::unordered_map<std::uint64_t, Slot> slots;
     std::vector<std::pair<Entity, std::pair<int, int>>> pending;
     std::function<const fg::Texture*(const std::string&)> lookup;
     bool flat = false;
 
-    Impl() : system(defaults()) {}
+    Impl() : system(defaults()) {
+        warm_builtin_textures();
+    }
+
+    const fg::Texture* resolve(const std::string& name) const {
+        if (name.empty()) return nullptr;
+        if (is_builtin_particle_texture(name)) return builtin_particle_texture(name);
+        return lookup ? lookup(name) : nullptr;
+    }
+
+    void texture_children(fp::Emitter& e) const {
+        for (std::size_t i = 0; i < e.child_count(); ++i) {
+            fp::Emitter* c = e.child(i);
+            if (!c) continue;
+            const fg::Texture* t = resolve(c->settings().texture);
+            if (c->texture() != t) c->set_texture(t);
+            texture_children(*c);
+        }
+    }
 
     static fp::SystemSettings defaults() {
         fp::SystemSettings s;
@@ -166,24 +356,34 @@ struct ParticleView::Impl {
     }
 
     void apply(Slot& slot, int action, int count) {
-        if (!slot.emitter) return;
-        if (action == 0) slot.emitter->stop();
-        else if (action == 1) slot.emitter->play();
-        else if (action == 2) {
-            int n = count;
-            if (n <= 0) {
-                for (const fp::Burst& b : slot.settings.bursts) n = std::max(n, b.count);
-                if (n <= 0) n = std::max(8, static_cast<int>(slot.settings.rate * 0.5f));
+        const std::size_t parts = std::max<std::size_t>(1, slot.areas.size());
+        for (Area& a : slot.areas) {
+            if (!a.emitter) continue;
+            if (action == 0) a.emitter->stop();
+            else if (action == 1) a.emitter->play();
+            else if (action == 2) {
+                int n = count;
+                if (n <= 0) {
+                    for (const fp::Burst& b : a.settings.bursts) n = std::max(n, b.count);
+                    if (n <= 0) n = std::max(8, static_cast<int>(a.settings.rate * 0.5f));
+                } else {
+                    n = std::max(1, static_cast<int>(n / static_cast<int>(parts)));
+                }
+                a.emitter->burst(std::min(n, 100000));
+            } else if (action == 3) {
+                a.emitter->clear();
             }
-            slot.emitter->burst(std::min(n, 100000));
-        } else if (action == 3) {
-            slot.emitter->clear();
         }
     }
 
+    void destroy_areas(Slot& slot) {
+        for (Area& a : slot.areas)
+            if (a.emitter) system.destroy(a.emitter);
+        slot.areas.clear();
+    }
+
     void clear_all() {
-        for (auto& [id, slot] : slots)
-            if (slot.emitter) system.destroy(slot.emitter);
+        for (auto& [id, slot] : slots) destroy_areas(slot);
         slots.clear();
         system.clear();
         pending.clear();
@@ -229,39 +429,148 @@ void ParticleView::sync(const Scene& scene, Vec3 up, bool running) {
         if (!pe || !pe->enabled) continue;
         Impl::Slot& slot = m->slots[e.id()];
         slot.seen = true;
-        fp::EmitterSettings want = particle_settings(*pe, flat, up);
-        any_collide = any_collide || want.collide;
         const Mat4 w = scene.world_matrix(e);
-        const Vec3 pos = mul_point(w, Vec3{0.0f, 0.0f, 0.0f});
-        if (!slot.emitter) {
-            slot.settings = want;
-            slot.emitter = &m->system.create_emitter(want, dv(pos));
-            if (!pe->autoplay) slot.emitter->stop();
-        } else if (!(slot.settings == want)) {
-            const bool was = slot.emitter->playing();
-            slot.settings = want;
-            slot.emitter->set_settings(want);
-            if (!was && !pe->autoplay) slot.emitter->stop();
-        }
-        if (slot.texture != pe->texture) {
-            slot.texture = pe->texture;
-            slot.emitter->set_texture(!pe->texture.empty() && m->lookup ? m->lookup(pe->texture) : nullptr);
-        }
-        if (flat) {
-            slot.emitter->set_position(pos.x, pos.y, 0.0);
-            const Vec3 xa = column(w, 0);
-            slot.emitter->set_angle(std::atan2(xa.y, xa.x) * 180.0 / 3.14159265358979323846);
+        std::vector<Impl::Place> places;
+        auto basis_of = [](const Mat4& m4, Impl::Place& p) {
+            p.right = unit_or(column(m4, 0), Vec3{1.0f, 0.0f, 0.0f});
+            p.up = unit_or(column(m4, 1), Vec3{0.0f, 1.0f, 0.0f});
+            p.forward = unit_or(column(m4, 2), Vec3{0.0f, 0.0f, 1.0f});
+        };
+        if (pe->shape == EmitterShape::fluid_surface) {
+            Entity owner = e;
+            for (Entity at = e; scene.alive(at) && !scene.fluid(owner); at = scene.parent(at)) owner = at;
+            if (!scene.fluid(owner))
+                for (Entity c : scene.subtree(e))
+                    if (scene.fluid(c)) {
+                        owner = c;
+                        break;
+                    }
+            Impl::Place p;
+            const Mat4 fw = scene.world_matrix(owner);
+            basis_of(fw, p);
+            p.shape = EmitterShape::box;
+            if (const Fluid* fl = scene.fluid(owner)) {
+                const Vec3 sx = column(fw, 0), sy = column(fw, 1), sz = column(fw, 2);
+                const float hx = length(sx) * fl->size.x, hy = length(sy) * fl->size.y, hz = length(sz) * fl->size.z;
+                const float level = std::clamp(fl->fill, 0.0f, 1.0f);
+                p.position = mul_point(fw, Vec3{0.0f, 0.0f, 0.0f}) + p.up * (hy * (level - 0.5f));
+                p.size = flat ? Vec3{hx, 0.01f, 0.01f} : Vec3{hx, 0.02f, hz};
+            } else {
+                p.position = mul_point(w, Vec3{0.0f, 0.0f, 0.0f});
+                p.size = pe->shape_size;
+            }
+            places.push_back(p);
+        } else if (pe->shape == EmitterShape::parts) {
+            std::string filter;
+            for (char ch : pe->part) filter += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            float total = 0.0f;
+            for (Entity c : scene.subtree(e)) {
+                const std::vector<Collider>* cs = scene.colliders(c);
+                if (!cs) continue;
+                if (!filter.empty()) {
+                    std::string n;
+                    for (char ch : scene.name(c)) n += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    bool hit = false;
+                    std::size_t from = 0;
+                    while (from <= filter.size()) {
+                        const std::size_t comma = filter.find(',', from);
+                        std::string want = filter.substr(from, comma == std::string::npos ? std::string::npos : comma - from);
+                        while (!want.empty() && want.front() == ' ') want.erase(want.begin());
+                        while (!want.empty() && want.back() == ' ') want.pop_back();
+                        if (!want.empty() && n.find(want) != std::string::npos) hit = true;
+                        if (comma == std::string::npos) break;
+                        from = comma + 1;
+                    }
+                    if (!hit) continue;
+                }
+                const Mat4 cw = scene.world_matrix(c);
+                for (const Collider& col : *cs) {
+                    if (!col.enabled || places.size() >= 64) continue;
+                    Impl::Place p;
+                    basis_of(cw, p);
+                    p.position = mul_point(cw, col.offset);
+                    const Vec3 sc{length(column(cw, 0)), length(column(cw, 1)), length(column(cw, 2))};
+                    p.size = Vec3{col.size.x * sc.x, col.size.y * sc.y, col.size.z * sc.z};
+                    p.shape = col.shape == ColliderShape::sphere ? EmitterShape::sphere : EmitterShape::box;
+                    if (p.shape == EmitterShape::sphere) p.size = p.size * 0.5f;
+                    p.share = std::max(1e-4f, p.size.x * p.size.y * (flat ? 1.0f : p.size.z));
+                    total += p.share;
+                    places.push_back(p);
+                }
+            }
+            for (Impl::Place& p : places) p.share = total > 0.0f ? p.share / total : 1.0f;
+            if (places.empty()) {
+                Impl::Place p;
+                basis_of(w, p);
+                p.position = mul_point(w, Vec3{0.0f, 0.0f, 0.0f});
+                places.push_back(p);
+            }
         } else {
-            slot.emitter->set_position(dv(pos));
-            const Vec3 right = unit_or(column(w, 0), Vec3{1.0f, 0.0f, 0.0f});
-            const Vec3 upv = unit_or(column(w, 1), Vec3{0.0f, 1.0f, 0.0f});
-            const Vec3 fwd = unit_or(column(w, 2), Vec3{0.0f, 0.0f, 1.0f});
-            slot.emitter->set_basis(dv(right), dv(upv), dv(fwd));
+            Impl::Place p;
+            basis_of(w, p);
+            p.position = mul_point(w, Vec3{0.0f, 0.0f, 0.0f});
+            p.shape = pe->shape;
+            p.size = pe->shape_size;
+            places.push_back(p);
+        }
+        if (slot.areas.size() != places.size()) {
+            m->destroy_areas(slot);
+            slot.areas.resize(places.size());
+        }
+        const std::string texture_name = effective_texture(*pe);
+        const bool new_texture = slot.texture != texture_name || !slot.resolved || (!slot.tex && !texture_name.empty());
+        if (new_texture) {
+            slot.texture = texture_name;
+            slot.tex = m->resolve(texture_name);
+            slot.resolved = true;
+        }
+        const bool builtin = is_builtin_particle_texture(texture_name);
+        for (std::size_t i = 0; i < places.size(); ++i) {
+            const Impl::Place& p = places[i];
+            Emitter local = *pe;
+            local.shape = p.shape;
+            local.shape_size = p.size;
+            if (places.size() > 1) {
+                local.rate = pe->rate * p.share;
+                local.burst = std::max(pe->burst > 0 ? 1 : 0, static_cast<int>(std::lround(pe->burst * p.share)));
+                local.max_particles = std::max(8, static_cast<int>(std::lround(pe->max_particles * p.share)));
+            }
+            if (pe->shape == EmitterShape::fluid_surface && local.spread < 1.0f) local.spread = 1.0f;
+            fp::EmitterSettings want = particle_settings(local, flat, up);
+            if (!builtin && slot.tex && pe->frames > 1) {
+                int columns = 1, rows = 1;
+                flipbook_grid(pe->frames, slot.tex->width(), slot.tex->height(), columns, rows);
+                want.frames_x = columns;
+                want.frames_y = rows;
+                want.frame_count = pe->frames;
+            }
+            any_collide = any_collide || want.collide;
+            Impl::Area& a = slot.areas[i];
+            if (!a.emitter) {
+                a.settings = want;
+                a.emitter = &m->system.create_emitter(want, dv(p.position));
+                if (!pe->autoplay) a.emitter->stop();
+                a.emitter->set_texture(slot.tex);
+            } else if (!(a.settings == want)) {
+                const bool was = a.emitter->playing();
+                a.settings = want;
+                a.emitter->set_settings(want);
+                if (!was && !pe->autoplay) a.emitter->stop();
+            }
+            if (new_texture || a.emitter->texture() != slot.tex) a.emitter->set_texture(slot.tex);
+            m->texture_children(*a.emitter);
+            if (flat) {
+                a.emitter->set_position(p.position.x, p.position.y, 0.0);
+                a.emitter->set_angle(std::atan2(p.right.y, p.right.x) * 180.0 / 3.14159265358979323846);
+            } else {
+                a.emitter->set_position(dv(p.position));
+                a.emitter->set_basis(dv(p.right), dv(p.up), dv(p.forward));
+            }
         }
     }
     for (auto it = m->slots.begin(); it != m->slots.end();) {
         if (!it->second.seen) {
-            if (it->second.emitter) m->system.destroy(it->second.emitter);
+            m->destroy_areas(it->second);
             it = m->slots.erase(it);
         } else {
             ++it;

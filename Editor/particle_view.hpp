@@ -32,6 +32,7 @@ struct ParticleViewStats {
 };
 
 fizmo::particles::EmitterSettings particle_settings(const Emitter& emitter, bool flat, Vec3 up, int depth = 0);
+const fizmo::graphics::Texture* builtin_particle_texture(const std::string& name);
 
 class ParticleView {
 public:

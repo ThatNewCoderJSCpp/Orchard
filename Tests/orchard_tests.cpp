@@ -736,6 +736,17 @@ void test_entity_templates_and_emitters() {
     two.create("B");
     const orchard::Entity group = world.instantiate(two, "Entities/Pair.entity", orchard::Entity{}, orchard::Transform{});
     check(world.name(group) == "Pair" && world.children(group).size() == 2, "templates with several roots get a group");
+    orchard::Scene cams(orchard::Dimension::three_d);
+    const orchard::Entity named_cam = cams.create("Main Camera");
+    check(cams.active_camera() == named_cam, "an entity named Camera is the fallback game camera");
+    const orchard::Entity real = cams.create("Eye");
+    orchard::Camera& cc = cams.add_camera(real);
+    cc.fov = 75.0f;
+    cc.priority = 2;
+    check(cams.active_camera() == real, "a camera component wins over a name");
+    const auto cams_back = orchard::Scene::load(cams.save());
+    check(cams_back && cams_back->camera(cams_back->find("Eye")) && near(cams_back->camera(cams_back->find("Eye"))->fov, 75.0f) && cams_back->camera(cams_back->find("Eye"))->priority == 2, "camera round trip");
+    check(orchard::ScriptRuntime::key_name("W") == "w" && orchard::ScriptRuntime::key_name("ArrowLeft") == "left" && orchard::ScriptRuntime::key_name("LeftShift") == "shift", "key names");
     check(orchard::Project::entity_template_path("My Crate!") == "Entities/My Crate.entity", "template file names");
     check(orchard::ScriptRuntime::entity_template_file("Crate") == "Entities/Crate.entity" && orchard::ScriptRuntime::entity_template_file("Entities/Crate.entity") == "Entities/Crate.entity" && orchard::ScriptRuntime::entity_template_file("More/Thing") == "More/Thing.entity", "template names from scripts");
 }
@@ -854,7 +865,556 @@ void test_project_physics_and_lighting() {
 
 } // namespace
 
+#include "../Editor/graph_view.hpp"
+
+namespace {
+
+void test_graph_view() {
+    using orchard::editor::GraphEventKind;
+    using orchard::editor::GraphHitKind;
+    orchard::graph::Graph g;
+    const int start = g.add_node("on_start", 0.0f, 0.0f);
+    const int log = g.add_node("log", 300.0f, 0.0f);
+    orchard::editor::GraphView v;
+    v.set_size(800.0f, 600.0f);
+    v.load(g);
+    v.set_camera(orchard::editor::GraphCamera{});
+    check(!v.dirty() && v.graph().nodes().size() == 2, "graph view loads a graph clean");
+
+    float ox = 0.0f, oy = 0.0f, ix = 0.0f, iy = 0.0f;
+    check(v.pin_position(start, "then", true, ox, oy) && v.pin_position(log, "in", false, ix, iy), "graph view knows where pins are");
+    orchard::editor::GraphHit hit = v.hit_test(ox, oy);
+    check(hit.kind == GraphHitKind::pin && hit.node == start && hit.output && hit.pin == "then", "hit test finds an output pin");
+    check(v.hit_test(320.0f, 10.0f).kind == GraphHitKind::header && v.hit_test(320.0f, 10.0f).node == log, "hit test finds a node header");
+    check(v.hit_test(700.0f, 500.0f).kind == GraphHitKind::empty, "hit test finds empty space");
+
+    v.press(ox, oy, 1, false, false);
+    v.drag((ox + ix) * 0.5f, oy + 20.0f);
+    v.drag(ix + 2.0f, iy + 1.0f);
+    orchard::editor::GraphEvent ev = v.release(ix + 2.0f, iy + 1.0f);
+    check(ev.kind == GraphEventKind::changed && v.graph().links().size() == 1 && v.dirty(), "dragging from an output to an input connects them");
+    check(v.hit_test((ox + ix) * 0.5f, oy).kind == GraphHitKind::link, "hit test finds a link");
+
+    orchard::editor::GraphEditRequest edit;
+    float mx = 0.0f, my = 0.0f;
+    v.pin_position(log, "message", false, mx, my);
+    for (float x = mx; x < mx + 200.0f; x += 2.0f) {
+        if (v.hit_test(x, my).kind == GraphHitKind::value) {
+            v.press(x, my, 1, false, false);
+            ev = v.release(x, my);
+            edit = ev.edit;
+            break;
+        }
+    }
+    check(ev.kind == GraphEventKind::edit && edit.node == log && edit.pin == "message" && edit.value == "Hello", "clicking a value asks the host to edit it");
+    check(v.set_value(log, "message", "Hi") && v.compile().code.find("orchard::log(\"Hi\");") != std::string::npos, "edited values reach the Walnut");
+
+    v.press(ix, iy, 1, false, false);
+    v.drag(ix + 100.0f, iy + 200.0f);
+    ev = v.release(ix + 100.0f, iy + 200.0f);
+    check(ev.kind == GraphEventKind::changed && v.graph().links().empty(), "dragging off a connected input detaches it");
+    check(v.undo() && v.graph().links().size() == 1, "undo brings the link back");
+    check(v.redo() && v.graph().links().empty(), "redo takes it away again");
+    v.undo();
+
+    v.press(320.0f, 10.0f, 1, false, false);
+    v.drag(330.0f, 20.0f);
+    v.drag(340.0f, 30.0f);
+    ev = v.release(340.0f, 30.0f);
+    check(ev.kind == GraphEventKind::changed && v.graph().node(log)->x == 320.0f && v.graph().node(log)->y == 20.0f, "dragging a header moves the node");
+
+    v.press(790.0f, 590.0f, 1, false, false);
+    v.drag(400.0f, 300.0f);
+    v.drag(1.0f, 1.0f);
+    v.release(1.0f, 1.0f);
+    check(v.selection().size() == 2, "box select picks both nodes");
+    check(v.key("d", true) && v.graph().nodes().size() == 4 && v.graph().links().size() == 2 && v.selection().size() == 2, "ctrl+d duplicates nodes and the links between them");
+    check(v.key("Delete") && v.graph().nodes().size() == 2 && v.graph().links().size() == 1, "delete removes the selected copies");
+
+    float tx = 0.0f, ty = 0.0f;
+    v.pin_position(log, "then", true, tx, ty);
+    v.press(tx, ty, 1, false, false);
+    v.drag(tx + 120.0f, ty + 150.0f);
+    ev = v.release(tx + 120.0f, ty + 150.0f);
+    check(ev.kind == GraphEventKind::menu && v.has_pending_link(), "dropping a link on empty space asks for a node");
+    const int next = v.add_node("log", tx + 120.0f, ty + 150.0f);
+    check(next != 0 && v.graph().links().size() == 2 && !v.has_pending_link(), "the new node gets the dropped link");
+
+    const int again = v.add_node_centered("on_start");
+    const orchard::editor::GraphCompile c = v.compile();
+    check(!c.errors.empty() && c.error_nodes.count(again) == 1, "compile errors point at their nodes");
+
+    float wx = 0.0f, wy = 0.0f, sx = 0.0f, sy = 0.0f;
+    v.to_graph(400.0f, 300.0f, wx, wy);
+    check(v.wheel(400.0f, 300.0f, 2.0f) && v.camera().zoom > 1.0f, "wheel zooms in");
+    v.to_canvas(wx, wy, sx, sy);
+    check(near(sx, 400.0f) && near(sy, 300.0f), "zoom keeps the point under the cursor");
+
+    const std::vector<orchard::editor::GraphCategory> cats = orchard::editor::GraphView::catalog();
+    std::size_t total = 0;
+    for (const auto& cat : cats) total += cat.types.size();
+    check(!cats.empty() && cats.front().name == "Events" && total == orchard::graph::node_types().size(), "catalog groups every node type");
+
+    const std::string saved = v.save_text();
+    orchard::editor::GraphView w;
+    std::string why;
+    check(w.load_text(saved, &why) && w.graph().nodes().size() == v.graph().nodes().size(), "graph view text round trips: " + why);
+}
+
+} // namespace
+
+void test_humanoids_cameras_and_reflections() {
+    for (orchard::HumanoidKind k : orchard::humanoid_kinds()) {
+        check(orchard::parse_humanoid_kind(orchard::to_string(k)) == k, std::string("humanoid kind ") + orchard::to_string(k));
+        orchard::Scene s(orchard::Dimension::three_d);
+        const orchard::Entity body = orchard::add_humanoid(s, k);
+        check(s.alive(body) && s.body(body) != nullptr, std::string("humanoid has a body: ") + orchard::to_string(k));
+        std::size_t colliders = 0;
+        for (orchard::Entity e : s.subtree(body))
+            if (const std::vector<orchard::Collider>* cs = s.colliders(e)) colliders += cs->size();
+        const std::size_t want = k == orchard::HumanoidKind::basic ? 1u : k == orchard::HumanoidKind::head_and_body ? 2u : k == orchard::HumanoidKind::full_body ? 10u : 30u;
+        check(colliders >= want, std::string("humanoid collider count: ") + orchard::to_string(k));
+        const auto back = orchard::Scene::load(s.save());
+        check(back && back->size() == s.size(), std::string("humanoid saves: ") + orchard::to_string(k));
+    }
+
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity cam = s.create("Player camera");
+    orchard::Camera& c = s.add_camera(cam);
+    c.active = true;
+    c.control = orchard::CameraControl::walk;
+    c.move_speed = 7.5f;
+    c.eye_height = 1.6f;
+    c.mouse_look = false;
+    const orchard::Entity pool = s.create("Pool");
+    orchard::Fluid& f = s.add_fluid(pool);
+    f.reflectivity = 0.6f;
+    f.reflections = orchard::ReflectionMode::realistic;
+    orchard::Emitter& steam = s.add_emitter(pool);
+    steam.shape = orchard::EmitterShape::fluid_surface;
+    const orchard::Entity mirror = s.create("Mirror");
+    s.add_material(mirror).reflections = orchard::ReflectionMode::surroundings;
+    const orchard::Entity torch = s.create("Torch");
+    orchard::Emitter& fire = s.add_emitter(torch);
+    fire.shape = orchard::EmitterShape::parts;
+    fire.part = "head, hand";
+    const auto back = orchard::Scene::load(s.save());
+    check(back.has_value(), "camera/reflection scene loads");
+    if (!back) return;
+    const orchard::Camera* bc = back->camera(back->find("Player camera"));
+    check(bc && bc->active && bc->control == orchard::CameraControl::walk && near(bc->move_speed, 7.5f) && near(bc->eye_height, 1.6f) && !bc->mouse_look, "player camera round trip");
+    check(back->active_camera() == back->find("Player camera"), "player camera is the one Play uses");
+    const orchard::Fluid* bf = back->fluid(back->find("Pool"));
+    check(bf && near(bf->reflectivity, 0.6f) && bf->reflections == orchard::ReflectionMode::realistic, "fluid reflections round trip");
+    const orchard::Material* bm = back->material(back->find("Mirror"));
+    check(bm && bm->reflections == orchard::ReflectionMode::surroundings, "material reflections round trip");
+    const orchard::Emitter* bs = back->emitter(back->find("Pool"));
+    check(bs && bs->shape == orchard::EmitterShape::fluid_surface, "fluid surface emitter round trip");
+    const orchard::Emitter* bp = back->emitter(back->find("Torch"));
+    check(bp && bp->shape == orchard::EmitterShape::parts && bp->part == "head, hand", "emitter parts round trip");
+    for (orchard::ReflectionMode m : {orchard::ReflectionMode::highlights, orchard::ReflectionMode::surroundings, orchard::ReflectionMode::realistic})
+        check(orchard::parse_reflection_mode(orchard::to_string(m)) == m, std::string("reflection mode ") + orchard::to_string(m));
+}
+
+#include "../Editor/particle_textures.hpp"
+
+namespace {
+
+void test_particle_presets() {
+    for (const std::string& name : orchard::Emitter::presets()) {
+        const std::optional<orchard::Emitter> e = orchard::Emitter::named(name);
+        check(e.has_value(), "particle preset " + name + " exists");
+        if (!e) continue;
+        check(orchard::editor::is_builtin_particle_texture(e->texture), "particle preset " + name + " uses a built-in texture");
+        const char* fallback = orchard::editor::builtin_particle_texture_for_preset(name);
+        check(fallback && e->texture == fallback, "particle preset " + name + " texture matches its fallback");
+    }
+    for (const orchard::editor::BuiltinParticleTexture& t : orchard::editor::builtin_particle_textures())
+        check(t.columns >= 1 && t.rows >= 1 && std::string(t.name).rfind("builtin:", 0) == 0 && t.label && *t.label, std::string("built-in particle texture ") + t.name);
+    float means[5][3] = {};
+    int k = 0;
+    for (const orchard::editor::BuiltinTerrainTexture& t : orchard::editor::builtin_terrain_textures()) {
+        const orchard::editor::TerrainPixels px = orchard::editor::generate_builtin_terrain(t.name, 64);
+        const bool sized = px.albedo.width == 64 && px.albedo.height == 64 && px.albedo.rgba.size() == 64u * 64u * 4u && px.normal.rgba.size() == px.albedo.rgba.size();
+        check(sized, std::string("built-in terrain texture ") + t.name + " is generated");
+        if (!sized || k >= 5) continue;
+        int seam = 0, inner = 0;
+        for (int y = 0; y < 64; ++y) {
+            for (int c = 0; c < 3; ++c) {
+                seam += std::abs(int(px.albedo.rgba[(y * 64 + 63) * 4 + c]) - int(px.albedo.rgba[(y * 64) * 4 + c]));
+                inner += std::abs(int(px.albedo.rgba[(y * 64 + 31) * 4 + c]) - int(px.albedo.rgba[(y * 64 + 32) * 4 + c]));
+            }
+        }
+        check(seam <= inner * 2 + 64 * 3 * 4, std::string("built-in terrain texture ") + t.name + " tiles without a seam");
+        for (std::size_t i = 0; i < px.albedo.rgba.size(); i += 4)
+            for (int c = 0; c < 3; ++c) means[k][c] += px.albedo.rgba[i + static_cast<std::size_t>(c)] / (64.0f * 64.0f);
+        ++k;
+    }
+    auto apart = [&](int i, int j) { return std::fabs(means[i][0] - means[j][0]) + std::fabs(means[i][1] - means[j][1]) + std::fabs(means[i][2] - means[j][2]) > 40.0f; };
+    check(k == 5 && apart(0, 1) && apart(0, 2) && apart(1, 2), "grass, dirt and rock look clearly different");
+    check(orchard::editor::is_builtin_texture("builtin:grass") && orchard::editor::is_builtin_texture("builtin:fire") && !orchard::editor::is_builtin_texture("Assets/grass.png"), "built-in texture names");
+}
+
+} // namespace
+
+void test_models_and_animation() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity guy = s.create("Guy");
+    orchard::Model& m = s.add_model(guy);
+    m.source = "Assets/My Models/guy.glb";
+    m.cast_shadows = false;
+    orchard::Animator& a = s.add_animator(guy);
+    a.clip = "Walk";
+    a.speed = 1.5f;
+    a.loop = false;
+    a.blend = 0.4f;
+    a.start = 0.25f;
+    a.events.push_back({"Walk", 0.3f, "footstep"});
+    a.events.push_back({"Walk", 0.8f, "footstep"});
+    const orchard::Entity head = s.create("Head", guy);
+    s.add_collider(head, orchard::ColliderShape::sphere);
+    s.set_bone(head, "mixamorig:Head");
+    const orchard::Entity house = s.create("House");
+    orchard::Collider* c = s.add_collider(house, orchard::ColliderShape::mesh);
+    c->source = "Assets/house.glb";
+    check(orchard::is_model_file("Assets/a.GLB") && orchard::is_model_file("x.gltf") && orchard::is_model_file("y.obj") && !orchard::is_model_file("z.png"), "model file types");
+    check(s.bone_owner(head) == guy, "bone owner is the model above it");
+    const auto back = orchard::Scene::load(s.save());
+    check(back.has_value(), "model scene loads");
+    if (!back) return;
+    const orchard::Model* bm = back->model(back->find("Guy"));
+    check(bm && bm->source == "Assets/My Models/guy.glb" && !bm->cast_shadows && bm->visible, "model round trip (with a space in the path)");
+    const orchard::Animator* ba = back->animator(back->find("Guy"));
+    check(ba && ba->clip == "Walk" && near(ba->speed, 1.5f) && !ba->loop && near(ba->blend, 0.4f) && near(ba->start, 0.25f) && ba->events.size() == 2 && ba->events[1].name == "footstep" && near(ba->events[1].time, 0.8f), "animator round trip");
+    check(back->bone(back->find("Head")) == "mixamorig:Head", "bone attachment round trip");
+    const std::vector<orchard::Collider>* hc = back->colliders(back->find("House"));
+    check(hc && hc->size() == 1 && (*hc)[0].shape == orchard::ColliderShape::mesh && (*hc)[0].source == "Assets/house.glb", "mesh collider round trip");
+    orchard::Scene tmpl(orchard::Dimension::three_d);
+    const orchard::Entity tg = tmpl.create("Guy");
+    tmpl.add_model(tg).source = "Assets/guy.glb";
+    tmpl.add_animator(tg).clip = "Idle";
+    const orchard::Entity th = tmpl.create("Head", tg);
+    tmpl.add_collider(th, orchard::ColliderShape::sphere);
+    tmpl.set_bone(th, "mixamorig:Head");
+    orchard::Scene copy(orchard::Dimension::three_d);
+    const orchard::Entity inst = copy.instantiate(tmpl, "Entities/Guy.entity", orchard::Entity{}, orchard::Transform{});
+    check(copy.model(inst) && copy.animator(inst) && !copy.children(inst).empty() && copy.bone(copy.children(inst)[0]) == "mixamorig:Head", "templates copy models, animators and bones");
+}
+
+#ifdef ORCHARD_TEST_XYLEM
+#include <xylem/xylem.hpp>
+#endif // ORCHARD_TEST_XYLEM
+
+void test_terrain() {
+    const fs::path dir = fs::temp_directory_path() / "orchard terrain test";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "Assets");
+
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity land = s.create("Big Land");
+    orchard::Terrain& t = s.add_terrain(land);
+    t.size = {320.0f, 42.5f, 280.0f};
+    t.resolution = 129;
+    t.heightmap = "Assets/my height map.png";
+    t.data = "Assets/Terrain/big land.heights";
+    t.generator = "mountains";
+    t.seed = 4242;
+    t.roughness = 0.71f;
+    t.friction = 0.83f;
+    t.restitution = 0.12f;
+    orchard::TerrainLayer grass;
+    grass.texture = "Assets/grass 1.png";
+    grass.normal_map = "Assets/grass normal%.png";
+    grass.color = {0.1f, 0.6f, 0.2f};
+    grass.tiling = 4.5f;
+    grass.min_height = 0.05f;
+    grass.max_height = 0.7f;
+    grass.min_slope = 3.0f;
+    grass.max_slope = 33.0f;
+    grass.blend = 0.2f;
+    orchard::TerrainLayer rock;
+    rock.color = {0.5f, 0.5f, 0.52f};
+    rock.min_slope = 40.0f;
+    t.layers = {grass, rock};
+    orchard::TerrainScatter trees;
+    trees.model = "Assets/Models/pine tree.glb";
+    trees.density = 0.031f;
+    trees.min_scale = 0.7f;
+    trees.max_scale = 1.6f;
+    trees.min_height = 0.1f;
+    trees.max_height = 0.8f;
+    trees.max_slope = 27.0f;
+    trees.align_to_slope = true;
+    trees.collide = false;
+    trees.draw_distance = 512.0f;
+    trees.seed = 99;
+    t.scatter = {trees, orchard::TerrainScatter{}};
+    t.scatter[1].model = "Assets/rock.obj";
+
+    std::string error;
+    const std::optional<orchard::Scene> back = orchard::Scene::load(s.save(), &error);
+    check(back.has_value(), "terrain scene loads: " + error);
+    const orchard::Terrain* bt = back ? back->terrain(back->find("Big Land")) : nullptr;
+    check(bt != nullptr, "terrain survives a save");
+    if (bt) {
+        check(near(bt->size.x, 320.0f) && near(bt->size.y, 42.5f) && near(bt->size.z, 280.0f) && bt->resolution == 129, "terrain size and resolution round trip");
+        check(bt->heightmap == t.heightmap && bt->data == t.data && bt->generator == "mountains" && bt->seed == 4242u, "terrain paths with spaces round trip");
+        check(near(bt->roughness, 0.71f) && near(bt->friction, 0.83f) && near(bt->restitution, 0.12f), "terrain roughness, friction and bounce round trip");
+        check(bt->layers.size() == 2 && bt->scatter.size() == 2, "terrain layers and scatter round trip");
+        if (bt->layers.size() == 2) {
+            const orchard::TerrainLayer& l = bt->layers[0];
+            check(l.texture == grass.texture && l.normal_map == grass.normal_map && near(l.color.y, 0.6f) && near(l.tiling, 4.5f), "terrain layer textures round trip");
+            check(near(l.min_height, 0.05f) && near(l.max_height, 0.7f) && near(l.min_slope, 3.0f) && near(l.max_slope, 33.0f) && near(l.blend, 0.2f), "terrain layer limits round trip");
+            check(near(bt->layers[1].min_slope, 40.0f) && bt->layers[1].texture.empty(), "second terrain layer round trip");
+        }
+        if (bt->scatter.size() == 2) {
+            const orchard::TerrainScatter& c = bt->scatter[0];
+            check(c.model == trees.model && near(c.density, 0.031f) && near(c.min_scale, 0.7f) && near(c.max_scale, 1.6f), "terrain scatter model and scale round trip");
+            check(near(c.min_height, 0.1f) && near(c.max_height, 0.8f) && near(c.max_slope, 27.0f) && c.align_to_slope && !c.collide && near(c.draw_distance, 512.0f) && c.seed == 99u, "terrain scatter limits round trip");
+            check(bt->scatter[1].model == "Assets/rock.obj" && bt->scatter[1].collide, "second terrain scatter round trip");
+        }
+        check(back->save() == s.save(), "terrain save is stable");
+    }
+
+    for (const std::string& g : orchard::terrain_generators()) {
+        orchard::Terrain gt;
+        gt.generator = g;
+        gt.resolution = 65;
+        gt.seed = 7;
+        orchard::TerrainHeights a, b, c;
+        orchard::generate_heights(gt, a);
+        orchard::generate_heights(gt, b);
+        gt.seed = 8;
+        orchard::generate_heights(gt, c);
+        check(a.valid() && a.width == 65 && a.heights == b.heights, "generator " + g + " is deterministic");
+        check(a.min_height() >= -1e-4f && a.max_height() <= gt.size.y + 1e-3f, "generator " + g + " stays inside the terrain height");
+        if (g != "flat") check(a.heights != c.heights && a.max_height() - a.min_height() > gt.size.y * 0.3f, "generator " + g + " uses the seed and isn't flat");
+    }
+
+    orchard::TerrainHeights ramp;
+    ramp.size = {20.0f, 10.0f, 20.0f};
+    ramp.resize(21, 21);
+    for (int z = 0; z < 21; ++z)
+        for (int x = 0; x < 21; ++x) ramp.set(x, z, 5.0f + 0.5f * ramp.local_position(x, z).x);
+    check(near(ramp.height_at(3.3f, -2.0f), 5.0f + 1.65f) && near(ramp.height_at(-7.25f, 6.6f), 5.0f - 3.625f), "terrain heights sample between grid points");
+    const orchard::Vec3 rn = ramp.normal_at(1.0f, 1.0f);
+    check(near(rn.x, -0.4472f) && near(rn.y, 0.8944f) && near(rn.z, 0.0f), "terrain normal on a ramp");
+    check(near(ramp.slope_at(0.0f, 0.0f), 26.565f, 0.05f), "terrain slope on a ramp");
+    float hit_d = 0.0f;
+    orchard::Vec3 hit_p;
+    check(orchard::raycast_terrain(ramp, {2.0f, 50.0f, 1.0f}, {0.0f, -1.0f, 0.0f}, 100.0f, hit_d, &hit_p) && near(hit_p.y, 6.0f, 0.01f), "terrain raycast hits the surface");
+
+    orchard::TerrainHeights flat;
+    flat.size = {40.0f, 10.0f, 40.0f};
+    flat.resize(41, 41, 2.0f);
+    orchard::TerrainBrush brush;
+    brush.radius = 5.0f;
+    brush.strength = 1.0f;
+    brush.falloff = 0.5f;
+    const std::uint64_t rev = flat.revision;
+    check(orchard::apply_brush(flat, brush, 0.0f, 0.0f) && near(flat.height_at(0.0f, 0.0f), 3.0f) && near(flat.height_at(10.0f, 10.0f), 2.0f) && flat.revision > rev && !flat.dirty.empty(), "raise brush lifts the middle only");
+    check(flat.height_at(4.0f, 0.0f) > 2.0f && flat.height_at(4.0f, 0.0f) < 3.0f, "brush falloff softens the edge");
+    brush.kind = orchard::TerrainBrushKind::lower;
+    brush.strength = 3.0f;
+    orchard::apply_brush(flat, brush, 0.0f, 0.0f);
+    check(near(flat.height_at(0.0f, 0.0f), 0.0f), "lower brush digs");
+    brush.kind = orchard::TerrainBrushKind::set_height;
+    brush.target = 7.0f;
+    orchard::apply_brush(flat, brush, 10.0f, 10.0f);
+    check(near(flat.height_at(10.0f, 10.0f), 7.0f), "set-height brush sets the height");
+    brush.kind = orchard::TerrainBrushKind::flatten;
+    brush.target = 2.0f;
+    brush.strength = 1.0f;
+    orchard::apply_brush(flat, brush, 10.0f, 10.0f);
+    check(near(flat.height_at(10.0f, 10.0f), 2.0f), "flatten brush pulls to the target");
+    orchard::TerrainHeights spike = flat;
+    spike.resize(41, 41, 0.0f);
+    spike.set(20, 20, 9.0f);
+    brush.kind = orchard::TerrainBrushKind::smooth;
+    brush.strength = 1.0f;
+    orchard::apply_brush(spike, brush, 0.0f, 0.0f);
+    check(spike.at(20, 20) < 2.0f && spike.at(21, 20) > 0.5f, "smooth brush spreads a spike");
+    orchard::TerrainHeights bumpy = flat;
+    bumpy.resize(41, 41, 1.0f);
+    brush.kind = orchard::TerrainBrushKind::noise;
+    brush.radius = 15.0f;
+    orchard::apply_brush(bumpy, brush, 0.0f, 0.0f);
+    check(bumpy.max_height() - bumpy.min_height() > 0.1f, "noise brush roughens");
+    check(orchard::parse_terrain_brush("set-height") == orchard::TerrainBrushKind::set_height && orchard::parse_terrain_brush("smooth") == orchard::TerrainBrushKind::smooth, "brush names parse");
+
+    const std::string heights_file = (dir / "Assets" / "test land.heights").string();
+    check(flat.save(heights_file, &error), "heights file saves: " + error);
+    orchard::TerrainHeights loaded;
+    check(loaded.load(heights_file, &error) && loaded.width == 41 && loaded.heights == flat.heights && near(loaded.size.x, 40.0f), "heights file loads back exactly");
+
+    {
+        std::ofstream pgm(dir / "Assets" / "hm.pgm", std::ios::binary);
+        pgm << "P5\n3 3\n65535\n";
+        const unsigned v[9] = {0, 32768, 65535, 65535, 0, 16384, 1, 2, 3};
+        for (unsigned x : v) pgm.put(static_cast<char>(x >> 8)).put(static_cast<char>(x & 255));
+    }
+    orchard::Terrain ht;
+    ht.size = {10.0f, 100.0f, 10.0f};
+    ht.resolution = 3;
+    ht.heightmap = "Assets/hm.pgm";
+    orchard::TerrainHeights from_image;
+    check(orchard::build_terrain_heights(ht, dir.string(), from_image, &error) && from_image.width == 3, "16-bit heightmap loads: " + error);
+    check(near(from_image.at(1, 0), 50.0f, 0.01f) && near(from_image.at(2, 0), 100.0f) && near(from_image.at(2, 1), 25.0f, 0.01f), "16-bit heightmap keeps its precision");
+    ht.data = "Assets/test land.heights";
+    ht.resolution = 41;
+    ht.size = {40.0f, 10.0f, 40.0f};
+    orchard::TerrainHeights from_data;
+    check(orchard::build_terrain_heights(ht, dir.string(), from_data) && near(from_data.height_at(10.0f, 10.0f), 2.0f), "sculpted data wins over the heightmap");
+
+    orchard::Terrain forest = orchard::terrain_preset("forest");
+    forest.resolution = 257;
+    forest.size = {300.0f, 30.0f, 300.0f};
+    orchard::TerrainHeights fh;
+    orchard::generate_heights(forest, fh);
+    const std::vector<orchard::ScatterInstance> a = orchard::scatter_instances(forest, fh);
+    const std::vector<orchard::ScatterInstance> b = orchard::scatter_instances(forest, fh);
+    bool same = a.size() == b.size() && !a.empty();
+    bool inside = true;
+    for (std::size_t i = 0; same && i < a.size(); ++i) same = a[i].model == b[i].model && a[i].position.x == b[i].position.x && a[i].position.z == b[i].position.z && a[i].yaw == b[i].yaw && a[i].scale == b[i].scale;
+    for (const orchard::ScatterInstance& in : a) {
+        const orchard::TerrainScatter& sc = forest.scatter[in.scatter];
+        inside = inside && near(in.position.y, fh.height_at(in.position.x, in.position.z)) && in.scale >= sc.min_scale - 1e-4f && in.scale <= sc.max_scale + 1e-4f && fh.slope_at(in.position.x, in.position.z) <= sc.max_slope + 1e-3f;
+    }
+    check(same, "scatter is the same every time (" + std::to_string(a.size()) + " instances)");
+    check(inside, "scatter sits on the ground inside its limits");
+    forest.seed = 2;
+    const std::vector<orchard::ScatterInstance> c = orchard::scatter_instances(forest, fh);
+    check(!c.empty() && (c.size() != a.size() || c[0].position.x != a[0].position.x), "scatter follows the terrain seed");
+
+    {
+        orchard::Terrain st = orchard::terrain_preset("mountains");
+        st.resolution = 65;
+        st.size = {200.0f, 60.0f, 100.0f};
+        check(!st.layers.empty() && st.layers[0].texture == "builtin:grass" && st.layers[1].texture == "builtin:rock", "terrain presets use built-in textures");
+        orchard::TerrainHeights sh;
+        orchard::generate_heights(st, sh);
+        orchard::TerrainSplat sp;
+        orchard::build_terrain_splat(st, sh, sp);
+        check(sp.width == orchard::terrain_splat_size(sh.width) && sp.layers == 3 && sp.rgba[0].size() == static_cast<std::size_t>(sp.width * sp.height * 4) && sp.rgba[1].empty(), "splat map size and layers");
+        bool sums = true, rocky = false;
+        for (std::size_t i = 0; i < sp.rgba[0].size(); i += 4) {
+            const int t = sp.rgba[0][i] + sp.rgba[0][i + 1] + sp.rgba[0][i + 2] + sp.rgba[0][i + 3];
+            sums = sums && t >= 250 && t <= 260;
+            rocky = rocky || sp.rgba[0][i + 1] > 128;
+        }
+        check(sums && rocky, "splat weights add up to one and include steep rock");
+        float w8[orchard::terrain_max_splat_layers];
+        orchard::terrain_layer_weights(st, 0.5f, 60.0f, w8, orchard::terrain_max_splat_layers);
+        const orchard::Vec4 w4 = orchard::terrain_layer_weights(st, 0.5f, 60.0f);
+        check(near(w8[0], w4.x) && near(w8[1], w4.y) && near(w8[2], w4.z) && near(w8[4], 0.0f), "layer weights for many layers match the four-layer version");
+        const orchard::TerrainSplat before = sp;
+        const int cx = sh.width / 2, cz = sh.depth / 2;
+        for (int z = cz - 3; z <= cz + 3; ++z)
+            for (int x = cx - 3; x <= cx + 3; ++x) sh.set(x, z, sh.at(x, z) + ((x + z) % 2 ? 8.0f : -8.0f));
+        int px0 = 0, py0 = 0, px1 = 0, py1 = 0;
+        check(orchard::update_terrain_splat(st, sh, sp, cx - 3, cz - 3, cx + 3, cz + 3, &px0, &py0, &px1, &py1), "splat region updates");
+        bool outside_same = true, inside_changed = false;
+        for (int y = 0; y < sp.height; ++y)
+            for (int x = 0; x < sp.width; ++x) {
+                const std::size_t i = (static_cast<std::size_t>(y) * sp.width + x) * 4;
+                const bool in = x >= px0 && x <= px1 && y >= py0 && y <= py1;
+                const bool diff = before.rgba[0][i + 1] != sp.rgba[0][i + 1] || before.rgba[0][i] != sp.rgba[0][i];
+                if (!in && diff) outside_same = false;
+                if (in && diff) inside_changed = true;
+            }
+        orchard::TerrainSplat full;
+        orchard::build_terrain_splat(st, sh, full);
+        check(outside_same && inside_changed && full.rgba[0] == sp.rgba[0], "sculpting only rebuilds the touched part of the splat map");
+        st.layers.resize(6, st.layers[0]);
+        orchard::build_terrain_splat(st, sh, sp);
+        check(sp.layers == 6 && sp.rgba[1].size() == sp.rgba[0].size(), "more than four layers use a second splat map");
+    }
+
+    const orchard::TerrainChunking chunks = orchard::terrain_chunking(fh, 32);
+    check(chunks.chunks_x == 8 && chunks.chunks_z == 8 && chunks.lods == 6, "terrain splits into 32x32 chunks with LODs");
+    orchard::TerrainMesh near_mesh, far_mesh;
+    orchard::build_terrain_chunk(forest, fh, 2, 3, 0, near_mesh);
+    orchard::build_terrain_chunk(forest, fh, 2, 3, 3, far_mesh);
+    check(near_mesh.positions.size() == 33 * 33 + 4 * 33 && near_mesh.triangle_count() == 32 * 32 * 2 + 4 * 32 * 4, "LOD 0 chunk mesh has every sample and skirts");
+    check(far_mesh.triangle_count() < near_mesh.triangle_count() / 16 && far_mesh.normals.size() == far_mesh.positions.size() && far_mesh.weights.size() == far_mesh.positions.size(), "far LOD is much lighter");
+    const orchard::Vec4 w = orchard::terrain_layer_weights(forest, 0.4f, 60.0f);
+    check(near(w.x + w.y + w.z + w.w, 1.0f) && w.z > 0.9f, "steep ground gets the rock layer");
+
+#ifdef ORCHARD_TEST_XYLEM
+    {
+        orchard::Scene ps(orchard::Dimension::three_d);
+        const orchard::Entity hill = ps.create("Hill");
+        orchard::Terrain& pt = ps.add_terrain(hill);
+        pt.size = {60.0f, 12.0f, 60.0f};
+        pt.resolution = 65;
+        pt.generator = "hills";
+        pt.seed = 3;
+        pt.friction = 0.9f;
+        ps.transform(hill)->position = {10.0f, -3.0f, 5.0f};
+        ps.transform(hill)->rotation = orchard::from_euler({0.0f, 30.0f, 0.0f});
+        ps.transform(hill)->scale = {1.5f, 1.0f, 1.5f};
+        const orchard::Entity ball = ps.create("Ball");
+        ps.transform(ball)->position = {14.0f, 30.0f, 2.0f};
+        orchard::Body& bb = ps.add_body(ball);
+        bb.angular_damping = 2.0f;
+        bb.linear_damping = 0.3f;
+        ps.add_collider(ball, orchard::ColliderShape::sphere)->friction = 0.9f;
+        xylem::World world(orchard::Dimension::three_d);
+        world.build(ps);
+        check(world.terrain_count() == 1, "play mode turns the terrain into a heightfield");
+        for (int i = 0; i < 60 * 12; ++i) world.step(1.0f / 60.0f);
+        orchard::TerrainHeights ph;
+        orchard::generate_heights(*ps.terrain(hill), ph);
+        const orchard::Mat4 tm = orchard::terrain_matrix(ps.world_matrix(hill), {0.0f, 1.0f, 0.0f});
+        const orchard::Vec3 at = ps.transform(ball)->position;
+        const orchard::Vec3 local = orchard::terrain_to_local(tm, at);
+        const orchard::Vec3 ground = orchard::mul_point(tm, {local.x, ph.height_at(local.x, local.z), local.z});
+        const float speed = orchard::length(world.velocity(ball));
+        check(at.y > ground.y && at.y - ground.y < 0.75f && at.y > -2.0f, "ball comes to rest on the hill (ball " + std::to_string(at.y) + ", ground " + std::to_string(ground.y) + ")");
+        check(speed < 0.5f, "ball stops on the hill (speed " + std::to_string(speed) + ")");
+        orchard::Vec3 rp, rnorm;
+        float rd = 0.0f;
+        const orchard::Entity rh = world.raycast({12.0f, 40.0f, 8.0f}, {0.0f, -1.0f, 0.0f}, 100.0f, &rp, &rnorm, &rd);
+        const orchard::Vec3 rl = orchard::terrain_to_local(tm, rp);
+        check(rh == hill && near(rl.y, ph.height_at(rl.x, rl.z), 0.05f) && rnorm.y > 0.5f, "raycasts hit the terrain");
+    }
+    {
+        {
+            std::ofstream obj(dir / "Assets" / "floor plate.obj");
+            obj << "v -10 0 -10\nv 10 0 -10\nv 10 0 10\nv -10 0 10\nv 0 3 0\nf 1 4 3\nf 1 3 2\nf 1 2 5\n";
+        }
+        orchard::Scene ms(orchard::Dimension::three_d);
+        const orchard::Entity map = ms.create("Map");
+        ms.add_body(map).type = orchard::BodyType::fixed;
+        orchard::Collider* mc = ms.add_collider(map, orchard::ColliderShape::mesh);
+        mc->source = "Assets/floor plate.obj";
+        mc->size = {2.0f, 1.0f, 2.0f};
+        const orchard::Entity ball = ms.create("Ball");
+        ms.transform(ball)->position = {15.0f, 4.0f, 15.0f};
+        ms.add_body(ball);
+        ms.add_collider(ball, orchard::ColliderShape::sphere);
+        const orchard::Entity rock = ms.create("Rock");
+        ms.transform(rock)->position = {-12.0f, 3.0f, 12.0f};
+        ms.add_body(rock);
+        orchard::Collider* rc = ms.add_collider(rock, orchard::ColliderShape::convex_hull);
+        rc->source = "Assets/floor plate.obj";
+        rc->size = {0.1f, 0.5f, 0.1f};
+        xylem::World world(orchard::Dimension::three_d);
+        world.set_asset_root(dir.string());
+        world.build(ms);
+        for (int i = 0; i < 60 * 3; ++i) world.step(1.0f / 60.0f);
+        if (xylem::models_supported()) {
+            check(world.warnings().empty(), "model colliders load" + (world.warnings().empty() ? std::string() : ": " + world.warnings()[0]));
+            check(near(ms.transform(ball)->position.y, 0.5f, 0.08f), "ball lands on an imported mesh scaled by the collider size (y = " + std::to_string(ms.transform(ball)->position.y) + ")");
+            check(ms.transform(rock)->position.y > -0.2f && ms.transform(rock)->position.y < 1.0f, "a convex hull body lands on the mesh (y = " + std::to_string(ms.transform(rock)->position.y) + ")");
+        }
+    }
+#endif // ORCHARD_TEST_XYLEM
+    fs::remove_all(dir);
+}
+
 int main() {
+    test_terrain();
     test_math();
     test_scene();
     test_project();
@@ -874,6 +1434,10 @@ int main() {
     test_entity_templates_and_emitters();
     test_light_animation();
     test_project_physics_and_lighting();
+    test_graph_view();
+    test_models_and_animation();
+    test_humanoids_cameras_and_reflections();
+    test_particle_presets();
     std::cout << (checks - failures) << "/" << checks << " checks passed\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

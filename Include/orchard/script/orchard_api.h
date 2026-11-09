@@ -29,6 +29,16 @@ extern "C" {
 #define ORCHARD_PARTICLES_BURST 2
 #define ORCHARD_PARTICLES_CLEAR 3
 
+#define ORCHARD_ANIM_PLAY 0
+#define ORCHARD_ANIM_PLAY_ONCE 1
+#define ORCHARD_ANIM_STOP 2
+#define ORCHARD_ANIM_RESUME 3
+#define ORCHARD_ANIM_SPEED 4
+#define ORCHARD_ANIM_TIME 5
+#define ORCHARD_ANIM_SET_TIME 6
+#define ORCHARD_ANIM_LENGTH 7
+#define ORCHARD_ANIM_PLAYING 8
+
 #define ORCHARD_FLUID_POUR 0
 #define ORCHARD_FLUID_ERASE 1
 #define ORCHARD_FLUID_PUSH 2
@@ -78,6 +88,8 @@ typedef struct orchard_host_api {
     orchard_entity (*instantiate)(const char* entity_template, double x, double y, double z, orchard_entity parent);
     void (*particles)(orchard_entity entity, int action, int count);
     int (*fluid_brush)(int brush, double x, double y, double z, double radius, double vx, double vy, double vz, int material);
+    double (*animation)(orchard_entity entity, int action, const char* clip, double value);
+    const char* (*animation_event)(orchard_entity entity);
 } orchard_host_api;
 
 #define ORCHARD_HOST_HAS(host, member) ((host) && (host)->size >= offsetof(orchard_host_api, member) + sizeof((host)->member) && (host)->member)

@@ -18,6 +18,7 @@ body {
     accent-color: var(--accent);
     font-size: 13px;
     padding: 0;
+    overflow: hidden;
 }
 
 page {
@@ -919,4 +920,88 @@ button.axes-flip {
 
 .cat-instance {
     color: var(--accent);
+}
+
+.center-tabs {
+    gap: 2px;
+    padding: 4px 8px 0 8px;
+    align-items: end;
+}
+
+.ctab {
+    padding: 4px 12px;
+    border-radius: 6px 6px 0 0;
+    background: transparent;
+    color: var(--muted);
+    border-width: 0;
+}
+
+.ctab.on {
+    background: var(--raised);
+    color: var(--text);
+}
+
+.ctab-x {
+    padding: 2px 6px;
+    background: transparent;
+    color: var(--muted);
+    border-width: 0;
+}
+
+.script-view {
+    flex: 1;
+    gap: 0;
+}
+
+.script-editor {
+    flex: 1;
+    width: 100%;
+    font-size: 13px;
+}
+
+.script-name {
+    font-weight: bold;
+}
+
+.editor-command {
+    width: 160px;
+}
+
+#graph-canvas {
+    flex: 1;
+    width: 100%;
+}
+
+.graph-edit {
+    gap: 4px;
+    align-items: center;
+}
+
+.graph-edit input_string {
+    width: 180px;
+}
+
+#graph-status.bad {
+    color: var(--apple);
+}
+
+.files-page {
+    flex: 1;
+    gap: 4px;
+    min-height: 0;
+}
+
+.files-bar {
+    gap: 10px;
+    align-items: center;
+    padding: 2px 0;
+}
+
+.sculpt-bar {
+    gap: 6px;
+    align-items: center;
+}
+
+.sculpt-bar input_float {
+    width: 64px;
 }
