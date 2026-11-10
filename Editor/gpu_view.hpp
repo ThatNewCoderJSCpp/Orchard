@@ -76,6 +76,7 @@ public:
     bool draw_traced(grove::GpuCanvasFrame& frame, fizmo::lighting::Scene& scene, const fizmo::lighting::LightingSettings& settings, const fizmo::lighting::Camera& camera);
     bool draw_traced_over(grove::GpuCanvasFrame& frame, fizmo::lighting::Scene& scene, const fizmo::lighting::LightingSettings& settings, const fizmo::lighting::Camera& camera, std::uint32_t full_after_samples);
     std::uint32_t traced_samples() const;
+    void set_trace_samples(int samples);
     std::string trace_error() const;
     void stop_tracing();
     void set_options(const GpuViewOptions& options) { m_options = options; }

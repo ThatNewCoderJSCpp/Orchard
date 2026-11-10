@@ -481,7 +481,46 @@ void test_character() {
     check(hit == s.find("Ground") && near(d, 1.0f, 0.1f), "raycast_ignoring skips the player's own capsule");
 }
 
+void test_running_stays_down() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    for (int i = 0; i < 40; ++i) {
+        const orchard::Entity tile = s.create("Tile");
+        s.transform(tile)->position = {-40.0f + 2.0f * static_cast<float>(i), -0.5f + ((i * 7) % 5) * 0.006f, 0.0f};
+        s.add_body(tile).type = orchard::BodyType::fixed;
+        s.add_collider(tile)->size = {2.0f, 1.0f, 6.0f};
+    }
+    const orchard::Entity bump = s.create("Bump");
+    s.transform(bump)->position = {0.0f, -0.05f, 0.0f};
+    s.transform(bump)->rotation = orchard::from_euler({0.0f, 0.0f, 4.0f});
+    s.add_body(bump).type = orchard::BodyType::fixed;
+    s.add_collider(bump)->size = {3.0f, 0.2f, 6.0f};
+    const orchard::Entity player = s.create("Player");
+    s.transform(player)->position = {-36.0f, 0.05f, 0.0f};
+    orchard::Body& b = s.add_body(player);
+    b.set(orchard::body_sleep, false);
+    b.continuous = orchard::BodyContinuous::on;
+    orchard::Collider* c = s.add_collider(player, orchard::ColliderShape::capsule);
+    c->size = {0.6f, 1.8f, 0.6f};
+    c->offset = {0.0f, 0.9f, 0.0f};
+    c->friction = 0.0f;
+    xylem::World w(orchard::Dimension::three_d);
+    w.build(s);
+    xylem::CharacterMove run;
+    run.wish = {15.0f, 0.0f, 0.0f};
+    float top = -1.0f;
+    int airborne = 0;
+    for (int i = 0; i < 60 * 4; ++i) {
+        const xylem::CharacterState st = w.move_character(player, run, 1.0f / 60.0f);
+        w.step(1.0f / 60.0f);
+        if (i > 30 && !st.grounded) ++airborne;
+        if (i > 30) top = std::max(top, s.transform(player)->position.y);
+    }
+    check(top < 0.25f, "running at 15 m/s over seams and a bump doesn't launch the player (highest " + str(top) + " m)");
+    check(airborne < 10, "and it stays on the ground (" + str(static_cast<float>(airborne)) + " frames in the air)");
+}
+
 int main() {
+    test_running_stays_down();
     test_balls_settle();
     test_start_motion();
     test_mass_and_locks();

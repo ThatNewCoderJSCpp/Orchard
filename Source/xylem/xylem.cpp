@@ -1147,6 +1147,8 @@ struct World::Impl {
             if (level == fp::FluidLevel::blocky) def.cell_size = std::max(def.cell_size, 0.5_r);
             fp::FluidVolume3D& v = fluids->add_volume(def);
             if (level == fp::FluidLevel::blocky || level == fp::FluidLevel::flowing || level == fp::FluidLevel::waves) v.voxelize(*sim3);
+            const orchard::Entity holder = s.body_owner(e);
+            if (auto own = bodies3.find(holder.id()); s.alive(holder) && own != bodies3.end()) v.ignore_body(*own->second);
             volumes.emplace_back(e, &v);
             volume_looks.push_back(*f);
         }
@@ -1840,22 +1842,38 @@ CharacterState World::move_character(orchard::Entity e, const CharacterMove& mov
     float best = 1e30f;
     orchard::Vec3 best_normal = up;
     orchard::Entity best_hit;
-    for (const orchard::Vec3& from : starts) {
+    bool center_hit = false;
+    orchard::Vec3 center_normal = up;
+    for (std::size_t r = 0; r < starts.size(); ++r) {
         orchard::Vec3 n;
         float d = -1.0f;
-        const orchard::Entity hit = raycast_ignoring(e, from, up * -1.0f, reach, nullptr, &n, &d);
-        if (d >= 0.0f && d < best && orchard::dot(orchard::normalize(n), up) >= min_up) {
+        const orchard::Entity hit = raycast_ignoring(e, starts[r], up * -1.0f, reach, nullptr, &n, &d);
+        if (d < 0.0f) continue;
+        const orchard::Vec3 nn = orchard::normalize(n);
+        if (orchard::dot(nn, up) < min_up) continue;
+        if (r == 0) {
+            center_hit = true;
+            center_normal = nn;
+        }
+        if (d < best) {
             best = d;
-            best_normal = orchard::normalize(n);
+            best_normal = nn;
             best_hit = hit;
         }
     }
     const bool touching_ground = best < 1e29f;
+    if (center_hit) best_normal = center_normal;
+    if (orchard::dot(best_normal, up) < min_up) best_normal = up;
 
     orchard::Vec3 v = velocity(e);
-    const float vu = orchard::dot(v, up);
+    float vu = orchard::dot(v, up);
     w.jump_lock = std::max(0.0_r, w.jump_lock - static_cast<Real>(dt));
-    bool grounded = touching_ground && w.jump_lock <= 0.0_r && vu <= std::max(1.0f, move.jump_speed * 0.5f);
+    const float launch = std::max(8.0f, move.jump_speed * 1.6f);
+    bool grounded = touching_ground && w.jump_lock <= 0.0_r && vu <= launch;
+    if (!grounded && w.grounded && w.jump_lock <= 0.0_r && vu > 0.0f && vu <= launch) {
+        v = v - up * vu;
+        vu = 0.0f;
+    }
     orchard::Vec3 wish = flatten(move.wish, up);
     if (m->dimension == orchard::Dimension::two_d) wish.z = 0.0f;
 

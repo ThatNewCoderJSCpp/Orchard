@@ -481,11 +481,20 @@ private:
             const fizmo::lighting::LightingSettings s = chlorophyll::settings_for(m_project->info(), trace == "photon" ? orchard::LightingLevel::photon : orchard::LightingLevel::path_traced);
             fizmo::lighting::LightingSettings preview = s;
             if (preview.firefly_clamp <= 0.0f) preview.firefly_clamp = 8.0f;
-            const bool settling = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_view_moved).count() < 0.2 || m_drag || !m_fly_keys.empty();
+            preview.denoise = true;
+            preview.denoise_passes = trace == "rt" ? 5 : 4;
+            if (trace == "rt") {
+                preview.max_bounces = std::min(preview.max_bounces, 4);
+                preview.russian_roulette_depth = std::min(preview.russian_roulette_depth, 2);
+                preview.caustics = false;
+            }
+            if (f.dt > 0.0 && f.dt < 1.0 / 75.0 && m_trace_spp < (trace == "rt" ? 4 : 8)) ++m_trace_spp;
+            else if (f.dt > 1.0 / 40.0 && m_trace_spp > 1) --m_trace_spp;
+            m_gpu.set_trace_samples(m_trace_spp);
             draw_editor_view(f, seconds);
             if (m_session.playing() || seconds > 0.0) lw.animate(m_scene, seconds);
             else lw.refresh_geometry(m_scene);
-            if (!settling) m_gpu.draw_traced_over(f, lw.lighting_scene(), preview, lw.camera_for(m_view, f.viewport_width, f.viewport_height), 12u);
+            m_gpu.draw_traced_over(f, lw.lighting_scene(), preview, lw.camera_for(m_view, f.viewport_width, f.viewport_height), 0u);
             return;
         }
         draw_editor_view(f, seconds);
@@ -3207,7 +3216,7 @@ private:
             items.push_back(grove::menu_item("add:light", "Add a light"));
             items.push_back(grove::menu_item("add:camera", "Add a camera (from this view)"));
             items.push_back(grove::menu_item("add:player-camera", "Add a player camera (walk with W A S D)"));
-            items.push_back(grove::menu_item("add:physical-player", "Add a physical player (a body that bumps, gets pushed and falls)"));
+            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) items.push_back(grove::menu_item(std::string("add:physical-player:") + orchard::to_string(hk), std::string("Add a physical player: ") + orchard::humanoid_label(hk)));
             items.push_back(grove::menu_item("add:water", "Add water"));
             items.push_back(grove::menu_item("add:pool", "Add a pool (walls and water)"));
             items.push_back(grove::menu_item("add:hemisphere", "Add a hemisphere"));
@@ -3753,8 +3762,79 @@ private:
         return false;
     }
 
+    orchard::Entity add_physical_player(orchard::HumanoidKind hk, orchard::Entity parent) {
+        const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
+        for (orchard::Entity other : m_scene.entities())
+            if (orchard::Camera* oc = m_scene.camera(other)) oc->active = false;
+        const orchard::Entity e = orchard::add_humanoid(m_scene, hk, parent, "Player");
+        orchard::Body& b = *m_scene.body(e);
+        b.type = orchard::BodyType::dynamic;
+        b.set(orchard::body_lock_rotation_x, !flat);
+        b.set(orchard::body_lock_rotation_y, !flat);
+        b.set(orchard::body_lock_rotation_z, true);
+        b.set(orchard::body_sleep, false);
+        b.continuous = orchard::BodyContinuous::on;
+        b.angular_damping = 1.0f;
+        const orchard::Vec3 one{1.0f, 1.0f, 1.0f};
+        std::vector<orchard::Collider*> solid;
+        float total = 0.0f;
+        std::vector<orchard::Entity> todo{e};
+        while (!todo.empty()) {
+            const orchard::Entity at = todo.back();
+            todo.pop_back();
+            if (std::vector<orchard::Collider>* cs = m_scene.colliders(at)) {
+                for (orchard::Collider& c : *cs) {
+                    if (c.sensor) continue;
+                    c.friction = 0.0f;
+                    c.friction_combine = orchard::CombineMode::minimum;
+                    total += orchard::collider_mass(c, one, m_scene.dimension());
+                    solid.push_back(&c);
+                }
+            }
+            for (orchard::Entity child : m_scene.children(at)) todo.push_back(child);
+        }
+        const float target = 75.0f;
+        for (orchard::Collider* c : solid) {
+            const float share = total > 0.0f ? orchard::collider_mass(*c, one, m_scene.dimension()) / total : 1.0f / static_cast<float>(solid.size());
+            c->mass = std::max(0.01f, target * share);
+            c->lock(orchard::collider_lock_mass, true);
+        }
+        if (solid.size() == 1) solid.front()->name = "Body";
+        const orchard::Entity cam = m_scene.create("Camera", e);
+        orchard::Camera& cc = m_scene.add_camera(cam);
+        cc.control = flat ? orchard::CameraControl::none : orchard::CameraControl::walk;
+        cc.fov = m_view.orbit_camera().fov;
+        m_scene.transform(cam)->position = {0.0f, hk == orchard::HumanoidKind::detailed || hk == orchard::HumanoidKind::full_body ? 1.64f : cc.eye_height, flat ? 0.0f : 0.08f};
+        orchard::Transform* t = m_scene.transform(e);
+        if (flat) {
+            const orchard::Vec2 c = m_view.pan_camera().center;
+            t->position = {c.x, c.y, 0.0f};
+            return e;
+        }
+        const orchard::Vec3 up = camera_up_axis();
+        const orchard::Vec3 eye = m_view.eye();
+        const orchard::Vec3 target_point = m_view.orbit_camera().target;
+        orchard::Vec3 look = target_point - eye;
+        look = look - up * orchard::dot(look, up);
+        if (orchard::length(look) < 1e-4f) look = orchard::cross(up, orchard::Vec3{1.0f, 0.0f, 0.0f});
+        t->position = target_point;
+        const orchard::Vec3 y_axis{0.0f, 1.0f, 0.0f};
+        const orchard::Vec3 axis = orchard::cross(y_axis, up);
+        const float d = orchard::dot(y_axis, up);
+        t->rotation = d < -0.9999f ? orchard::Quat{1.0f, 0.0f, 0.0f, 0.0f} : orchard::normalize(orchard::Quat{axis.x, axis.y, axis.z, 1.0f + d});
+        const orchard::Quat inv{-t->rotation.x, -t->rotation.y, -t->rotation.z, t->rotation.w};
+        m_scene.transform(cam)->rotation = orchard::normalize(inv * camera_rotation(look));
+        return e;
+    }
+
     orchard::Entity add_preset(const std::string& kind, orchard::Entity parent) {
         const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
+        if (kind == "physical-player" || kind.rfind("physical-player:", 0) == 0) {
+            std::optional<orchard::HumanoidKind> hk = orchard::HumanoidKind::basic;
+            if (kind.size() > 16) hk = orchard::parse_humanoid_kind(kind.substr(16));
+            if (!hk) return orchard::Entity{};
+            return add_physical_player(*hk, parent);
+        }
         if (kind.rfind("human:", 0) == 0) {
             const std::optional<orchard::HumanoidKind> hk = orchard::parse_humanoid_kind(kind.substr(6));
             if (!hk) return orchard::Entity{};
@@ -3818,49 +3898,6 @@ private:
         } else if (kind == "light") {
             m_scene.add_light(e);
             m_scene.transform(e)->position.y += 3.0f;
-        } else if (kind == "physical-player") {
-            m_scene.set_name(e, "Player");
-            for (orchard::Entity other : m_scene.entities())
-                if (orchard::Camera* oc = m_scene.camera(other)) oc->active = false;
-            orchard::Body& b = m_scene.add_body(e);
-            b.type = orchard::BodyType::dynamic;
-            b.set(orchard::body_lock_rotation_x, !flat);
-            b.set(orchard::body_lock_rotation_y, !flat);
-            b.set(orchard::body_lock_rotation_z, true);
-            b.set(orchard::body_sleep, false);
-            b.continuous = orchard::BodyContinuous::on;
-            b.angular_damping = 1.0f;
-            orchard::Collider* c = m_scene.add_collider(e, orchard::ColliderShape::capsule);
-            const float height = 1.8f;
-            c->name = "Body";
-            c->size = {0.6f, height, flat ? 1.0f : 0.6f};
-            c->offset = {0.0f, height * 0.5f, 0.0f};
-            c->friction = 0.0f;
-            c->friction_combine = orchard::CombineMode::minimum;
-            c->density = 985.0f / orchard::collider_density_unit(m_scene.dimension());
-            c->mass = 75.0f;
-            c->lock(orchard::collider_lock_mass, true);
-            const orchard::Entity cam = m_scene.create("Camera", e);
-            orchard::Camera& cc = m_scene.add_camera(cam);
-            cc.control = flat ? orchard::CameraControl::none : orchard::CameraControl::walk;
-            cc.fov = m_view.orbit_camera().fov;
-            m_scene.transform(cam)->position = {0.0f, cc.eye_height, 0.0f};
-            if (!flat) {
-                const orchard::Vec3 up = camera_up_axis();
-                const orchard::Vec3 eye = m_view.eye();
-                const orchard::Vec3 target = m_view.orbit_camera().target;
-                orchard::Vec3 look = target - eye;
-                look = look - up * orchard::dot(look, up);
-                if (orchard::length(look) < 1e-4f) look = orchard::cross(up, orchard::Vec3{1.0f, 0.0f, 0.0f});
-                orchard::Transform* t = m_scene.transform(e);
-                t->position = target;
-                const orchard::Vec3 y_axis{0.0f, 1.0f, 0.0f};
-                const orchard::Vec3 axis = orchard::cross(y_axis, up);
-                const float d = orchard::dot(y_axis, up);
-                t->rotation = d < -0.9999f ? orchard::Quat{1.0f, 0.0f, 0.0f, 0.0f} : orchard::normalize(orchard::Quat{axis.x, axis.y, axis.z, 1.0f + d});
-                const orchard::Quat inv{-t->rotation.x, -t->rotation.y, -t->rotation.z, t->rotation.w};
-                m_scene.transform(cam)->rotation = orchard::normalize(inv * camera_rotation(look));
-            }
         } else if (kind == "camera" || kind == "player-camera") {
             for (orchard::Entity other : m_scene.entities())
                 if (orchard::Camera* oc = m_scene.camera(other)) oc->active = false;
@@ -5074,6 +5111,7 @@ private:
     std::optional<orchard::Viewport> m_view_before_play;
     bool m_player_ready = false;
     std::string m_component_error;
+    int m_trace_spp = 1;
     float m_player_yaw = 0.0f;
     float m_player_pitch = 0.0f;
     float m_player_fall = 0.0f;

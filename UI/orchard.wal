@@ -2746,7 +2746,7 @@ grove::get_by_id("render-mode").on("change", [](grove::Event&: e) -> void {
         return;
     }
     string: v = e.target().value_string();
-    if (v == "path" || v == "photon") then {
+    if (v == "path" || v == "photon" || v == "rt") then {
         call("set_pref", "viewport.trace\t" + v);
     } else then {
         call("set_pref", "viewport.quality\t" + v);

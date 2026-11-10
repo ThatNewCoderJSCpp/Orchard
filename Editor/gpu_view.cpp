@@ -287,6 +287,7 @@ struct GpuView::Meshes {
     std::uint64_t frame = 0;
     std::map<std::pair<const fg::Mesh3D*, std::uint32_t>, fg::Mesh3D> tinted;
     std::unique_ptr<fg::GpuPathTracer> tracer;
+    int trace_samples = 1;
     fg::Renderer* traced_with = nullptr;
     const fizmo::lighting::Scene* traced_scene = nullptr;
     fizmo::lighting::LightingSettings traced_settings;
@@ -741,7 +742,8 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
             for (Entity e : scene.entities()) {
                 const Mat4 world = scene.world_matrix(e);
                 const std::uint64_t base = static_cast<std::uint64_t>(e.id()) << 20;
-                const std::vector<Collider>* cs = scene.alive(viewer) && scene.body_owner(e) == viewer ? nullptr : scene.colliders(e);
+                if (scene.alive(viewer) && scene.body_owner(e) == viewer) continue;
+                const std::vector<Collider>* cs = scene.colliders(e);
                 const Entity shown_by = model_owner(e);
                 const bool as_model = scene.alive(shown_by);
                 const bool hint_parts = !playing && as_model && scene.alive(selected) && (selected == e || selected == shown_by || model_owner(selected) == shown_by);
@@ -836,7 +838,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                     }
                 } else if (scene.emitter(e)) {
                     if (!playing) icons.push_back({point(world, {0, 0, 0}), 2, particle_color, e == selected});
-                } else if (!scene.fluid(e) && !scene.terrain(e)) {
+                } else if (!playing && !scene.fluid(e) && !scene.terrain(e) && scene.children(e).empty()) {
                     items.push_back({Kind::cube, world, plain, base | 0xf});
                 }
             }
@@ -1437,7 +1439,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                     line(c, fg::RenderPoint(c.x + std::cos(a) * 12.0, c.y + std::sin(a) * 12.0), sel ? selected_color : particle_color, 2);
                 }
             }
-        } else if (!scene.fluid(e)) {
+        } else if (!playing && !scene.fluid(e) && (scene.children(e).empty() || scene.camera(e))) {
             const Color col = (scene.camera(e) || named(scene, e, "Camera")) ? camera_color : plain;
             quad(world, with_alpha(col, 50), sel ? selected_color : col, sel ? 2u : 1u);
         }
@@ -1508,6 +1510,8 @@ bool GpuView::prepare_tracer(grove::GpuCanvasFrame& f, fizmo::lighting::Scene& s
             return false;
         }
         m.tracer->set_settings(settings);
+        m.tracer->set_samples_per_frame(m.trace_samples);
+        m.tracer->set_temporal(true, 24);
         m.traced_settings = settings;
     }
     if (!m.tracer->supported()) {
@@ -1517,7 +1521,7 @@ bool GpuView::prepare_tracer(grove::GpuCanvasFrame& f, fizmo::lighting::Scene& s
     const unsigned w = static_cast<unsigned>(std::max(1.0, std::round(f.viewport_width)));
     const unsigned h = static_cast<unsigned>(std::max(1.0, std::round(f.viewport_height)));
     m.tracer->resize(w, h);
-    if (settings.quality != m.traced_settings.quality || settings.transport != m.traced_settings.transport || settings.caustics != m.traced_settings.caustics || settings.max_bounces != m.traced_settings.max_bounces || settings.exposure != m.traced_settings.exposure || settings.tone_mapper != m.traced_settings.tone_mapper || settings.firefly_clamp != m.traced_settings.firefly_clamp) {
+    if (settings.quality != m.traced_settings.quality || settings.transport != m.traced_settings.transport || settings.caustics != m.traced_settings.caustics || settings.max_bounces != m.traced_settings.max_bounces || settings.exposure != m.traced_settings.exposure || settings.tone_mapper != m.traced_settings.tone_mapper || settings.firefly_clamp != m.traced_settings.firefly_clamp || settings.denoise != m.traced_settings.denoise || settings.denoise_passes != m.traced_settings.denoise_passes || settings.russian_roulette_depth != m.traced_settings.russian_roulette_depth) {
         m.tracer->set_settings(settings);
         m.traced_settings = settings;
     }
@@ -1528,6 +1532,11 @@ bool GpuView::prepare_tracer(grove::GpuCanvasFrame& f, fizmo::lighting::Scene& s
     m.tracer->set_camera(camera);
     m.trace_error.clear();
     return true;
+}
+
+void GpuView::set_trace_samples(int samples) {
+    m_meshes->trace_samples = std::clamp(samples, 1, 16);
+    if (m_meshes->tracer) m_meshes->tracer->set_samples_per_frame(m_meshes->trace_samples);
 }
 
 std::uint32_t GpuView::traced_samples() const {

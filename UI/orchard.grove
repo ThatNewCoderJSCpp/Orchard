@@ -51,11 +51,12 @@
                 <button id="view-2d" class="seg">2D</button>
                 <button id="view-3d" class="seg">3D</button>
                 <button id="reset-cam" class="ghost">Reset view</button>
-                <input_select id="render-mode" value="medium" class="add-kind" title="Lighting quality. Low to Ultra run at game speed (Ultra is like Voxelspire's Ultra). Path traced and Photons are slow, exact previews that clear up over time.">
+                <input_select id="render-mode" value="medium" class="add-kind" title="Lighting quality. Low to Ultra run at game speed (Ultra is like Voxelspire's Ultra). Ray traced is real path tracing kept fast and clean with a denoiser, for moving around and playing. Path traced and Photons go further and keep refining while the view is still.">
                     <option value="low">Lighting: Low</option>
                     <option value="medium">Lighting: Medium</option>
                     <option value="high">Lighting: High</option>
                     <option value="ultra">Lighting: Ultra</option>
+                    <option value="rt">Ray traced (GPU, real time)</option>
                     <option value="path">Path traced (GPU)</option>
                     <option value="photon">Photons (GPU)</option>
                 </input_select>
