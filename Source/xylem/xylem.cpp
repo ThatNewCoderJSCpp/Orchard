@@ -533,6 +533,19 @@ struct World::Impl {
     std::vector<std::string> warnings;
     std::map<std::string, std::optional<Trunk>> trunks;
 
+    struct Push {
+        orchard::Vec3 accel;
+        bool local = false;
+    };
+    std::unordered_map<std::uint64_t, Push> pushes;
+
+    struct Walker {
+        Real gravity_scale = 1.0_r;
+        bool grounded = false;
+        Real jump_lock = 0.0_r;
+    };
+    std::unordered_map<std::uint64_t, Walker> walkers;
+
     std::string resolve(const std::string& file) const {
         return orchard::terrain_file_path(asset_root, file);
     }
@@ -729,6 +742,8 @@ struct World::Impl {
             cfg.contact_damping_ratio = std::max(0.0_r, static_cast<Real>(ph.contact_damping));
             cfg.joint_hertz = std::max(0.0_r, static_cast<Real>(ph.joint_hertz));
             cfg.max_push_speed = std::max(0.0_r, static_cast<Real>(ph.push_speed));
+            cfg.reuse_distance = std::min(cfg.reuse_distance, 0.00002_r);
+            cfg.reuse_angle = std::min(cfg.reuse_angle, 0.0001_r);
         }
         if (sim2) {
             sim2->config().dynamic_tree = !ph.octree;
@@ -753,6 +768,8 @@ struct World::Impl {
         scatter_colliders = 0;
         warnings.clear();
         trunks.clear();
+        pushes.clear();
+        walkers.clear();
         if (dimension == orchard::Dimension::two_d) {
             fp::Simulation2D::Config cfg;
             cfg.gravity = RVec2{settings.gravity.x, settings.gravity.y};
@@ -801,7 +818,12 @@ struct World::Impl {
             } else {
                 shape = fp::Shape2D::make_box(sx * 0.5_r, sy * 0.5_r);
             }
-            fp::Material mat(fp::MassSpec::from_density(std::max(0.0001_r, static_cast<Real>(c.density))), c.friction, c.restitution);
+            Real density = std::max(0.0001_r, static_cast<Real>(c.density));
+            if (c.locked(orchard::collider_lock_mass) && c.mass > 0.0f) {
+                const Real area = fp::compute_shape_area(shape);
+                if (area > 0.0_r) density = static_cast<Real>(c.mass) / area;
+            }
+            fp::Material mat(fp::MassSpec::from_density(density), c.friction, c.restitution);
             mat.friction_combine = to_fizmo(c.friction_combine);
             mat.restitution_combine = to_fizmo(c.bounce_combine);
             body.add_collider(shape, mat, fp::Transform2D(RVec2{p.offset.x, p.offset.y}, angle_z(p.rotation)), fp::CollisionFilter{}, c.sensor);
@@ -817,6 +839,7 @@ struct World::Impl {
         bodies2[e.id()] = &body;
         owners[&body] = e;
         place(e);
+        start_motion(e, b);
     }
 
     void add_3d(orchard::Entity e, const orchard::Body& b, const std::vector<Part>& parts) {
@@ -869,7 +892,13 @@ struct World::Impl {
             } else {
                 shape = fp::Shape3D::make_box(sx * 0.5_r, sy * 0.5_r, sz * 0.5_r);
             }
-            fp::Material3D mat(fp::MassSpec3D::from_density(std::max(0.0001_r, static_cast<Real>(c.density)) * 1000.0_r), c.friction, c.restitution);
+            Real density = std::max(0.0001_r, static_cast<Real>(c.density)) * 1000.0_r;
+            if (c.locked(orchard::collider_lock_mass) && c.mass > 0.0f) {
+                Real volume = fp::compute_shape_volume(shape);
+                for (const fp::Shape3D& piece : extra) volume += fp::compute_shape_volume(piece);
+                if (volume > 0.0_r) density = static_cast<Real>(c.mass) / volume;
+            }
+            fp::Material3D mat(fp::MassSpec3D::from_density(density), c.friction, c.restitution);
             mat.friction_combine = to_fizmo(c.friction_combine);
             mat.restitution_combine = to_fizmo(c.bounce_combine);
             mat.rolling_friction = std::max(0.0_r, static_cast<Real>(c.rolling_friction));
@@ -900,6 +929,54 @@ struct World::Impl {
         bodies3[e.id()] = &body;
         owners[&body] = e;
         place(e);
+        start_motion(e, b);
+    }
+
+    void start_motion(orchard::Entity e, const orchard::Body& b) {
+        if (b.type == orchard::BodyType::fixed) return;
+        const orchard::Quat rot = b.motion_local ? world_rotation(*scene, e) : orchard::Quat{};
+        const orchard::Vec3 v = b.motion_local ? orchard::rotate(rot, b.start_velocity) : b.start_velocity;
+        const orchard::Vec3 w = (b.motion_local ? orchard::rotate(rot, b.start_spin) : b.start_spin) * static_cast<float>(deg_to_rad);
+        const auto zero = [](orchard::Vec3 x) { return x.x == 0.0f && x.y == 0.0f && x.z == 0.0f; };
+        if (auto it = bodies2.find(e.id()); it != bodies2.end()) {
+            if (!zero(v)) it->second->set_linear_velocity(RVec2{v.x, v.y});
+            if (w.z != 0.0f) it->second->set_angular_velocity(static_cast<Real>(w.z));
+        }
+        if (auto it = bodies3.find(e.id()); it != bodies3.end()) {
+            if (!zero(v)) it->second->set_linear_velocity(v3(v));
+            if (!zero(w)) it->second->set_angular_velocity(v3(w));
+        }
+        if (!zero(b.acceleration)) pushes[e.id()] = Push{b.acceleration, b.motion_local};
+        else pushes.erase(e.id());
+    }
+
+    void apply_pushes() {
+        const Real dt = static_cast<Real>(settings.fixed_dt);
+        for (auto it = pushes.begin(); it != pushes.end();) {
+            const orchard::Entity e = orchard::Entity::from_id(it->first);
+            const Push& p = it->second;
+            bool found = false;
+            if (auto b2 = bodies2.find(it->first); b2 != bodies2.end()) {
+                found = true;
+                fp::RigidBody2D& body = *b2->second;
+                orchard::Vec3 a = p.accel;
+                if (p.local) a = orchard::rotate(about_z(static_cast<float>(body.angle())), a);
+                body.wake();
+                if (body.inv_mass() > 0.0_r) body.apply_force(RVec2{a.x, a.y} * body.mass());
+                else body.set_linear_velocity(body.linear_velocity() + RVec2{a.x, a.y} * dt);
+            }
+            if (auto b3 = bodies3.find(it->first); b3 != bodies3.end()) {
+                found = true;
+                fp::RigidBody3D& body = *b3->second;
+                orchard::Vec3 a = p.accel;
+                if (p.local) a = orchard::rotate(to_orchard(body.orientation()), a);
+                body.wake();
+                if (body.inv_mass() > 0.0_r) body.apply_force(v3(a) * body.mass());
+                else body.set_linear_velocity(body.linear_velocity() + v3(a) * dt);
+            }
+            if (!found || !scene || !scene->alive(e)) it = pushes.erase(it);
+            else ++it;
+        }
     }
 
     void write_back() {
@@ -1110,12 +1187,72 @@ struct World::Impl {
         }
     }
 
+    static orchard::Vec3 flatten_up(orchard::Vec3 v, orchard::Vec3 up) {
+        return v - up * orchard::dot(v, up);
+    }
+
+    template <class Body>
+    bool settles(const Body& b) const {
+        if (!b.is_awake() || b.inv_mass() <= 0.0_r || !b.has(fp::PhysicsFlags::AllowSleep)) return false;
+        const auto it = owners.find(&b);
+        return it == owners.end() || walkers.count(it->second.id()) == 0;
+    }
+
+    void settle() {
+        const Real rate = static_cast<Real>(settings.physics.settle);
+        if (rate <= 0.0_r || !settings.physics.sleeping) return;
+        const orchard::Vec3 g = settings.gravity;
+        if (orchard::length(g) < 1e-4f) return;
+        const orchard::Vec3 up = orchard::normalize(g * -1.0f);
+        const Real dt = static_cast<Real>(settings.fixed_dt);
+        const Real keep = std::exp(-rate * dt);
+        constexpr Real slow_speed = 0.2_r;
+        constexpr Real slow_spin = 1.0_r;
+        if (sim3) {
+            std::set<fp::RigidBody3D*> resting;
+            for (const fp::ContactManifold3D& mf : sim3->contacts()) {
+                if (mf.point_count <= 0) continue;
+                const float facing = orchard::dot(ov(mf.normal), up);
+                if (facing > 0.5f && mf.body_b) resting.insert(mf.body_b);
+                if (facing < -0.5f && mf.body_a) resting.insert(mf.body_a);
+            }
+            for (fp::RigidBody3D* b : resting) {
+                if (!settles(*b)) continue;
+                const RVec3 v = b->linear_velocity();
+                const RVec3 w = b->angular_velocity();
+                const orchard::Vec3 tumble = flatten_up(ov(w), up);
+                if (std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z) >= slow_speed || orchard::length(tumble) >= static_cast<float>(slow_spin)) continue;
+                b->set_linear_velocity(v * keep);
+                b->set_angular_velocity(w * keep);
+            }
+        }
+        if (sim2) {
+            std::set<fp::RigidBody2D*> resting;
+            for (const fp::ContactManifold& mf : sim2->contacts()) {
+                if (mf.point_count <= 0) continue;
+                const float facing = static_cast<float>(mf.normal.x) * up.x + static_cast<float>(mf.normal.y) * up.y;
+                if (facing > 0.5f && mf.body_b) resting.insert(mf.body_b);
+                if (facing < -0.5f && mf.body_a) resting.insert(mf.body_a);
+            }
+            for (fp::RigidBody2D* b : resting) {
+                if (!settles(*b)) continue;
+                const RVec2 v = b->linear_velocity();
+                const Real w = b->angular_velocity();
+                if (std::sqrt(v.x * v.x + v.y * v.y) >= slow_speed || std::fabs(w) >= slow_spin) continue;
+                b->set_linear_velocity(v * keep);
+                b->set_angular_velocity(w * keep);
+            }
+        }
+    }
+
     void step_once() {
         prune();
+        apply_pushes();
         if (sim2 && fluids2) fluids2->step(*sim2, static_cast<Real>(settings.fixed_dt));
         if (sim2) sim2->step(settings.fixed_dt);
         if (sim3 && fluids) fluids->step(*sim3, static_cast<Real>(settings.fixed_dt));
         if (sim3) sim3->step(settings.fixed_dt);
+        settle();
         refresh_contacts();
     }
 };
@@ -1590,6 +1727,184 @@ void World::set_layers(orchard::Entity e, std::uint64_t layer, std::uint64_t mas
             it->second->wake();
         }
     }
+}
+
+orchard::Entity World::raycast_ignoring(orchard::Entity ignore, orchard::Vec3 origin, orchard::Vec3 direction, float max_distance, orchard::Vec3* point, orchard::Vec3* normal, float* distance) const {
+    auto owner = [this](const void* body) {
+        const auto it = m->owners.find(body);
+        return it == m->owners.end() ? orchard::Entity{} : it->second;
+    };
+    if (m->sim3) {
+        fp::QueryFilter3D filter;
+        if (auto it = m->bodies3.find(ignore.id()); it != m->bodies3.end()) filter.ignore = it->second;
+        const auto hit = m->sim3->raycast(v3(origin), v3(direction), max_distance, filter);
+        if (!hit) return {};
+        if (point) *point = ov(hit->point);
+        if (normal) *normal = ov(hit->normal);
+        if (distance) *distance = static_cast<float>(hit->distance);
+        return owner(hit->body);
+    }
+    if (m->sim2) {
+        fp::QueryFilter2D filter;
+        if (auto it = m->bodies2.find(ignore.id()); it != m->bodies2.end()) filter.ignore = it->second;
+        const auto hit = m->sim2->raycast(RVec2{origin.x, origin.y}, RVec2{direction.x, direction.y}, max_distance, filter);
+        if (!hit) return {};
+        if (point) *point = {static_cast<float>(hit->point.x), static_cast<float>(hit->point.y), 0.0f};
+        if (normal) *normal = {static_cast<float>(hit->normal.x), static_cast<float>(hit->normal.y), 0.0f};
+        if (distance) *distance = static_cast<float>(hit->distance);
+        return owner(hit->body);
+    }
+    return {};
+}
+
+namespace {
+
+orchard::Vec3 approach(orchard::Vec3 from, orchard::Vec3 to, float max_change) {
+    const orchard::Vec3 d = to - from;
+    const float len = orchard::length(d);
+    if (len <= max_change || len <= 1e-6f) return to;
+    return from + d * (max_change / len);
+}
+
+orchard::Vec3 flatten(orchard::Vec3 v, orchard::Vec3 n) {
+    return v - n * orchard::dot(v, n);
+}
+
+} // namespace
+
+CharacterState World::move_character(orchard::Entity e, const CharacterMove& move, float dt) {
+    CharacterState st;
+    if (!has_body(e) || !m->scene) return st;
+    st.body = true;
+    dt = std::clamp(dt, 0.0f, 0.1f);
+    const orchard::Vec3 g = m->settings.gravity;
+    const orchard::Vec3 up = orchard::length(g) > 1e-4f ? orchard::normalize(g * -1.0f) : orchard::normalize(m->settings.up);
+    Impl::Walker& w = m->walkers.try_emplace(e.id()).first->second;
+    if (w.jump_lock == 0.0_r && !w.grounded) {
+        const orchard::Body* b = m->scene->body(e);
+        w.gravity_scale = b ? static_cast<Real>(b->gravity_scale) : 1.0_r;
+    }
+
+    orchard::Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+    bool any = false;
+    auto grow = [&](orchard::Vec3 a, orchard::Vec3 b) {
+        lo = {std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)};
+        hi = {std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z)};
+        any = true;
+    };
+    if (auto it = m->bodies3.find(e.id()); it != m->bodies3.end()) {
+        fp::RigidBody3D& body = *it->second;
+        if (move.upright) {
+            body.set_flag(fp::PhysicsFlags::LockRotationX);
+            body.set_flag(fp::PhysicsFlags::LockRotationY);
+            body.set_flag(fp::PhysicsFlags::LockRotationZ);
+            body.set_angular_velocity(RVec3{0.0_r, 0.0_r, 0.0_r});
+        }
+        for (const fp::Collider3D& c : body.colliders())
+            if (!c.is_sensor) grow(ov(c.world_aabb.min), ov(c.world_aabb.max));
+    } else if (auto it2 = m->bodies2.find(e.id()); it2 != m->bodies2.end()) {
+        fp::RigidBody2D& body = *it2->second;
+        if (move.upright) {
+            body.set_flag(fp::PhysicsFlags::LockRotationZ);
+            body.set_angular_velocity(0.0_r);
+        }
+        for (const fp::Collider2D& c : body.colliders())
+            if (!c.is_sensor) grow({static_cast<float>(c.world_aabb.min.x), static_cast<float>(c.world_aabb.min.y), 0.0f}, {static_cast<float>(c.world_aabb.max.x), static_cast<float>(c.world_aabb.max.y), 0.0f});
+    }
+    if (!any) return st;
+
+    const orchard::Vec3 center = (lo + hi) * 0.5f;
+    float low = 1e30f;
+    for (int i = 0; i < 8; ++i) {
+        const orchard::Vec3 corner{i & 1 ? hi.x : lo.x, i & 2 ? hi.y : lo.y, i & 4 ? hi.z : lo.z};
+        low = std::min(low, orchard::dot(corner, up));
+    }
+    const float feet = orchard::dot(center, up) - low;
+    const orchard::Vec3 ext = hi - lo;
+    orchard::Vec3 side_a = orchard::normalize(orchard::cross(up, std::fabs(up.x) < 0.9f ? orchard::Vec3{1.0f, 0.0f, 0.0f} : orchard::Vec3{0.0f, 0.0f, 1.0f}));
+    orchard::Vec3 side_b = orchard::normalize(orchard::cross(up, side_a));
+    const float width_a = std::fabs(side_a.x) * ext.x + std::fabs(side_a.y) * ext.y + std::fabs(side_a.z) * ext.z;
+    const float width_b = std::fabs(side_b.x) * ext.x + std::fabs(side_b.y) * ext.y + std::fabs(side_b.z) * ext.z;
+    const float radius = 0.3f * std::max(0.0f, m->dimension == orchard::Dimension::two_d ? width_a : std::min(width_a, width_b));
+    std::vector<orchard::Vec3> starts{center};
+    if (radius > 0.001f) {
+        starts.push_back(center + side_a * radius);
+        starts.push_back(center - side_a * radius);
+        if (m->dimension == orchard::Dimension::three_d) {
+            starts.push_back(center + side_b * radius);
+            starts.push_back(center - side_b * radius);
+        }
+    }
+    const float min_up = std::cos(std::clamp(move.max_slope, 0.0f, 89.0f) * static_cast<float>(deg_to_rad));
+    const float reach = feet + std::max(0.01f, move.ground_probe);
+    float best = 1e30f;
+    orchard::Vec3 best_normal = up;
+    orchard::Entity best_hit;
+    for (const orchard::Vec3& from : starts) {
+        orchard::Vec3 n;
+        float d = -1.0f;
+        const orchard::Entity hit = raycast_ignoring(e, from, up * -1.0f, reach, nullptr, &n, &d);
+        if (d >= 0.0f && d < best && orchard::dot(orchard::normalize(n), up) >= min_up) {
+            best = d;
+            best_normal = orchard::normalize(n);
+            best_hit = hit;
+        }
+    }
+    const bool touching_ground = best < 1e29f;
+
+    orchard::Vec3 v = velocity(e);
+    const float vu = orchard::dot(v, up);
+    w.jump_lock = std::max(0.0_r, w.jump_lock - static_cast<Real>(dt));
+    bool grounded = touching_ground && w.jump_lock <= 0.0_r && vu <= std::max(1.0f, move.jump_speed * 0.5f);
+    orchard::Vec3 wish = flatten(move.wish, up);
+    if (m->dimension == orchard::Dimension::two_d) wish.z = 0.0f;
+
+    if (grounded && move.jump) {
+        const orchard::Vec3 h = flatten(v, up);
+        v = approach(h, wish, move.ground_accel * dt) + up * std::max(0.0f, move.jump_speed);
+        w.jump_lock = 0.25_r;
+        grounded = false;
+        st.jumped = true;
+    } else if (grounded) {
+        const orchard::Vec3 n = best_normal;
+        const float speed = orchard::length(wish);
+        orchard::Vec3 along = flatten(wish, n);
+        if (orchard::length(along) > 1e-5f) along = orchard::normalize(along) * speed;
+        const orchard::Vec3 tangent = approach(flatten(v, n), along, move.ground_accel * dt);
+        const float gap = best - feet;
+        const float snap = std::clamp(gap / std::max(dt, 1e-3f), 0.0f, 4.0f) + 0.05f;
+        v = tangent - n * snap;
+    } else {
+        const orchard::Vec3 h = flatten(v, up);
+        v = approach(h, wish, move.air_accel * dt) + up * vu;
+    }
+    if (m->dimension == orchard::Dimension::two_d) v.z = 0.0f;
+    w.grounded = grounded;
+
+    const Real scale = grounded ? 0.0_r : w.gravity_scale;
+    if (auto it = m->bodies3.find(e.id()); it != m->bodies3.end()) {
+        it->second->set_gravity_scale(scale);
+        it->second->wake();
+        it->second->set_linear_velocity(v3(v));
+    } else if (auto it2 = m->bodies2.find(e.id()); it2 != m->bodies2.end()) {
+        it2->second->set_gravity_scale(scale);
+        it2->second->wake();
+        it2->second->set_linear_velocity(RVec2{v.x, v.y});
+    }
+    st.grounded = grounded;
+    st.ground = best_hit;
+    st.ground_normal = touching_ground ? best_normal : orchard::Vec3{};
+    st.velocity = v;
+    return st;
+}
+
+void World::release_character(orchard::Entity e) {
+    auto it = m->walkers.find(e.id());
+    if (it == m->walkers.end()) return;
+    const Real scale = it->second.gravity_scale;
+    if (auto b3 = m->bodies3.find(e.id()); b3 != m->bodies3.end()) b3->second->set_gravity_scale(scale);
+    if (auto b2 = m->bodies2.find(e.id()); b2 != m->bodies2.end()) b2->second->set_gravity_scale(scale);
+    m->walkers.erase(it);
 }
 
 bool World::touching(orchard::Entity a, orchard::Entity b) const {

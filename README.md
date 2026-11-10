@@ -195,13 +195,47 @@ Layers are the first thing checked for every pair the broadphase finds, before a
 
 When two colliders touch, their friction and bounce are mixed into one value. The **Physics** button sets the project's mix for each (`friction-mix:` and `bounce-mix:` in `project.orchard`, geometric mean and maximum by default), and every collider can pick its own in the inspector: average (Unity's and Unreal's default), geometric mean (Box2D), harmonic mean, quadratic mean, minimum, multiply (Bullet), maximum or sum. When two colliders pick different mixes, the one further down that list wins, the same rule Unity, Unreal and PhysX use.
 
+### Mass, density and size
+
+Every collider has a **mass** (kg) as well as a density and a size, and the three stay in step: mass = density × volume. In 3D density is "× water" (1 is water, 1000 kg/m³; 7.8 is steel), in 2D it's kg/m². Lock any of them with the **Lock** buttons in the collider card (or the lock switches in Edit properties) and Orchard changes the others instead when you edit one:
+
+| Locked | You change | What follows |
+|---|---|---|
+| nothing | size | mass |
+| nothing | mass | density |
+| mass | size | density |
+| mass | density | the size, along the directions that aren't locked |
+| density | mass | the size, along the directions that aren't locked |
+| mass and density | one size direction | the other unlocked directions, so the volume stays the same |
+
+Size can be locked in X, Y and Z on its own, so a 2 m pole whose mass you raise can get thicker without getting longer. A locked mass is what the simulation uses even if the entity is scaled later. In a scene file a collider line ends with `locks:N` (1 mass, 2 density, 4 / 8 / 16 size X / Y / Z) and `mass:KG` when the mass is locked, and a collider can have a `name:` (Pool's walls are "Floor", "Wall +X" and so on). C++: `orchard::collider_mass`, `orchard::collider_volume` and `orchard::edit_collider_mass(collider, orchard::MassEdit::mass, 80.0f, scale, dimension)`.
+
+### Start motion
+
+A dynamic or kinematic body can start moving on its own: **Starting velocity** (m/s), **Starting spin** (degrees per second around X, Y and Z) and a **Constant acceleration** (m/s², a push every moment like extra gravity: a rocket, a conveyor, wind). Tick **Relative to its own rotation** for them to point along the body's own axes, so a bullet fired from a turned barrel flies the way it faces and a rocket's push turns with it. They're in the inspector under **Start motion**, and apply when Play starts or when a script spawns the body. In a scene file: `v0:x,y,z`, `spin0:x,y,z`, `accel:x,y,z` and `motion:local` on the body line.
+
+### Settling
+
+Colliders roll and spin with a little friction by default (`roll` and `spin` 0.005), so a ball rolled across the floor slows to a stop instead of creeping on. Bodies resting on something that are moving slower than 0.2 m/s are also slowed a bit more each step, so they come to rest and fall asleep instead of wobbling or crawling in small circles; `settle:` in the `physics` block sets how strongly (per second, 2 by default, 0 turns it off), and it's **Help slow things settle** in the Physics dialog. Bodies that can't sleep, and physical players, aren't touched by it.
+
 A **sphere section** collider is a hemisphere, dome, wedge, bowl or shell: set the angles from the top (`polar` 0 to 180, so 0 to 90 is the top half) and around (`azimuth` 0 to 360), and a `shell` thickness to hollow it out. Convex pieces are one collider; a bowl or shell becomes a few convex parts. **Add a hemisphere** in the right-click menu makes one.
 
 ### Game camera
 
 When you press Play, the view looks through the scene's game camera: the active entity with a **Camera** component (highest `priority` wins), or else the first entity named "Camera". Moving or turning that entity, from a script or from physics, moves what you see; Stop puts the editor view back. A camera looks along -Z with +Y up (in your project's axes) at rotation 0. The component has `fov`, near and far clip, and for 2D `view_height` (how many metres tall the view is). Right-click → **Add a camera (from this view)** makes one where the editor view is, and the inspector's **Move it to where the view is now** lines up an existing one. New 3D projects come with `Scripts/fly_camera.wal`: put it on the camera for W A S D to move, Q / E (or Space) down and up, the arrow keys to turn and Shift to go faster. `key_down` names aren't case-sensitive and accept `up`/`down`/`left`/`right` and `shift`/`ctrl`/`alt`.
 
-For no script at all, use a **player camera**: right-click → **Add a player camera (walk with W A S D)**, or tick **Player view** on any camera. Play looks through the one player camera (ticking it unticks the others). Its **Built-in controls** are `walk` (W A S D, the mouse or arrow keys to look, Space to jump, it stops at walls and stands `eye` metres above the ground), `fly` (no gravity, Q / E down and up) or `none` (your script moves it). `speed`, `look` (mouse sensitivity), `eye` and `mouse` (drag to look) are in the inspector.
+For no script at all, use a **player camera**: right-click → **Add a player camera (walk with W A S D)**, or tick **Player view** on any camera. Play looks through the one player camera (ticking it unticks the others). Its **Built-in controls** are `walk` (W A S D, the mouse or arrow keys to look, Space to jump, it stops at walls and stands `eye` metres above the ground), `fly` (no gravity, Q / E down and up) or `none` (your script moves it). `speed`, `look` (mouse sensitivity), `eye`, `jump` (jump speed) and `mouse` (drag to look) are in the inspector.
+
+### Physical player
+
+A walking player camera on its own is a ghost with feet: it stops at walls and stands on the ground, but nothing can push it and it can't push anything. To make it a real body, give the camera (or a parent of the camera) a **dynamic rigid body** and a collider. Right-click → **Add a physical player** sets that up for you:
+
+- **Player**: a dynamic body that can't tip over (rotation locked on X, Y and Z), never sleeps, has fast-move checks on, and a 1.8 m capsule collider with no friction (so it slides along walls instead of sticking to them) and a locked mass of 75 kg.
+- **Camera**: a child of Player at eye height, with Walk controls.
+
+With a body under it, Walk drives the body instead of moving the camera: W A S D sets the body's velocity (with quick acceleration on the ground and less in the air), Space jumps when it's standing on something that isn't too steep, and gravity, collisions, pushes and moving things all act on it. It turns off gravity while it stands on a slope so it doesn't slide, and only the camera turns when you look around, never the capsule. The body can also be the camera itself: tick **Rigid body** on the player camera and add a capsule with its offset half a body-height down (e.g. size `0.6, 1.8, 0.6`, offset `0, -0.8, 0` for a 1.7 m eye height), and lock its rotation.
+
+C++ games use the same controller: `world.move_character(entity, xylem::CharacterMove{wish_velocity, jump})` once a frame returns whether it's grounded, what it's standing on and the ground's normal (`jump_speed`, `ground_accel`, `air_accel`, `max_slope`, `ground_probe` and `upright` are in `CharacterMove`). `world.raycast_ignoring(entity, ...)` casts a ray that skips that entity's own body.
 
 ### Characters
 
@@ -372,7 +406,7 @@ lighting {
 
 ## The editor
 
-The **outliner** on the left lists everything in the scene. By default it's split into sections: Rigid Bodies, Containers (walls, floors and anything with a body that never moves, or colliders with no body), Triggers, Lights, Cameras, Scripted, Groups and Empty. You can switch it to the parent/child hierarchy or one A to Z list, filter it by name, kind or tag, fold sections away, sort by name, show empty sections, and move it to the right with the ⇄ button. Its settings are saved per project in `.orchard/editor.prefs`.
+The **outliner** on the left lists everything in the scene. By default it's split into sections: Rigid Bodies, Containers (walls, floors and anything with a body that never moves, or colliders with no body), Triggers, Lights, Cameras, Scripted, Groups and Empty. Only top-level things go in the sections; anything with children or several parts has a ▸ to unfold it, so a detailed character is one row under Rigid Bodies that opens to its head, torso, limbs, organs and bones, and a Pool opens to its water and its five wall colliders. Selecting something inside a folded row unfolds its parents. **Scene tree** shows everything under one THIS SCENE folder in parent/child order, and **A to Z** is one flat list. Typing in the filter searches inside folded rows too and shows what each match is in. You can fold sections away, expand or collapse everything, sort by name, show empty sections, and move it to the right with the ⇄ button. Its settings are saved per project in `.orchard/editor.prefs`.
 
 - **Left click** something (in the outliner or the viewport) to select it and see its details under the outliner: angles in degrees, world position, scale, mass, speed and spin while playing, its light (with a color swatch, intensity, cone, effect), its material, whether it gives off light, and whether its top is in shadow, which lights reach it and how much light lands there.
 - **Right click** it for a menu: edit properties, rename, look at it, make it a rigid body or a container, add a collider, make it give off light, make it strobe, give it a material, add a child, delete. Right-clicking empty space adds things.

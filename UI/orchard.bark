@@ -1005,3 +1005,56 @@ button.axes-flip {
 .sculpt-bar input_float {
     width: 64px;
 }
+
+.lock-head {
+    gap: 4px;
+    align-items: center;
+    margin: 6px 0 0 0;
+}
+
+.lock-head > .sub-title {
+    margin: 0;
+}
+
+.lock-label {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+button.seg.lock {
+    padding: 1px 7px;
+    font-size: 11px;
+}
+
+.vec-row {
+    gap: 2px;
+}
+
+.node-fold {
+    width: 12px;
+    color: var(--muted);
+    font-size: 11px;
+    user-select: none;
+}
+
+.node-fold.twist:hover {
+    color: var(--text);
+}
+
+.node-count {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.node.part {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.node.part .node-icon {
+    color: #8a9284;
+}
+
+.node.part-fluid .node-icon {
+    color: #6fb6e8;
+}

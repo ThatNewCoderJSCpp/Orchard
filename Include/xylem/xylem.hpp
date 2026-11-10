@@ -110,6 +110,26 @@ struct Settings {
     }
 };
 
+struct CharacterMove {
+    orchard::Vec3 wish;
+    bool jump = false;
+    float jump_speed = 5.0f;
+    float ground_accel = 60.0f;
+    float air_accel = 12.0f;
+    float max_slope = 50.0f;
+    float ground_probe = 0.2f;
+    bool upright = true;
+};
+
+struct CharacterState {
+    bool body = false;
+    bool grounded = false;
+    bool jumped = false;
+    orchard::Entity ground;
+    orchard::Vec3 ground_normal;
+    orchard::Vec3 velocity;
+};
+
 using TerrainSource = std::function<std::shared_ptr<const orchard::TerrainHeights>(orchard::Entity entity, const orchard::Terrain& terrain)>;
 
 struct ModelGeometry {
@@ -164,6 +184,9 @@ public:
     void added(orchard::Entity e) override;
     bool touching(orchard::Entity a, orchard::Entity b) const override;
     orchard::Entity raycast(orchard::Vec3 origin, orchard::Vec3 direction, float max_distance, orchard::Vec3* point, orchard::Vec3* normal, float* distance) const override;
+    orchard::Entity raycast_ignoring(orchard::Entity ignore, orchard::Vec3 origin, orchard::Vec3 direction, float max_distance, orchard::Vec3* point = nullptr, orchard::Vec3* normal = nullptr, float* distance = nullptr) const;
+    CharacterState move_character(orchard::Entity e, const CharacterMove& move, float dt);
+    void release_character(orchard::Entity e);
     std::vector<orchard::Entity> overlap_sphere(orchard::Vec3 center, float radius) const override;
     void set_layers(orchard::Entity e, std::uint64_t layer, std::uint64_t mask) override;
 

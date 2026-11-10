@@ -151,9 +151,22 @@ struct Body {
     float sleep_delay = 0.5f;
     std::uint64_t flags_on = 0;
     std::uint64_t flags_off = 0;
+    Vec3 start_velocity;
+    Vec3 start_spin;
+    Vec3 acceleration;
+    bool motion_local = false;
 
     bool has(BodyFlag f) const { return (flags & f) != 0; }
     void set(BodyFlag f, bool on) { flags = on ? (flags | f) : (flags & ~static_cast<std::uint32_t>(f)); }
+};
+
+enum ColliderLock : std::uint32_t {
+    collider_lock_mass = 1u << 0,
+    collider_lock_density = 1u << 1,
+    collider_lock_size_x = 1u << 2,
+    collider_lock_size_y = 1u << 3,
+    collider_lock_size_z = 1u << 4,
+    collider_lock_size = collider_lock_size_x | collider_lock_size_y | collider_lock_size_z
 };
 
 struct Collider {
@@ -168,8 +181,8 @@ struct Collider {
     CombineMode friction_combine = CombineMode::project_default;
     CombineMode bounce_combine = CombineMode::project_default;
     float rounding = 0.1f;
-    float rolling_friction = 0.0f;
-    float spinning_friction = 0.0f;
+    float rolling_friction = 0.005f;
+    float spinning_friction = 0.005f;
     Vec3 grip{1.0f, 1.0f, 1.0f};
     float polar_min = 0.0f;
     float polar_max = 90.0f;
@@ -177,7 +190,21 @@ struct Collider {
     float azimuth_max = 360.0f;
     float shell = 0.0f;
     std::string source;
+    std::string name;
+    float mass = 0.0f;
+    std::uint32_t locks = 0;
+
+    bool locked(ColliderLock l) const { return (locks & l) != 0; }
+    void lock(ColliderLock l, bool on) { locks = on ? (locks | l) : (locks & ~static_cast<std::uint32_t>(l)); }
 };
+
+float collider_volume(const Collider& c, Vec3 scale = Vec3{1.0f, 1.0f, 1.0f}, Dimension dimension = Dimension::three_d);
+float collider_density_unit(Dimension dimension);
+float collider_mass(const Collider& c, Vec3 scale = Vec3{1.0f, 1.0f, 1.0f}, Dimension dimension = Dimension::three_d);
+
+enum class MassEdit { mass, density, size_x, size_y, size_z };
+
+bool edit_collider_mass(Collider& c, MassEdit what, float value, Vec3 scale, Dimension dimension, std::string* why = nullptr);
 
 enum class LightType {
     point,
@@ -487,6 +514,7 @@ struct Camera {
     float move_speed = 5.0f;
     float look_speed = 0.25f;
     float eye_height = 1.7f;
+    float jump_speed = 5.0f;
     bool mouse_look = true;
     bool active = true;
     int priority = 0;

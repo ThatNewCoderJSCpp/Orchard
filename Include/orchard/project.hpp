@@ -51,6 +51,7 @@ struct PhysicsSettings {
     float contact_damping = 10.0f;
     float joint_hertz = 60.0f;
     float push_speed = 3.0f;
+    float settle = 2.0f;
     FluidLevel fluid_level = FluidLevel::waves;
     int fluid_quality = 1;
     int particle_budget = 60000;

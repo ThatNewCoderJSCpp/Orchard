@@ -287,7 +287,7 @@ bool PhysicsSettings::operator==(const PhysicsSettings& o) const {
         && slop == o.slop && correction == o.correction && world_size == o.world_size
         && soft_solver == o.soft_solver && octree == o.octree && threads == o.threads && wide_solver == o.wide_solver && deterministic == o.deterministic
         && reuse_contacts == o.reuse_contacts && spin_aware_ccd == o.spin_aware_ccd && soft_substeps == o.soft_substeps && contact_hertz == o.contact_hertz
-        && contact_damping == o.contact_damping && joint_hertz == o.joint_hertz && push_speed == o.push_speed
+        && contact_damping == o.contact_damping && joint_hertz == o.joint_hertz && push_speed == o.push_speed && settle == o.settle
         && fluid_level == o.fluid_level && fluid_quality == o.fluid_quality && particle_budget == o.particle_budget && particle_quality == o.particle_quality;
 }
 
@@ -420,6 +420,7 @@ std::string Project::write_info(const ProjectInfo& info) {
     num("contact-damping", ph.contact_damping, base.contact_damping, all);
     num("joint-hertz", ph.joint_hertz, base.joint_hertz, all);
     num("push-speed", ph.push_speed, base.push_speed, all);
+    num("settle", ph.settle, base.settle, all);
     if (ph.fluid_level != base.fluid_level || all) out += "    fluids: " + std::string(to_string(ph.fluid_level)) + ";\n";
     num("fluid-quality", ph.fluid_quality, base.fluid_quality, all);
     num("particle-budget", ph.particle_budget, base.particle_budget, all);
@@ -524,6 +525,8 @@ std::optional<ProjectInfo> Project::read_info(const std::string& text, std::stri
                 ph.joint_hertz = std::max(0.0f, static_cast<float>(std::atof(value.c_str())));
             } else if (key == "push-speed") {
                 ph.push_speed = std::max(0.0f, static_cast<float>(std::atof(value.c_str())));
+            } else if (key == "settle") {
+                ph.settle = std::clamp(static_cast<float>(std::atof(value.c_str())), 0.0f, 50.0f);
             } else if (key == "fluids") {
                 const std::optional<FluidLevel> lv = parse_fluid_level(value);
                 if (!lv || *lv == FluidLevel::project_default) return fail("fluids must be blocky, still, flowing, waves or realistic");

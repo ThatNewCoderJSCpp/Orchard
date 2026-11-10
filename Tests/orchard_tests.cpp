@@ -985,6 +985,7 @@ void test_humanoids_cameras_and_reflections() {
     c.control = orchard::CameraControl::walk;
     c.move_speed = 7.5f;
     c.eye_height = 1.6f;
+    c.jump_speed = 7.0f;
     c.mouse_look = false;
     const orchard::Entity pool = s.create("Pool");
     orchard::Fluid& f = s.add_fluid(pool);
@@ -1002,7 +1003,7 @@ void test_humanoids_cameras_and_reflections() {
     check(back.has_value(), "camera/reflection scene loads");
     if (!back) return;
     const orchard::Camera* bc = back->camera(back->find("Player camera"));
-    check(bc && bc->active && bc->control == orchard::CameraControl::walk && near(bc->move_speed, 7.5f) && near(bc->eye_height, 1.6f) && !bc->mouse_look, "player camera round trip");
+    check(bc && bc->active && bc->control == orchard::CameraControl::walk && near(bc->move_speed, 7.5f) && near(bc->eye_height, 1.6f) && near(bc->jump_speed, 7.0f) && !bc->mouse_look, "player camera round trip");
     check(back->active_camera() == back->find("Player camera"), "player camera is the one Play uses");
     const orchard::Fluid* bf = back->fluid(back->find("Pool"));
     check(bf && near(bf->reflectivity, 0.6f) && bf->reflections == orchard::ReflectionMode::realistic, "fluid reflections round trip");

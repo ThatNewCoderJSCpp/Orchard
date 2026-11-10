@@ -100,6 +100,178 @@ bool collider_shape_3d_only(ColliderShape shape) {
     return shape == ColliderShape::cylinder || shape == ColliderShape::cone || shape == ColliderShape::sphere_section || shape == ColliderShape::convex_hull || shape == ColliderShape::mesh;
 }
 
+float collider_volume(const Collider& c, Vec3 scale, Dimension dimension) {
+    constexpr float pi = 3.14159265358979f;
+    const float x = std::max(0.001f, c.size.x * std::fabs(scale.x));
+    const float y = std::max(0.001f, c.size.y * std::fabs(scale.y));
+    const float z = std::max(0.001f, c.size.z * std::fabs(scale.z));
+    if (dimension == Dimension::two_d) {
+        if (c.shape == ColliderShape::sphere) {
+            const float r = std::max(x, y) * 0.5f;
+            return pi * r * r;
+        }
+        if (c.shape == ColliderShape::capsule) {
+            const float r = x * 0.5f;
+            const float h = std::max(0.0f, y - 2.0f * r);
+            return 2.0f * r * h + pi * r * r;
+        }
+        return x * y;
+    }
+    switch (c.shape) {
+    case ColliderShape::sphere: {
+        const float d = std::max({x, y, z});
+        return pi * d * d * d / 6.0f;
+    }
+    case ColliderShape::capsule: {
+        const float r = std::max(x, z) * 0.5f;
+        const float h = std::max(0.0f, y - 2.0f * r);
+        return pi * r * r * h + 4.0f / 3.0f * pi * r * r * r;
+    }
+    case ColliderShape::cylinder:
+    case ColliderShape::cone: {
+        const float r = std::max(x, z) * 0.5f;
+        return pi * r * r * y * (c.shape == ColliderShape::cone ? 1.0f / 3.0f : 1.0f);
+    }
+    case ColliderShape::rounded_box: {
+        const float r = std::clamp(c.rounding, 0.0f, 0.5f * std::min({x, y, z}));
+        const float cx = x - 2.0f * r, cy = y - 2.0f * r, cz = z - 2.0f * r;
+        return cx * cy * cz + 2.0f * r * (cx * cy + cy * cz + cz * cx) + pi * r * r * (cx + cy + cz) + 4.0f / 3.0f * pi * r * r * r;
+    }
+    case ColliderShape::sphere_section: {
+        const float outer = std::max({x, y, z}) * 0.5f;
+        const float inner = c.shell > 0.0f ? std::max(0.0f, outer - c.shell) : 0.0f;
+        const float p0 = std::clamp(c.polar_min, 0.0f, 180.0f) * pi / 180.0f;
+        const float p1 = std::clamp(c.polar_max, c.polar_min, 180.0f) * pi / 180.0f;
+        const float around = std::clamp(c.azimuth_max - c.azimuth_min, 0.0f, 360.0f) / 360.0f;
+        return 2.0f * pi / 3.0f * (outer * outer * outer - inner * inner * inner) * (std::cos(p0) - std::cos(p1)) * around;
+    }
+    case ColliderShape::box:
+    case ColliderShape::convex_hull:
+    case ColliderShape::mesh: break;
+    }
+    return x * y * z;
+}
+
+float collider_density_unit(Dimension dimension) {
+    return dimension == Dimension::two_d ? 1.0f : 1000.0f;
+}
+
+float collider_mass(const Collider& c, Vec3 scale, Dimension dimension) {
+    if (c.locked(collider_lock_mass) && c.mass > 0.0f) return c.mass;
+    return c.density * collider_density_unit(dimension) * collider_volume(c, scale, dimension);
+}
+
+namespace {
+
+float& size_axis(Collider& c, int axis) {
+    return axis == 0 ? c.size.x : axis == 1 ? c.size.y : c.size.z;
+}
+
+ColliderLock size_lock(int axis) {
+    return axis == 0 ? collider_lock_size_x : axis == 1 ? collider_lock_size_y : collider_lock_size_z;
+}
+
+bool fit_volume(Collider& c, float target, Vec3 scale, Dimension dimension, int keep_axis, std::string* why) {
+    const int axes = dimension == Dimension::two_d ? 2 : 3;
+    std::vector<int> free;
+    for (int a = 0; a < axes; ++a)
+        if (a != keep_axis && !c.locked(size_lock(a))) free.push_back(a);
+    if (free.empty()) {
+        if (why) *why = "every size direction it could change is locked; unlock one (or unlock mass or density)";
+        return false;
+    }
+    if (!(target > 0.0f) || !std::isfinite(target)) {
+        if (why) *why = "that would need a size of zero";
+        return false;
+    }
+    const Vec3 base = c.size;
+    auto volume_at = [&](float k) {
+        Collider t = c;
+        t.size = base;
+        for (int a : free) size_axis(t, a) = std::max(0.001f, size_axis(t, a) * k);
+        return collider_volume(t, scale, dimension);
+    };
+    float lo = 1e-3f, hi = 1e3f;
+    if (volume_at(hi) < target || volume_at(lo) > target) {
+        if (why) *why = "the size directions that aren't locked can't reach that (for a sphere, the largest direction sets the size)";
+        return false;
+    }
+    for (int i = 0; i < 80; ++i) {
+        const float mid = std::sqrt(lo * hi);
+        if (volume_at(mid) < target) lo = mid;
+        else hi = mid;
+    }
+    const float k = std::sqrt(lo * hi);
+    if (std::fabs(volume_at(k) - target) > target * 0.01f) {
+        if (why) *why = "the size directions that aren't locked can't reach that (for a sphere, the largest direction sets the size)";
+        return false;
+    }
+    for (int a : free) size_axis(c, a) = std::max(0.001f, size_axis(c, a) * k);
+    return true;
+}
+
+} // namespace
+
+bool edit_collider_mass(Collider& c, MassEdit what, float value, Vec3 scale, Dimension dimension, std::string* why) {
+    if (!std::isfinite(value)) {
+        if (why) *why = "that isn't a number";
+        return false;
+    }
+    const float unit = collider_density_unit(dimension);
+    const bool keep_mass = c.locked(collider_lock_mass);
+    const bool keep_density = c.locked(collider_lock_density);
+    if (keep_mass && !(c.mass > 0.0f)) c.mass = c.density * unit * collider_volume(c, scale, dimension);
+    Collider next = c;
+    if (what == MassEdit::mass) {
+        if (!(value > 0.0f)) {
+            if (why) *why = "mass has to be more than 0";
+            return false;
+        }
+        if (keep_density) {
+            if (!fit_volume(next, value / (next.density * unit), scale, dimension, -1, why)) return false;
+        } else {
+            next.density = std::max(1e-7f, value / (unit * collider_volume(next, scale, dimension)));
+        }
+        next.mass = value;
+    } else if (what == MassEdit::density) {
+        if (!(value > 0.0f)) {
+            if (why) *why = "density has to be more than 0";
+            return false;
+        }
+        if (keep_mass) {
+            if (!fit_volume(next, next.mass / (value * unit), scale, dimension, -1, why)) return false;
+        } else {
+            next.mass = value * unit * collider_volume(next, scale, dimension);
+        }
+        next.density = value;
+    } else {
+        const int axis = what == MassEdit::size_x ? 0 : what == MassEdit::size_y ? 1 : 2;
+        if (next.locked(size_lock(axis))) {
+            if (why) *why = std::string("size ") + "XYZ"[axis] + " is locked";
+            return false;
+        }
+        if (!(value > 0.0f)) {
+            if (why) *why = "size has to be more than 0";
+            return false;
+        }
+        const float before = collider_volume(next, scale, dimension);
+        size_axis(next, axis) = std::max(0.001f, value);
+        if (keep_mass && keep_density) {
+            if (!fit_volume(next, before, scale, dimension, axis, why)) {
+                if (why) *why = "mass and density are both locked, so the volume can't change, and " + *why;
+                return false;
+            }
+        } else if (keep_mass) {
+            next.density = std::max(1e-7f, next.mass / (unit * collider_volume(next, scale, dimension)));
+        } else {
+            next.mass = next.density * unit * collider_volume(next, scale, dimension);
+        }
+    }
+    if (!keep_mass) next.mass = next.density * unit * collider_volume(next, scale, dimension);
+    c = next;
+    return true;
+}
+
 const char* to_string(BodyQuality q) {
     switch (q) {
     case BodyQuality::project_default: return "default";
@@ -1459,7 +1631,7 @@ Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent, const std::s
         Collider& c = *scene.add_collider(e, shape);
         c.size = Vec3{size.x * k, size.y * k, depth(size.z) * (flat ? 1.0f : k)};
         c.sensor = sensor;
-        c.density = density;
+        c.density = sensor ? density : density / collider_density_unit(scene.dimension());
         c.friction = 0.6f;
         return e;
     };
@@ -1479,7 +1651,7 @@ Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent, const std::s
         Collider* c = scene.add_collider(root, ColliderShape::capsule);
         c->size = Vec3{0.6f * k, h, depth(0.6f * k)};
         c->offset = Vec3{0.0f, h * 0.5f, 0.0f};
-        c->density = 985.0f;
+        c->density = 985.0f / collider_density_unit(scene.dimension());
         c->friction = 0.6f;
         return root;
     }
@@ -2309,6 +2481,13 @@ std::string Scene::save() const {
             if (b.sleep_delay != base.sleep_delay) out << " sleep-delay:" << number(b.sleep_delay);
             if (b.flags_on) out << " on:" << b.flags_on;
             if (b.flags_off) out << " off:" << b.flags_off;
+            auto vec = [&out](const char* key, Vec3 v) {
+                if (v.x != 0.0f || v.y != 0.0f || v.z != 0.0f) out << " " << key << ":" << number(v.x) << "," << number(v.y) << "," << number(v.z);
+            };
+            vec("v0", b.start_velocity);
+            vec("spin0", b.start_spin);
+            vec("accel", b.acceleration);
+            if (b.motion_local) out << " motion:local";
             out << "\n";
         }
         for (const Collider& c : s.colliders) {
@@ -2327,6 +2506,9 @@ std::string Scene::save() const {
             if (c.shape == ColliderShape::sphere_section) out << " arc:" << number(c.polar_min) << "," << number(c.polar_max) << "," << number(c.azimuth_min) << "," << number(c.azimuth_max);
             if (c.shell != base.shell) out << " shell:" << number(c.shell);
             if (!c.source.empty()) out << " source:" << escape_token(c.source);
+            if (!c.name.empty()) out << " name:" << escape_token(c.name);
+            if (c.locks != 0) out << " locks:" << c.locks;
+            if (c.locked(collider_lock_mass) && c.mass > 0.0f) out << " mass:" << number(c.mass);
             out << "\n";
         }
         if (s.light) out << light_line(n, *s.light);
@@ -2346,6 +2528,7 @@ std::string Scene::save() const {
             if (s.camera->move_speed != d.move_speed) out << " speed:" << number(s.camera->move_speed);
             if (s.camera->look_speed != d.look_speed) out << " look:" << number(s.camera->look_speed);
             if (s.camera->eye_height != d.eye_height) out << " eye:" << number(s.camera->eye_height);
+            if (s.camera->jump_speed != d.jump_speed) out << " jump:" << number(s.camera->jump_speed);
             if (s.camera->mouse_look != d.mouse_look) out << " mouse:" << (s.camera->mouse_look ? 1 : 0);
             out << "\n";
         }
@@ -2487,6 +2670,7 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     } else if (key == "speed") c.move_speed = std::max(0.0f, x);
                     else if (key == "look") c.look_speed = std::max(0.0f, x);
                     else if (key == "eye") c.eye_height = std::max(0.0f, x);
+                    else if (key == "jump") c.jump_speed = std::max(0.0f, x);
                     else if (key == "mouse") c.mouse_look = v != "0";
                 }
                 continue;
@@ -2550,6 +2734,13 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     else if (key == "sleep-delay") b.sleep_delay = std::max(0.0f, fv);
                     else if (key == "on") b.flags_on = std::strtoull(val.c_str(), nullptr, 10);
                     else if (key == "off") b.flags_off = std::strtoull(val.c_str(), nullptr, 10);
+                    else if (key == "v0" || key == "spin0" || key == "accel") {
+                        float g[3] = {0.0f, 0.0f, 0.0f};
+                        std::sscanf(val.c_str(), "%f,%f,%f", &g[0], &g[1], &g[2]);
+                        const Vec3 v{std::isfinite(g[0]) ? g[0] : 0.0f, std::isfinite(g[1]) ? g[1] : 0.0f, std::isfinite(g[2]) ? g[2] : 0.0f};
+                        (key == "v0" ? b.start_velocity : key == "spin0" ? b.start_spin : b.acceleration) = v;
+                    }
+                    else if (key == "motion") b.motion_local = val == "local";
                 }
                 scene.add_body(owner->second) = b;
             } else {
@@ -2572,6 +2763,19 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     const std::string val = extra.substr(colon + 1);
                     if (key == "source") {
                         c.source = unescape_token(val);
+                        continue;
+                    }
+                    if (key == "name") {
+                        c.name = unescape_token(val);
+                        continue;
+                    }
+                    if (key == "locks") {
+                        c.locks = static_cast<std::uint32_t>(std::strtoul(val.c_str(), nullptr, 10)) & 31u;
+                        continue;
+                    }
+                    if (key == "mass") {
+                        const float m = static_cast<float>(std::atof(val.c_str()));
+                        c.mass = std::isfinite(m) ? std::max(0.0f, m) : 0.0f;
                         continue;
                     }
                     if (key == "arc") {

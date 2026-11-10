@@ -732,10 +732,16 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                         if (md->visible && !md->source.empty()) return at;
                 return Entity{};
             };
+            Entity viewer;
+            if (playing) {
+                const Entity cam = scene.active_camera();
+                const Camera* cc = scene.camera(cam);
+                if (cc && cc->control != CameraControl::none) viewer = scene.body_owner(cam);
+            }
             for (Entity e : scene.entities()) {
                 const Mat4 world = scene.world_matrix(e);
                 const std::uint64_t base = static_cast<std::uint64_t>(e.id()) << 20;
-                const std::vector<Collider>* cs = scene.colliders(e);
+                const std::vector<Collider>* cs = scene.alive(viewer) && scene.body_owner(e) == viewer ? nullptr : scene.colliders(e);
                 const Entity shown_by = model_owner(e);
                 const bool as_model = scene.alive(shown_by);
                 const bool hint_parts = !playing && as_model && scene.alive(selected) && (selected == e || selected == shown_by || model_owner(selected) == shown_by);

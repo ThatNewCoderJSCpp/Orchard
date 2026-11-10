@@ -37,6 +37,7 @@ function refresh() -> void;
 function build_tree() -> void;
 function build_outliner() -> void;
 function outliner_row(const string&: line) -> grove::Element;
+function part_row(const string&: line) -> grove::Element;
 function section_row(const string&: line) -> grove::Element;
 function fill_details() -> void;
 function open_inspect(const string&: id, bool: rename) -> void;
@@ -73,6 +74,8 @@ function poll_logs() -> void;
 function float_input(const string&: value, const string&: step, const string&: field) -> grove::Element;
 function switch_row(const string&: label, bool: on, const string&: field) -> grove::Element;
 function collider_card(const string&: line) -> grove::Element;
+function lock_button(const string&: label, const string&: tip, bool: on, const string&: field) -> grove::Element;
+function vec_row(const string&: field, const string&: label, const string&: x, const string&: y, const string&: z, const string&: step) -> grove::Element;
 function fill_script_choices(const string&: current) -> void;
 function mix_row(const string&: label, const string&: value, const string&: project_label, const string&: field) -> grove::Element;
 function fill_mix_select(grove::Element&: pick, bool: with_default, const string&: project_label) -> void;
@@ -364,11 +367,39 @@ function outliner_row(const string&: line) -> grove::Element {
     long int: depth = std::io::parse_int<long int>(f[2]);
     grove::Element: row = el("row", "node", "");
     row.add_class("cat-" + f[6]);
-    row.set_style("padding", "4px 8px 4px " + (8l + depth * 16l).to_string() + "px");
+    row.set_style("padding", "4px 8px 4px " + (4l + depth * 14l).to_string() + "px");
+    string: fold = "";
+    if (f.size() > 8l) then {
+        fold = f[7];
+    }
+    if (fold.empty()) then {
+        row.append_child(el("text", "node-fold", ""));
+    } else then {
+        string: arrow = "\u25B8";
+        if (fold == "open") then {
+            arrow = "\u25BE";
+        }
+        grove::Element: twist = el("text", "node-fold twist", arrow);
+        twist.set_attribute("title", "Show or hide what's inside (" + f[8] + ")");
+        twist.on("mouse_down", [id](grove::Event&: e) -> void {
+            e.prevent_default();
+            e.stop_propagation();
+            auto: r = call("toggle_fold", id).split("\t");
+            if (r.size() > 1l && r[0] == "closed" && !r[1].empty() && r[1] != selected) then {
+                select(r[1]);
+            } else then {
+                build_outliner();
+            }
+        });
+        row.append_child(twist);
+    }
     row.append_child(el("text", "node-icon", f[4]));
     row.append_child(el("text", "node-name", f[3]));
     if (!f[5].empty()) then {
         row.append_child(el("text", "tag", f[5]));
+    }
+    if (fold == "closed") then {
+        row.append_child(el("text", "node-count", f[8]));
     }
     row.set_attribute("entity", id);
     if (id == selected) then {
@@ -390,6 +421,38 @@ function outliner_row(const string&: line) -> grove::Element {
     return row;
 } end function outliner_row
 
+function part_row(const string&: line) -> grove::Element {
+    auto: f = line.split("\t");
+    string: id = f[1];
+    long int: depth = std::io::parse_int<long int>(f[2]);
+    grove::Element: row = el("row", "node part", "");
+    row.add_class("part-" + f[6]);
+    row.set_style("padding", "3px 8px 3px " + (4l + depth * 14l).to_string() + "px");
+    row.append_child(el("text", "node-fold", ""));
+    row.append_child(el("text", "node-icon", f[4]));
+    row.append_child(el("text", "node-name", f[3]));
+    if (!f[5].empty()) then {
+        row.append_child(el("text", "tag", f[5]));
+    }
+    row.set_attribute("entity", id);
+    row.on("click", [id](grove::Event&: e) -> void {
+        if (id != selected) then {
+            select(id);
+        }
+    });
+    row.on("double_click", [id](grove::Event&: e) -> void {
+        open_inspect(id, false);
+    });
+    row.on("mouse_down", [id](grove::Event&: e) -> void {
+        if (e.button() == 2l) then {
+            e.prevent_default();
+            e.stop_propagation();
+            open_context_menu("tree", id, e.x(), e.y());
+        }
+    });
+    return row;
+} end function part_row
+
 function build_outliner() -> void {
     grove::Element: box = grove::get_by_id("tree");
     clear(box);
@@ -401,6 +464,8 @@ function build_outliner() -> void {
             box.append_child(section_row(rows[i]));
         } else if (f.size() >= 7l && f[0] == "item") then {
             box.append_child(outliner_row(rows[i]));
+        } else if (f.size() >= 7l && f[0] == "part") then {
+            box.append_child(part_row(rows[i]));
         }
     }
 } end function build_outliner
@@ -1228,6 +1293,34 @@ function switch_row(const string&: label, bool: on, const string&: field) -> gro
     return row;
 } end function switch_row
 
+function lock_button(const string&: label, const string&: tip, bool: on, const string&: field) -> grove::Element {
+    grove::Element: b = el("button", "seg lock", label);
+    b.set_attribute("title", tip);
+    if (on) then {
+        b.add_class("on");
+    }
+    b.on("click", [field, on](grove::Event&: e) -> void {
+        string: v = "1";
+        if (on) then {
+            v = "0";
+        }
+        set_component(field, v);
+        fill_components();
+    });
+    return b;
+} end function lock_button
+
+function vec_row(const string&: field, const string&: label, const string&: x, const string&: y, const string&: z, const string&: step) -> grove::Element {
+    grove::Element: box = el("column", "vec-row", "");
+    box.append_child(el("div", "sub-title", label));
+    grove::Element: row = el("row", "xyz", "");
+    row.append_child(float_input(x, step, field + "x"));
+    row.append_child(float_input(y, step, field + "y"));
+    row.append_child(float_input(z, step, field + "z"));
+    box.append_child(row);
+    return box;
+} end function vec_row
+
 function collider_card(const string&: line) -> grove::Element {
     auto: f = line.split("\t");
     string: index = f[1];
@@ -1251,7 +1344,19 @@ function collider_card(const string&: line) -> grove::Element {
         fill_components();
     });
     head.append_child(shape);
-    head.append_child(el("div", "grow", ""));
+    if (f.size() > 34l) then {
+        grove::Element: cname = grove::create_element("input_string");
+        cname.set_attribute("class", "grow");
+        cname.set_attribute("placeholder", "Name (optional)");
+        cname.set_value_string(f[33]);
+        cname.on("change", [base](grove::Event&: e) -> void {
+            set_component(base + "name", e.target().value_string());
+            build_tree();
+        });
+        head.append_child(cname);
+    } else then {
+        head.append_child(el("div", "grow", ""));
+    }
     grove::Element: remove = el("button", "small danger", "Remove");
     remove.on("click", [index](grove::Event&: e) -> void {
         set_component("remove_collider", index);
@@ -1283,7 +1388,24 @@ function collider_card(const string&: line) -> grove::Element {
         });
         card.append_child(src);
     }
-    card.append_child(el("div", "sub-title", "Size"));
+    bool: has_mass = f.size() > 34l;
+    string: locks = "";
+    if (has_mass) then {
+        locks = f[32];
+    }
+    if (has_mass) then {
+        grove::Element: size_head = el("row", "lock-head", "");
+        size_head.append_child(el("div", "sub-title grow", "Size"));
+        size_head.append_child(el("text", "lock-label", "Lock"));
+        size_head.append_child(lock_button("X", "Keep size X when mass or density changes", locks.contains("x"), base + "lock_sx"));
+        size_head.append_child(lock_button("Y", "Keep size Y when mass or density changes", locks.contains("y"), base + "lock_sy"));
+        if (f[24].contains("cylinder")) then {
+            size_head.append_child(lock_button("Z", "Keep size Z when mass or density changes", locks.contains("z"), base + "lock_sz"));
+        }
+        card.append_child(size_head);
+    } else then {
+        card.append_child(el("div", "sub-title", "Size"));
+    }
     grove::Element: size = el("row", "xyz", "");
     size.append_child(float_input(f[3], "0.1", base + "sx"));
     size.append_child(float_input(f[4], "0.1", base + "sy"));
@@ -1295,7 +1417,16 @@ function collider_card(const string&: line) -> grove::Element {
     offset.append_child(float_input(f[7], "0.1", base + "oy"));
     offset.append_child(float_input(f[8], "0.1", base + "oz"));
     card.append_child(offset);
-    card.append_child(number_row("body", base + "density", "Density", f[11], "0.0001", "100000", "0.1", "box"));
+    if (has_mass) then {
+        grove::Element: mass_row = number_row("body", base + "mass", "Mass (kg)", f[31], "0.000001", "1000000000", "0.1", "box");
+        mass_row.append_child(lock_button("Lock", "Lock the mass: changing the size or density keeps it the same", locks.contains("m"), base + "lock_mass"));
+        card.append_child(mass_row);
+        grove::Element: density_row = number_row("body", base + "density", "Density (" + f[34] + ")", f[11], "0.000001", "100000", "0.1", "box");
+        density_row.append_child(lock_button("Lock", "Lock the density: changing the mass resizes it instead", locks.contains("d"), base + "lock_density"));
+        card.append_child(density_row);
+    } else then {
+        card.append_child(number_row("body", base + "density", "Density", f[11], "0.0001", "100000", "0.1", "box"));
+    }
     card.append_child(number_row("body", base + "friction", "Friction", f[12], "0", "2", "0.01", "slider"));
     card.append_child(number_row("body", base + "bounce", "Bounce", f[13], "0", "1", "0.01", "slider"));
     if (f.size() > 24l) then {
@@ -1434,6 +1565,12 @@ function fill_components() -> void {
             nums.append_child(number_row("body", f[1], f[2], f[3], f[4], f[5], f[6], f[7]));
         } else if (f[0] == "pick" && f.size() >= 5l) then {
             nums.append_child(pick_row("body", f[1], f[2], f[3], f[4]));
+        } else if (f[0] == "title" && f.size() >= 2l) then {
+            nums.append_child(el("div", "flag-group", f[1]));
+        } else if (f[0] == "vec3" && f.size() >= 7l) then {
+            nums.append_child(vec_row(f[1], f[2], f[3], f[4], f[5], f[6]));
+        } else if (f[0] == "check" && f.size() >= 4l) then {
+            nums.append_child(switch_row(f[2], f[3] == "1", f[1]));
         } else if (f[0] == "aflag" && f.size() >= 5l) then {
             if (f[4] != group) then {
                 group = f[4];
@@ -1472,7 +1609,13 @@ function set_component(const string&: field, const string&: value) -> void {
     if (filling || selected.empty()) then {
         return;
     }
-    call("set_component", selected + "\t" + field + "\t" + value);
+    string: r = call("set_component", selected + "\t" + field + "\t" + value);
+    if (failed(r)) then {
+        say(reason(r), true);
+        fill_components();
+    } else if (field.contains(":mass") || field.contains(":density") || field.contains(":sx") || field.contains(":sy") || field.contains(":sz") || field.contains(":lock_")) then {
+        fill_components();
+    }
     refresh();
 } end function set_component
 
@@ -2496,6 +2639,16 @@ grove::get_by_id("outline-sort").on("change", [](grove::Event&: e) -> void {
         return;
     }
     call("set_pref", "outliner.sort\t" + e.target().value_string());
+    build_outliner();
+});
+
+grove::get_by_id("outline-open-all").on("click", [](grove::Event&: e) -> void {
+    call("fold_all", "open");
+    build_outliner();
+});
+
+grove::get_by_id("outline-close-all").on("click", [](grove::Event&: e) -> void {
+    call("fold_all", "close");
     build_outliner();
 });
 

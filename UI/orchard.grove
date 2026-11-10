@@ -79,7 +79,7 @@
                     <row class="side-head">
                         <input_select id="outline-group" value="sections" class="grow" title="How to sort what's in the scene">
                             <option value="sections">Sections</option>
-                            <option value="hierarchy">Hierarchy</option>
+                            <option value="hierarchy">Scene tree</option>
                             <option value="flat">A to Z</option>
                         </input_select>
                         <input_string id="outline-filter" class="grow filter" placeholder="Filter" />
@@ -91,6 +91,10 @@
                                 <option value="scene">Scene order</option>
                                 <option value="name">By name</option>
                             </input_select>
+                        </row>
+                        <row class="kv">
+                            <button id="outline-open-all" class="small ghost grow" title="Show what's inside everything">Expand all</button>
+                            <button id="outline-close-all" class="small ghost grow" title="Fold everything up">Collapse all</button>
                         </row>
                         <input_bool id="outline-empty" switch>Show empty sections</input_bool>
                         <input_bool id="preview-effects" switch>Preview light effects while editing</input_bool>

@@ -1275,44 +1275,103 @@ private:
         for (const auto& [k, v] : m_prefs) out << k << "=" << v << "\n";
     }
 
+    struct OutlinePart {
+        std::string label;
+        std::string icon;
+        std::string detail;
+        std::string kind;
+        int index = -1;
+    };
+
+    std::vector<OutlinePart> outline_parts(orchard::Entity e) const {
+        std::vector<OutlinePart> parts;
+        const std::vector<orchard::Collider>* cs = m_scene.colliders(e);
+        const std::size_t shapes = cs ? cs->size() : 0;
+        const int extras = (m_scene.fluid(e) ? 1 : 0) + (m_scene.light(e) ? 1 : 0) + (m_scene.emitter(e) ? 1 : 0) + (m_scene.model(e) ? 1 : 0);
+        if (shapes < 2 && !(shapes >= 1 && extras >= 1)) return parts;
+        if (const orchard::Fluid* f = m_scene.fluid(e)) {
+            std::string label = f->preset.empty() ? std::string("Fluid") : f->preset;
+            if (!label.empty()) label[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(label[0])));
+            parts.push_back({label, section_icon("fluids"), number(f->size.x) + " \u00D7 " + number(f->size.y) + " \u00D7 " + number(f->size.z), "fluid", -1});
+        }
+        if (const orchard::Model* md = m_scene.model(e)) parts.push_back({"Model", section_icon("models"), md->source, "model", -1});
+        if (const orchard::Light* l = m_scene.light(e)) parts.push_back({orchard::light_type_label(l->type), section_icon("lights"), "light", "light", -1});
+        if (m_scene.emitter(e)) parts.push_back({"Particles", section_icon("particles"), m_scene.emitter(e)->preset, "particles", -1});
+        for (std::size_t i = 0; i < shapes; ++i) {
+            const orchard::Collider& c = (*cs)[i];
+            std::string shape = orchard::to_string(c.shape);
+            for (char& ch : shape) if (ch == '-') ch = ' ';
+            if (!shape.empty()) shape[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(shape[0])));
+            const std::string label = c.name.empty() ? shape + " collider " + std::to_string(i + 1) : c.name;
+            std::string detail = c.name.empty() ? std::string() : std::string(orchard::to_string(c.shape));
+            if (c.sensor) detail += detail.empty() ? "sensor" : " sensor";
+            if (!c.enabled) detail += detail.empty() ? "off" : " off";
+            parts.push_back({label, c.sensor ? section_icon("triggers") : "\u25A1", detail, "collider", static_cast<int>(i)});
+        }
+        return parts;
+    }
+
     std::string outline(const std::string& group, const std::string& filter) const {
         const std::string want = lower(filter);
         const std::string collapsed = "," + pref("outliner.collapsed", "") + ",";
+        const std::string opened = "," + pref("outliner.open", "") + ",";
+        std::set<std::uint64_t> forced;
+        for (orchard::Entity at = m_scene.parent(m_selected); m_scene.alive(at); at = m_scene.parent(at)) forced.insert(at.id());
+        auto is_open = [&](orchard::Entity e) {
+            return forced.count(e.id()) > 0 || opened.find("," + std::to_string(e.id()) + ",") != std::string::npos;
+        };
         auto matches = [&](orchard::Entity e) {
             if (want.empty()) return true;
             return lower(m_scene.name(e)).find(want) != std::string::npos || lower(tags_of(e)).find(want) != std::string::npos || lower(category(e)).find(want) != std::string::npos;
         };
-        auto item = [&](orchard::Entity e, int depth) {
+        auto item = [&](orchard::Entity e, int depth, const std::string& fold, std::size_t count) {
             const std::string cat = category(e);
-            return "item\t" + std::to_string(e.id()) + "\t" + std::to_string(depth) + "\t" + clean(m_scene.name(e)) + "\t" + section_icon(cat) + "\t" + tags_of(e) + "\t" + cat + "\n";
+            return "item\t" + std::to_string(e.id()) + "\t" + std::to_string(depth) + "\t" + clean(m_scene.name(e)) + "\t" + section_icon(cat) + "\t" + tags_of(e) + "\t" + cat + "\t" + fold + "\t" + std::to_string(count) + "\n";
         };
-        std::string out;
-        if (group == "hierarchy") {
-            std::function<void(orchard::Entity, int)> visit = [&](orchard::Entity e, int depth) {
-                if (matches(e)) out += item(e, depth);
-                for (orchard::Entity c : m_scene.children(e)) visit(c, depth + 1);
-            };
-            for (orchard::Entity e : m_scene.roots()) visit(e, 0);
-            return out;
-        }
+        std::function<void(orchard::Entity, int, std::string&)> tree = [&](orchard::Entity e, int depth, std::string& out) {
+            const std::vector<orchard::Entity> kids = m_scene.children(e);
+            const std::vector<OutlinePart> parts = outline_parts(e);
+            const std::size_t count = kids.size() + parts.size();
+            const bool open = count > 0 && is_open(e);
+            out += item(e, depth, count == 0 ? std::string() : open ? std::string("open") : std::string("closed"), count);
+            if (!open) return;
+            for (const OutlinePart& p : parts) out += "part\t" + std::to_string(e.id()) + "\t" + std::to_string(depth + 1) + "\t" + clean(p.label) + "\t" + p.icon + "\t" + clean(p.detail) + "\t" + p.kind + "\t" + std::to_string(p.index) + "\n";
+            for (orchard::Entity c : kids) tree(c, depth + 1, out);
+        };
         std::vector<orchard::Entity> all = m_scene.entities();
         if (group == "flat" || pref("outliner.sort", "scene") == "name") {
             std::stable_sort(all.begin(), all.end(), [this](orchard::Entity a, orchard::Entity b) { return lower(m_scene.name(a)) < lower(m_scene.name(b)); });
         }
-        if (group == "flat") {
+        std::string out;
+        if (group == "flat" || !want.empty()) {
             for (orchard::Entity e : all) {
-                if (matches(e)) out += item(e, 0);
+                if (!matches(e)) continue;
+                const std::string cat = category(e);
+                const orchard::Entity p = m_scene.parent(e);
+                std::string tags = tags_of(e);
+                if (m_scene.alive(p)) tags += (tags.empty() ? "in " : " \u00B7 in ") + clean(m_scene.name(p));
+                out += "item\t" + std::to_string(e.id()) + "\t0\t" + clean(m_scene.name(e)) + "\t" + section_icon(cat) + "\t" + tags + "\t" + cat + "\t\t0\n";
             }
+            return out;
+        }
+        std::vector<orchard::Entity> roots;
+        for (orchard::Entity e : all)
+            if (!m_scene.alive(m_scene.parent(e))) roots.push_back(e);
+        if (group == "hierarchy") {
+            const bool closed = collapsed.find(",scene,") != std::string::npos;
+            out += std::string("section\tscene\tTHIS SCENE\t") + std::to_string(roots.size()) + "\t" + (closed ? "1" : "0") + "\t\u25A4\n";
+            if (closed) return out;
+            for (orchard::Entity e : roots) tree(e, 0, out);
             return out;
         }
         const bool show_empty = pref("outliner.empty_sections", "0") == "1";
         for (const Section& sec : outline_sections()) {
             std::string rows;
             int count = 0;
-            for (orchard::Entity e : all) {
-                if (category(e) != sec.key || !matches(e)) continue;
+            for (orchard::Entity e : roots) {
+                if (category(e) != sec.key) continue;
                 ++count;
-                rows += item(e, 0);
+                tree(e, 0, rows);
             }
             if (count == 0 && !show_empty) continue;
             const bool closed = collapsed.find(std::string(",") + sec.key + ",") != std::string::npos;
@@ -1415,29 +1474,20 @@ private:
             kv("Body", orchard::to_string(b->type));
             yes("Enabled", b->enabled);
             float mass = 0.0f;
-            if (const std::vector<orchard::Collider>* cs = m_scene.colliders(e)) {
-                const orchard::Vec3 sc = t ? t->scale : orchard::Vec3{1.0f, 1.0f, 1.0f};
-                for (const orchard::Collider& c : *cs) {
-                    if (c.sensor || !c.enabled) continue;
-                    const float x = c.size.x * std::fabs(sc.x), y = c.size.y * std::fabs(sc.y), z = c.size.z * std::fabs(sc.z);
-                    float volume = x * y * z;
-                    if (c.shape == orchard::ColliderShape::sphere) {
-                        const float d = std::max({x, y, z});
-                        volume = 3.14159265f * d * d * d / 6.0f;
-                    } else if (c.shape == orchard::ColliderShape::capsule) {
-                        const float rr = std::max(x, z) * 0.5f;
-                        const float h = std::max(0.0f, y - 2.0f * rr);
-                        volume = 3.14159265f * rr * rr * h + 4.0f / 3.0f * 3.14159265f * rr * rr * rr;
-                    } else if (c.shape == orchard::ColliderShape::cylinder || c.shape == orchard::ColliderShape::cone) {
-                        const float rr = std::max(x, z) * 0.5f;
-                        volume = 3.14159265f * rr * rr * y * (c.shape == orchard::ColliderShape::cone ? 1.0f / 3.0f : 1.0f);
-                    } else if (c.shape == orchard::ColliderShape::rounded_box) {
-                        const float rr = std::clamp(c.rounding, 0.0f, 0.5f * std::min({x, y, z}));
-                        const float cx = x - 2.0f * rr, cy = y - 2.0f * rr, cz = z - 2.0f * rr;
-                        volume = cx * cy * cz + 2.0f * rr * (cx * cy + cy * cz + cz * cx) + 3.14159265f * rr * rr * (cx + cy + cz) + 4.0f / 3.0f * 3.14159265f * rr * rr * rr;
+            const orchard::Vec3 sc = xylem::world_scale(m_scene, e);
+            std::vector<orchard::Entity> parts{e};
+            while (!parts.empty()) {
+                const orchard::Entity at = parts.back();
+                parts.pop_back();
+                if (at != e && m_scene.body(at)) continue;
+                if (const std::vector<orchard::Collider>* cs = m_scene.colliders(at)) {
+                    const orchard::Vec3 part_scale = at == e ? sc : xylem::world_scale(m_scene, at);
+                    for (const orchard::Collider& c : *cs) {
+                        if (c.sensor || !c.enabled) continue;
+                        mass += orchard::collider_mass(c, part_scale, m_scene.dimension());
                     }
-                    mass += volume * c.density;
                 }
+                for (orchard::Entity child : m_scene.children(at)) parts.push_back(child);
             }
             if (b->type == orchard::BodyType::dynamic) kv("Mass", number(mass) + " kg");
             kv("Gravity scale", number(b->gravity_scale));
@@ -1566,6 +1616,13 @@ private:
             out += field("gravity_scale", "Gravity scale", "float", number(b->gravity_scale), "0.1");
             out += field("linear_damping", "Drag", "float", number(b->linear_damping), "0.05");
             out += field("angular_damping", "Spin drag", "float", number(b->angular_damping), "0.05");
+            if (b->type != orchard::BodyType::fixed) {
+                group("Start motion");
+                out += field("v0", "Starting velocity (m/s)", "vec3", vec_text(b->start_velocity), "0.5");
+                out += field("spin0", "Starting spin (degrees/s)", "vec3", vec_text(b->start_spin), "5");
+                out += field("accel", "Constant acceleration (m/s\u00B2)", "vec3", vec_text(b->acceleration), "0.5", "Pushes it the same way every moment, like extra gravity. A rocket, a conveyor, wind.");
+                out += field("motion_local", "Relative to its own rotation", "bool", yesno(b->motion_local));
+            }
             group("Flags");
             for (const orchard::BodyFlagInfo& info : orchard::body_flags()) {
                 if (flat ? !info.two_d : !info.three_d) continue;
@@ -1580,7 +1637,17 @@ private:
                 out += field(base + "shape", "Shape", "select", orchard::to_string(c.shape), options_of({{"box", "Box"}, {"sphere", "Sphere"}, {"capsule", "Capsule"}, {"cylinder", "Cylinder"}, {"cone", "Cone"}, {"rounded-box", "Rounded box"}, {"sphere-section", "Sphere section (hemisphere, dome, bowl, wedge)"}}));
                 out += field(base + "size", "Size", "vec3", vec_text(c.size), "0.1");
                 out += field(base + "offset", "Offset", "vec3", vec_text(c.offset), "0.1");
-                out += field(base + "density", "Density", "float", number(c.density), "0.1");
+                const orchard::Vec3 wscale = xylem::world_scale(m_scene, e);
+                const float cmass = orchard::collider_mass(c, wscale, m_scene.dimension());
+                const float cdensity = c.locked(orchard::collider_lock_mass) && c.mass > 0.0f ? cmass / std::max(1e-9f, orchard::collider_density_unit(m_scene.dimension()) * orchard::collider_volume(c, wscale, m_scene.dimension())) : c.density;
+                out += field(base + "name", "Name", "string", c.name);
+                out += field(base + "mass", "Mass (kg)", "float", number(cmass), "0.1");
+                out += field(base + "density", flat ? "Density (kg/m\u00B2)" : "Density (\u00D7 water)", "float", number(cdensity), "0.1");
+                out += field(base + "lock_mass", "Lock mass", "bool", yesno(c.locked(orchard::collider_lock_mass)));
+                out += field(base + "lock_density", "Lock density", "bool", yesno(c.locked(orchard::collider_lock_density)));
+                out += field(base + "lock_sx", "Lock size X", "bool", yesno(c.locked(orchard::collider_lock_size_x)));
+                out += field(base + "lock_sy", "Lock size Y", "bool", yesno(c.locked(orchard::collider_lock_size_y)));
+                if (!flat) out += field(base + "lock_sz", "Lock size Z", "bool", yesno(c.locked(orchard::collider_lock_size_z)));
                 out += field(base + "friction", "Friction", "float", number(c.friction), "0.05");
                 out += field(base + "bounce", "Bounce", "float", number(c.restitution), "0.05");
                 out += field(base + "enabled", "Enabled", "bool", yesno(c.enabled));
@@ -1661,7 +1728,14 @@ private:
                 out += field("camera.move_speed", "Speed (m/s, Shift is 3x)", "float", number(cam->move_speed), "0.5");
                 out += field("camera.mouse_look", "Drag to look around", "bool", yesno(cam->mouse_look));
                 out += field("camera.look_speed", "Look speed (degrees per pixel)", "float", number(cam->look_speed), "0.05");
-                if (cam->control == orchard::CameraControl::walk) out += field("camera.eye_height", "Eye height (m)", "float", number(cam->eye_height), "0.1");
+                if (cam->control == orchard::CameraControl::walk) {
+                    out += field("camera.eye_height", "Eye height (m)", "float", number(cam->eye_height), "0.1");
+                    const orchard::Entity rider = m_scene.body_owner(e);
+                    const orchard::Body* rb = rider.valid() ? m_scene.body(rider) : nullptr;
+                    std::string how = "Give it (or a parent) a dynamic rigid body and a capsule collider to make it a physical player that bumps into things and gets pushed.";
+                    if (rb && rb->type == orchard::BodyType::dynamic) how = rider == e ? "Walks as a physical body: its own body and colliders bump into things." : "Walks as a physical body: " + m_scene.name(rider) + "'s body and colliders bump into things.";
+                    out += field("camera.jump_speed", "Jump speed (m/s)", "float", number(cam->jump_speed), "0.5", how);
+                }
             }
             out += field("camera.priority", "Priority (highest active one wins)", "float", std::to_string(cam->priority), "1");
             if (m_scene.dimension() == orchard::Dimension::two_d) {
@@ -2028,9 +2102,12 @@ private:
             const std::string base = key.substr(0, key.rfind(':') + 1);
             const bool size = ends(":size");
             const bool ok = set_component(e, base + (size ? "sx" : "ox"), number(vec.x)) && set_component(e, base + (size ? "sy" : "oy"), number(vec.y)) && set_component(e, base + (size ? "sz" : "oz"), number(vec.z));
+            if (size) return ok ? "rebuild" : "";
             return ok ? "ok" : "";
         }
         if (key.rfind("collider:", 0) == 0 && ends(":shape")) return set_component(e, key, value) ? "rebuild" : "";
+        if (key.rfind("collider:", 0) == 0 && (ends(":mass") || ends(":density") || key.find(":lock_") != std::string::npos)) return set_component(e, key, value) ? "rebuild" : "";
+        if (key == "v0" || key == "spin0" || key == "accel") return set_component(e, key, value) ? "ok" : "";
         if (key == "body_type") return set_component(e, key, value) ? "rebuild" : "";
         if (key == "has_light") {
             if (on) {
@@ -2372,6 +2449,7 @@ private:
             } else if (k == "move_speed") c->move_speed = std::max(0.0f, v);
             else if (k == "look_speed") c->look_speed = std::max(0.0f, v);
             else if (k == "eye_height") c->eye_height = std::max(0.0f, v);
+            else if (k == "jump_speed") c->jump_speed = std::clamp(v, 0.0f, 100.0f);
             else if (k == "mouse_look") c->mouse_look = on;
             else if (k == "priority") c->priority = std::atoi(value.c_str());
             else if (k == "fov") c->fov = std::clamp(v, 1.0f, 179.0f);
@@ -2864,6 +2942,24 @@ private:
         float speed = c->move_speed;
         if (keys.key_down("shift")) speed *= 3.0f;
         xylem::World* world = m_session.world();
+        const orchard::Entity rider = m_scene.body_owner(cam);
+        const orchard::Body* rider_body = rider.valid() ? m_scene.body(rider) : nullptr;
+        if (c->control == orchard::CameraControl::walk && world && rider_body && rider_body->type == orchard::BodyType::dynamic && world->has_body(rider)) {
+            xylem::CharacterMove mv;
+            mv.wish = orchard::length(move) > 0.0f ? orchard::normalize(move) * speed : orchard::Vec3{};
+            mv.jump = keys.key_down("space");
+            mv.jump_speed = c->jump_speed;
+            world->move_character(rider, mv, dt);
+            const orchard::Quat want = camera_rotation(look);
+            const orchard::Entity parent = m_scene.parent(cam);
+            if (m_scene.alive(parent)) {
+                const orchard::Quat pr = xylem::world_rotation(m_scene, parent);
+                t->rotation = orchard::normalize(orchard::Quat{-pr.x, -pr.y, -pr.z, pr.w} * want);
+            } else {
+                t->rotation = want;
+            }
+            return;
+        }
         if (c->control == orchard::CameraControl::fly) {
             if (keys.key_down("e") || keys.key_down("space")) move += up;
             if (keys.key_down("q")) move += up * -1.0f;
@@ -2873,12 +2969,12 @@ private:
                 const orchard::Vec3 dir = orchard::normalize(move);
                 float allowed = speed * dt;
                 float hit = 0.0f;
-                if (world && world->raycast(t->position + up * (-c->eye_height * 0.5f), dir, allowed + 0.3f, nullptr, nullptr, &hit).valid()) allowed = std::max(0.0f, hit - 0.3f);
-                if (world && world->raycast(t->position, dir, allowed + 0.3f, nullptr, nullptr, &hit).valid()) allowed = std::min(allowed, std::max(0.0f, hit - 0.3f));
+                if (world && world->raycast_ignoring(rider, t->position + up * (-c->eye_height * 0.5f), dir, allowed + 0.3f, nullptr, nullptr, &hit).valid()) allowed = std::max(0.0f, hit - 0.3f);
+                if (world && world->raycast_ignoring(rider, t->position, dir, allowed + 0.3f, nullptr, nullptr, &hit).valid()) allowed = std::min(allowed, std::max(0.0f, hit - 0.3f));
                 t->position = t->position + dir * allowed;
             }
             float ground = 0.0f;
-            const bool has_ground = world && world->raycast(t->position, up * -1.0f, c->eye_height + 50.0f, nullptr, nullptr, &ground).valid();
+            const bool has_ground = world && world->raycast_ignoring(rider, t->position, up * -1.0f, c->eye_height + 50.0f, nullptr, nullptr, &ground).valid();
             const bool grounded = has_ground && ground <= c->eye_height + 0.05f && m_player_fall <= 0.0f;
             if (!has_ground && m_player_fall <= 0.0f) {
                 m_player_fall = 0.0f;
@@ -3111,6 +3207,7 @@ private:
             items.push_back(grove::menu_item("add:light", "Add a light"));
             items.push_back(grove::menu_item("add:camera", "Add a camera (from this view)"));
             items.push_back(grove::menu_item("add:player-camera", "Add a player camera (walk with W A S D)"));
+            items.push_back(grove::menu_item("add:physical-player", "Add a physical player (a body that bumps, gets pushed and falls)"));
             items.push_back(grove::menu_item("add:water", "Add water"));
             items.push_back(grove::menu_item("add:pool", "Add a pool (walls and water)"));
             items.push_back(grove::menu_item("add:hemisphere", "Add a hemisphere"));
@@ -3394,25 +3491,50 @@ private:
                 num("sleep_spin", "Sleep spin", b->sleep_spin, 0.0, 2.0, 0.005, "slider");
                 num("sleep_delay", "Sleep after (s)", b->sleep_delay, 0.0, 10.0, 0.05, "slider");
             }
+            if (b->type != orchard::BodyType::fixed) {
+                out += "title\tStart motion\n";
+                auto vec = [&out](const char* field, const char* label, orchard::Vec3 v, const char* step) {
+                    out += std::string("vec3\t") + field + "\t" + label + "\t" + number(v.x) + "\t" + number(v.y) + "\t" + number(v.z) + "\t" + step + "\n";
+                };
+                vec("v0", flat ? "Starting velocity (m/s, X Y)" : "Starting velocity (m/s)", b->start_velocity, "0.5");
+                vec("spin0", flat ? "Starting spin (degrees/s, Z)" : "Starting spin (degrees/s)", b->start_spin, "5");
+                vec("accel", flat ? "Constant acceleration (m/s\u00B2, X Y)" : "Constant acceleration (m/s\u00B2)", b->acceleration, "0.5");
+                out += std::string("check\tmotion_local\tRelative to its own rotation\t") + (b->motion_local ? "1" : "0") + "\n";
+            }
             for (const xylem::FlagOption& o : xylem::flag_options()) {
                 if (flat && !o.two_d) continue;
                 out += std::string("aflag\t") + o.name + "\t" + o.label + "\t" + (xylem::flag_on(*b, o.bit) ? "1" : "0") + "\t" + o.group + "\n";
             }
         }
         if (const std::vector<orchard::Collider>* cs = m_scene.colliders(e)) {
+            const orchard::Vec3 scale = xylem::world_scale(m_scene, e);
+            const orchard::Dimension dim = m_scene.dimension();
             for (std::size_t i = 0; i < cs->size(); ++i) {
                 const orchard::Collider& c = (*cs)[i];
+                const float mass = orchard::collider_mass(c, scale, dim);
+                const float density = c.locked(orchard::collider_lock_mass) && c.mass > 0.0f ? mass / std::max(1e-9f, orchard::collider_density_unit(dim) * orchard::collider_volume(c, scale, dim)) : c.density;
                 out += "collider\t" + std::to_string(i) + "\t" + orchard::to_string(c.shape) + "\t" + number(c.size.x) + "\t" + number(c.size.y) + "\t" + number(c.size.z)
                      + "\t" + number(c.offset.x) + "\t" + number(c.offset.y) + "\t" + number(c.offset.z) + "\t" + (c.enabled ? "1" : "0") + "\t" + (c.sensor ? "1" : "0")
-                     + "\t" + number(c.density) + "\t" + number(c.friction) + "\t" + number(c.restitution)
+                     + "\t" + number(density) + "\t" + number(c.friction) + "\t" + number(c.restitution)
                      + "\t" + orchard::to_string(c.friction_combine) + "\t" + orchard::to_string(c.bounce_combine)
                      + "\t" + (m_project ? orchard::combine_label(m_project->info().friction_combine) : "Geometric mean")
                      + "\t" + (m_project ? orchard::combine_label(m_project->info().bounce_combine) : "Maximum")
                      + "\t" + number(c.rounding) + "\t" + number(c.rolling_friction) + "\t" + number(c.spinning_friction)
                      + "\t" + number(c.grip.x) + "\t" + number(c.grip.y) + "\t" + number(c.grip.z) + "\t" + shape_names(flat)
-                     + "\t" + number(c.polar_min) + "\t" + number(c.polar_max) + "\t" + number(c.azimuth_min) + "\t" + number(c.azimuth_max) + "\t" + number(c.shell) + "\t" + clean(c.source) + "\n";
+                     + "\t" + number(c.polar_min) + "\t" + number(c.polar_max) + "\t" + number(c.azimuth_min) + "\t" + number(c.azimuth_max) + "\t" + number(c.shell) + "\t" + clean(c.source)
+                     + "\t" + number(mass) + "\t" + lock_letters(c) + "\t" + clean(c.name) + "\t" + (flat ? "kg/m\u00B2" : "\u00D7 water") + "\n";
             }
         }
+        return out;
+    }
+
+    static std::string lock_letters(const orchard::Collider& c) {
+        std::string out;
+        if (c.locked(orchard::collider_lock_mass)) out += "m";
+        if (c.locked(orchard::collider_lock_density)) out += "d";
+        if (c.locked(orchard::collider_lock_size_x)) out += "x";
+        if (c.locked(orchard::collider_lock_size_y)) out += "y";
+        if (c.locked(orchard::collider_lock_size_z)) out += "z";
         return out;
     }
 
@@ -3502,6 +3624,24 @@ private:
                 dst = std::clamp(v, 0.0f, 1000.0f);
                 return true;
             }
+            if (field == "v0" || field == "spin0" || field == "accel") {
+                orchard::Vec3 vec;
+                if (!parse_vec3(value, vec)) return false;
+                (field == "v0" ? b->start_velocity : field == "spin0" ? b->start_spin : b->acceleration) = vec;
+                return true;
+            }
+            if ((field.rfind("v0", 0) == 0 || field.rfind("spin0", 0) == 0 || field.rfind("accel", 0) == 0) && (field.back() == 'x' || field.back() == 'y' || field.back() == 'z')) {
+                const std::string root = field.substr(0, field.size() - 1);
+                if (root != "v0" && root != "spin0" && root != "accel") return false;
+                orchard::Vec3& vec = root == "v0" ? b->start_velocity : root == "spin0" ? b->start_spin : b->acceleration;
+                const float x = std::clamp(v, -100000.0f, 100000.0f);
+                (field.back() == 'x' ? vec.x : field.back() == 'y' ? vec.y : vec.z) = x;
+                return true;
+            }
+            if (field == "motion_local") {
+                b->motion_local = on;
+                return true;
+            }
             if (field.rfind("aflag:", 0) == 0) {
                 for (const xylem::FlagOption& o : xylem::flag_options()) {
                     if (field.compare(6, std::string::npos, o.name) == 0) {
@@ -3529,21 +3669,45 @@ private:
             std::vector<orchard::Collider>* cs = m_scene.colliders(e);
             if (!cs || index >= cs->size()) return false;
             orchard::Collider& c = (*cs)[index];
+            const orchard::Vec3 scale = xylem::world_scale(m_scene, e);
+            const orchard::Dimension dim = m_scene.dimension();
+            if (what == "mass" || what == "density" || what == "sx" || what == "sy" || what == "sz") {
+                const orchard::MassEdit me = what == "mass" ? orchard::MassEdit::mass : what == "density" ? orchard::MassEdit::density : what == "sx" ? orchard::MassEdit::size_x : what == "sy" ? orchard::MassEdit::size_y : orchard::MassEdit::size_z;
+                const float now = what == "mass" ? orchard::collider_mass(c, scale, dim) : what == "density" ? c.density : what == "sx" ? c.size.x : what == "sy" ? c.size.y : c.size.z;
+                if (std::fabs(now - v) <= 1e-6f * std::max(1.0f, std::fabs(v))) return true;
+                std::string why;
+                if (!orchard::edit_collider_mass(c, me, what == "density" ? std::max(0.0001f, v) : v, scale, dim, &why)) {
+                    m_component_error = "Can't change the " + (what == "mass" ? std::string("mass") : what == "density" ? std::string("density") : std::string("size")) + ": " + why;
+                    return false;
+                }
+                return true;
+            }
+            if (what.rfind("lock_", 0) == 0) {
+                const std::string k = what.substr(5);
+                const orchard::ColliderLock l = k == "mass" ? orchard::collider_lock_mass : k == "density" ? orchard::collider_lock_density : k == "sx" ? orchard::collider_lock_size_x : k == "sy" ? orchard::collider_lock_size_y : k == "sz" ? orchard::collider_lock_size_z : k == "size" ? orchard::collider_lock_size : static_cast<orchard::ColliderLock>(0);
+                if (l == 0) return false;
+                if (l == orchard::collider_lock_mass && on && !c.locked(orchard::collider_lock_mass)) c.mass = orchard::collider_mass(c, scale, dim);
+                if (l == orchard::collider_lock_mass && !on && c.locked(orchard::collider_lock_mass)) {
+                    c.density = std::max(0.0001f, orchard::collider_mass(c, scale, dim) / std::max(1e-9f, orchard::collider_density_unit(dim) * orchard::collider_volume(c, scale, dim)));
+                }
+                c.lock(l, on);
+                return true;
+            }
+            if (what == "name") {
+                c.name = clean(value);
+                return true;
+            }
             if (what == "shape") {
                 const std::optional<orchard::ColliderShape> shape = orchard::parse_collider_shape(value);
                 if (!shape) return false;
                 c.shape = *shape;
             } else if (what == "source") {
                 c.source = value;
-            } else if (what == "sx") c.size.x = std::max(0.001f, v);
-            else if (what == "sy") c.size.y = std::max(0.001f, v);
-            else if (what == "sz") c.size.z = std::max(0.001f, v);
-            else if (what == "ox") c.offset.x = v;
+            } else if (what == "ox") c.offset.x = v;
             else if (what == "oy") c.offset.y = v;
             else if (what == "oz") c.offset.z = v;
             else if (what == "enabled") c.enabled = on;
             else if (what == "sensor") c.sensor = on;
-            else if (what == "density") c.density = std::max(0.0001f, v);
             else if (what == "friction") c.friction = std::max(0.0f, v);
             else if (what == "bounce") c.restitution = std::clamp(v, 0.0f, 1.0f);
             else if (what == "rounding") c.rounding = std::clamp(v, 0.0f, 0.5f * std::min({c.size.x, c.size.y, c.size.z}));
@@ -3654,6 +3818,49 @@ private:
         } else if (kind == "light") {
             m_scene.add_light(e);
             m_scene.transform(e)->position.y += 3.0f;
+        } else if (kind == "physical-player") {
+            m_scene.set_name(e, "Player");
+            for (orchard::Entity other : m_scene.entities())
+                if (orchard::Camera* oc = m_scene.camera(other)) oc->active = false;
+            orchard::Body& b = m_scene.add_body(e);
+            b.type = orchard::BodyType::dynamic;
+            b.set(orchard::body_lock_rotation_x, !flat);
+            b.set(orchard::body_lock_rotation_y, !flat);
+            b.set(orchard::body_lock_rotation_z, true);
+            b.set(orchard::body_sleep, false);
+            b.continuous = orchard::BodyContinuous::on;
+            b.angular_damping = 1.0f;
+            orchard::Collider* c = m_scene.add_collider(e, orchard::ColliderShape::capsule);
+            const float height = 1.8f;
+            c->name = "Body";
+            c->size = {0.6f, height, flat ? 1.0f : 0.6f};
+            c->offset = {0.0f, height * 0.5f, 0.0f};
+            c->friction = 0.0f;
+            c->friction_combine = orchard::CombineMode::minimum;
+            c->density = 985.0f / orchard::collider_density_unit(m_scene.dimension());
+            c->mass = 75.0f;
+            c->lock(orchard::collider_lock_mass, true);
+            const orchard::Entity cam = m_scene.create("Camera", e);
+            orchard::Camera& cc = m_scene.add_camera(cam);
+            cc.control = flat ? orchard::CameraControl::none : orchard::CameraControl::walk;
+            cc.fov = m_view.orbit_camera().fov;
+            m_scene.transform(cam)->position = {0.0f, cc.eye_height, 0.0f};
+            if (!flat) {
+                const orchard::Vec3 up = camera_up_axis();
+                const orchard::Vec3 eye = m_view.eye();
+                const orchard::Vec3 target = m_view.orbit_camera().target;
+                orchard::Vec3 look = target - eye;
+                look = look - up * orchard::dot(look, up);
+                if (orchard::length(look) < 1e-4f) look = orchard::cross(up, orchard::Vec3{1.0f, 0.0f, 0.0f});
+                orchard::Transform* t = m_scene.transform(e);
+                t->position = target;
+                const orchard::Vec3 y_axis{0.0f, 1.0f, 0.0f};
+                const orchard::Vec3 axis = orchard::cross(y_axis, up);
+                const float d = orchard::dot(y_axis, up);
+                t->rotation = d < -0.9999f ? orchard::Quat{1.0f, 0.0f, 0.0f, 0.0f} : orchard::normalize(orchard::Quat{axis.x, axis.y, axis.z, 1.0f + d});
+                const orchard::Quat inv{-t->rotation.x, -t->rotation.y, -t->rotation.z, t->rotation.w};
+                m_scene.transform(cam)->rotation = orchard::normalize(inv * camera_rotation(look));
+            }
         } else if (kind == "camera" || kind == "player-camera") {
             for (orchard::Entity other : m_scene.entities())
                 if (orchard::Camera* oc = m_scene.camera(other)) oc->active = false;
@@ -3694,8 +3901,11 @@ private:
             m_scene.add_body(e).type = orchard::BodyType::fixed;
             const float t = 0.2f;
             const orchard::Vec3 walls[5][2] = {{{6.0f + 2 * t, t, 6.0f + 2 * t}, {0.0f, -1.0f - t * 0.5f, 0.0f}}, {{t, 2.0f, 6.0f}, {3.0f + t * 0.5f, 0.0f, 0.0f}}, {{t, 2.0f, 6.0f}, {-3.0f - t * 0.5f, 0.0f, 0.0f}}, {{6.0f + 2 * t, 2.0f, t}, {0.0f, 0.0f, 3.0f + t * 0.5f}}, {{6.0f + 2 * t, 2.0f, t}, {0.0f, 0.0f, -3.0f - t * 0.5f}}};
+            static const char* const wall_names[5] = {"Floor", "Wall +X", "Wall -X", "Wall +Z", "Wall -Z"};
+            int wall_index = 0;
             for (const auto& w2 : walls) {
                 orchard::Collider* c = m_scene.add_collider(e);
+                c->name = wall_names[wall_index++];
                 c->size = w2[0];
                 c->offset = w2[1];
             }
@@ -4015,7 +4225,8 @@ private:
         native("components", [this](const std::vector<std::string>& f) { return components(entity(arg(f, 0))); });
 
         native("set_component", [this](const std::vector<std::string>& f) {
-            if (!set_component(entity(arg(f, 0)), arg(f, 1), arg(f, 2))) return std::string();
+            m_component_error.clear();
+            if (!set_component(entity(arg(f, 0)), arg(f, 1), arg(f, 2))) return m_component_error.empty() ? std::string() : "error\t" + m_component_error;
             touched();
             return std::string("ok");
         });
@@ -4248,6 +4459,7 @@ private:
             yes("continuous_all", "Fast-move checks for everything", ph.continuous_all);
             yes("sleeping", "Sleeping", ph.sleeping);
             yes("warm_starting", "Warm starting", ph.warm_starting);
+            num("settle", "Help slow things settle (0 = off)", ph.settle, 0.0, 10.0, 0.1, "slider");
             yes("octree", "Use the old octree broadphase", ph.octree);
             if (!flat) {
                 num("speculative_distance", "Speculative distance (m)", ph.speculative_distance, 0.0, 0.1, 0.001, "slider");
@@ -4316,6 +4528,7 @@ private:
             else if (key == "contact_damping") ph.contact_damping = real(0.0, 20.0);
             else if (key == "joint_hertz") ph.joint_hertz = real(1.0, 240.0);
             else if (key == "push_speed") ph.push_speed = real(0.0, 20.0);
+            else if (key == "settle") ph.settle = real(0.0, 10.0);
             else if (key == "threads") ph.threads = whole(1, 64);
             else if (key == "fluid_quality") ph.fluid_quality = whole(0, 3);
             else if (key == "particle_budget") ph.particle_budget = whole(100, 2000000);
@@ -4719,6 +4932,54 @@ private:
             return out;
         });
 
+        native("toggle_fold", [this](const std::vector<std::string>& f) {
+            const std::string id = arg(f, 0);
+            if (id.empty() || id.find(',') != std::string::npos) return std::string();
+            std::vector<std::string> keep;
+            bool was = false;
+            std::string cur;
+            const std::string list = pref("outliner.open", "") + ",";
+            for (char c : list) {
+                if (c != ',') {
+                    cur += c;
+                    continue;
+                }
+                if (!cur.empty()) {
+                    if (cur == id) was = true;
+                    else if (m_scene.alive(entity(cur))) keep.push_back(cur);
+                }
+                cur.clear();
+            }
+            const orchard::Entity e = entity(id);
+            if (!was && m_scene.alive(e)) keep.push_back(id);
+            if (was && m_scene.alive(m_selected)) {
+                for (orchard::Entity at = m_scene.parent(m_selected); m_scene.alive(at); at = m_scene.parent(at)) {
+                    if (at == e) {
+                        m_selected = e;
+                        break;
+                    }
+                }
+            }
+            std::string out;
+            for (const std::string& k : keep) out += (out.empty() ? "" : ",") + k;
+            m_prefs["outliner.open"] = out;
+            save_prefs();
+            return std::string(was ? "closed" : "open") + "\t" + (m_scene.alive(m_selected) ? std::to_string(m_selected.id()) : std::string());
+        });
+
+        native("fold_all", [this](const std::vector<std::string>& f) {
+            std::string out;
+            if (arg(f, 0) == "open") {
+                for (orchard::Entity e : m_scene.entities()) {
+                    if (m_scene.children(e).empty() && outline_parts(e).empty()) continue;
+                    out += (out.empty() ? "" : ",") + std::to_string(e.id());
+                }
+            }
+            m_prefs["outliner.open"] = out;
+            save_prefs();
+            return std::string("ok");
+        });
+
         native("details", [this](const std::vector<std::string>& f) { return details(entity(arg(f, 0))); });
 
         native("inspect", [this](const std::vector<std::string>& f) { return inspect(entity(arg(f, 0))); });
@@ -4812,6 +5073,7 @@ private:
     bool m_particles_were_playing = false;
     std::optional<orchard::Viewport> m_view_before_play;
     bool m_player_ready = false;
+    std::string m_component_error;
     float m_player_yaw = 0.0f;
     float m_player_pitch = 0.0f;
     float m_player_fall = 0.0f;
