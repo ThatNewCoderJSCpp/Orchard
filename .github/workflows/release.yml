@@ -118,7 +118,7 @@ jobs:
 
       - name: Package
         run: |
-          curl -fL --retry 5 --retry-delay 10 -o walnut.tar.gz "${{ needs.version.outputs.walnut_base }}-linux-${{ matrix.arch }}.tar.gz"
+          curl -fL --retry 10 --retry-delay 20 --retry-all-errors -o walnut.tar.gz "${{ needs.version.outputs.walnut_base }}-linux-${{ matrix.arch }}.tar.gz"
           bash .github/scripts/stage.sh walnut.tar.gz build/bin/orchard . stage
           cmake -S Packaging -B pkg -DORCHARD_STAGE="$PWD/stage" -DORCHARD_VERSION=${{ needs.version.outputs.version }} \
             -DORCHARD_PLATFORM=linux-${{ matrix.arch }} "-DORCHARD_GENERATORS=TGZ;TXZ;ZIP;DEB;RPM"
@@ -216,7 +216,7 @@ jobs:
               echo "::error::orchard links to a library users may not have"
               exit 1
             fi
-            curl -fL --retry 5 --retry-delay 10 -o walnut.tar.gz "$WALNUT_URL"
+            curl -fL --retry 10 --retry-delay 20 --retry-all-errors -o walnut.tar.gz "$WALNUT_URL"
             bash .github/scripts/stage.sh walnut.tar.gz build/bin/orchard . stage
             cmake -S Packaging -B pkg -DORCHARD_STAGE=/src/stage -DORCHARD_VERSION=$ORCHARD_VERSION \
               -DORCHARD_PLATFORM=linux-i686 "-DORCHARD_GENERATORS=TGZ;TXZ;ZIP;DEB;RPM"
@@ -316,7 +316,7 @@ jobs:
 
       - name: Package
         run: |
-          curl -fL --retry 5 --retry-delay 10 -o walnut.tar.gz "${{ needs.version.outputs.walnut_base }}-macos-${{ matrix.arch }}.tar.gz"
+          curl -fL --retry 10 --retry-delay 20 --retry-all-errors -o walnut.tar.gz "${{ needs.version.outputs.walnut_base }}-macos-${{ matrix.arch }}.tar.gz"
           bash .github/scripts/stage.sh walnut.tar.gz build/bin/orchard . stage macos-lib
           cmake -S Packaging -B pkg -DORCHARD_STAGE="$PWD/stage" -DORCHARD_VERSION=${{ needs.version.outputs.version }} \
             -DORCHARD_PLATFORM=macos-${{ matrix.arch }} "-DORCHARD_GENERATORS=TGZ;TXZ;ZIP"
@@ -419,7 +419,7 @@ jobs:
       - name: Download llvm-mingw
         if: steps.llvm-mingw-cache.outputs.cache-hit != 'true'
         run: |
-          curl -fL --retry 5 --retry-delay 10 -o /tmp/llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_VERSION/$LLVM_MINGW.tar.xz"
+          curl -fL --retry 10 --retry-delay 20 --retry-all-errors -o /tmp/llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_VERSION/$LLVM_MINGW.tar.xz"
           mkdir -p ~/llvm-mingw
           tar -xf /tmp/llvm-mingw.tar.xz -C ~/llvm-mingw --strip-components=1
 
@@ -504,7 +504,7 @@ jobs:
 
       - name: Download Walnut with its compiler
         run: |
-          curl -fL --retry 5 --retry-delay 10 -o walnut.zip "${{ needs.version.outputs.walnut_base }}-${{ matrix.platform }}-with-compiler.zip"
+          curl -fL --retry 10 --retry-delay 20 --retry-all-errors -o walnut.zip "${{ needs.version.outputs.walnut_base }}-${{ matrix.platform }}-with-compiler.zip"
           mkdir -p walnut
           unzip -q walnut.zip -d walnut
           echo "GROVE_WALNUT=$(cygpath -m "$(ls -d "$PWD"/walnut/Walnut-*)/bin/walnut.exe")" >> "$GITHUB_ENV"
@@ -548,8 +548,8 @@ jobs:
       - name: Package
         run: |
           base="${{ needs.version.outputs.walnut_base }}-${{ matrix.platform }}"
-          curl -fL --retry 5 --retry-delay 10 -o walnut.zip "$base.zip"
-          curl -fL --retry 5 --retry-delay 10 -o walnut-with-compiler.zip "$base-with-compiler.zip"
+          curl -fL --retry 10 --retry-delay 20 --retry-all-errors -o walnut.zip "$base.zip"
+          curl -fL --retry 10 --retry-delay 20 --retry-all-errors -o walnut-with-compiler.zip "$base-with-compiler.zip"
           for variant in plain with-compiler; do
             if [ "$variant" = plain ]; then archive=walnut.zip; suffix=""; else archive=walnut-with-compiler.zip; suffix=-with-compiler; fi
             bash .github/scripts/stage.sh $archive exe/orchard.exe . stage-$variant
