@@ -87,7 +87,7 @@ extern "C++" from "<orchard/script/script_api.hpp>" {
         static function has_tag(const NativeEntity&: e, const string&: tag) -> bool;
         static function tagged_count(const string&: tag) -> long int;
         static function tagged_at(const string&: tag, long int: i) -> NativeEntity;
-        static function nearest_tagged(const string&: tag, const NativeEntity&: from) -> NativeEntity;
+        static function nearest_tagged(const string&: tag, const NativeEntity&: origin) -> NativeEntity;
         static function distance(const NativeEntity&: a, const NativeEntity&: b) -> short float;
         static function teleport(const NativeEntity&: e, short float: x, short float: y, short float: z) -> void;
         static function look_at(const NativeEntity&: e, short float: x, short float: y, short float: z) -> void;
@@ -633,9 +633,9 @@ function tagged_at(const string&: tag, long int: i) -> Entity {
     return out;
 } end function tagged_at
 
-function nearest_tagged(const string&: tag, const Entity&: from) -> Entity {
+function nearest_tagged(const string&: tag, const Entity&: origin) -> Entity {
     Entity: out;
-    out.raw = NativeWorld::nearest_tagged(tag, from.raw);
+    out.raw = NativeWorld::nearest_tagged(tag, origin.raw);
     return out;
 } end function nearest_tagged
 
