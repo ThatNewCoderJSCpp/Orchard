@@ -741,6 +741,9 @@ function open_context_menu(const string&: owner, const string&: id, short float:
 
 function handle_menu(const string&: key) -> void {
     string: r = call("menu_action", menu_target + "\t" + key);
+    if (r == "menu") then {
+        return;
+    }
     auto: f = r.split("\t");
     refresh();
     if (f[0] == "inspect" && f.size() > 1l) then {
@@ -878,6 +881,15 @@ function apply_outliner_prefs() -> void {
         grove::get_by_id("render-mode").set_value_string(mode);
         show("trace-info", f[7] != "off");
     }
+    if (f.size() > 14l) then {
+        if (f[14] == "1") then {
+            grove::get_by_id("files").add_class("folded");
+            grove::get_by_id("project-fold").set_inner_text("\u25B8");
+        } else then {
+            grove::get_by_id("files").remove_class("folded");
+            grove::get_by_id("project-fold").set_inner_text("\u25BE");
+        }
+    }
     filling = false;
     if (f[0] != outline_side) then {
         place_outliner(f[0]);
@@ -995,17 +1007,53 @@ function build_templates() -> void {
 function build_files() -> void {
     grove::Element: box = grove::get_by_id("files");
     clear(box);
-    auto: rows = call("files", "").split("\n");
+    auto: rows = call("file_tree", "").split("\n");
     for (long int: i = 0l; i < rows.size(); i += 1l) {
         auto: f = rows[i].split("\t");
-        if (f.size() < 2l) then {
+        if (f.size() < 4l) then {
             continue;
         }
-        string: path = f[1];
+        long int: depth = std::io::parse_int<long int>(f[0]);
+        string: kind = f[1];
+        string: path = f[3];
+        if (kind == "folder") then {
+            grove::Element: frow = el("row", "folder", "");
+            frow.set_style("padding", "3px 6px 3px " + (4l + depth * 14l).to_string() + "px");
+            string: arrow = "\u25BE";
+            if (f.size() > 4l && f[4] == "closed") then {
+                arrow = "\u25B8";
+            }
+            frow.append_child(el("text", "folder-arrow", arrow));
+            frow.append_child(el("text", "folder-name grow", f[2]));
+            if (f.size() > 5l) then {
+                frow.append_child(el("text", "count", f[5]));
+            }
+            frow.on("click", [path](grove::Event&: e) -> void {
+                call("toggle_folder", path);
+                build_files();
+            });
+            box.append_child(frow);
+            continue;
+        }
+        string: icon = "\u00B7";
+        if (kind == "scene") then {
+            icon = "\u25A3";
+        } else if (kind == "script") then {
+            icon = "{}";
+        } else if (kind == "graph") then {
+            icon = "\u25C7";
+        } else if (kind == "model") then {
+            icon = "\u25C6";
+        } else if (kind == "image") then {
+            icon = "\u25A8";
+        } else if (kind == "entity") then {
+            icon = "\u25C8";
+        }
         grove::Element: row = el("row", "file", "");
-        row.append_child(el("text", "kind", f[0]));
-        row.append_child(el("text", "", path));
-        string: kind = f[0];
+        row.set_style("padding", "3px 8px 3px " + (8l + depth * 14l).to_string() + "px");
+        row.set_attribute("title", path);
+        row.append_child(el("text", "file-icon muted", icon));
+        row.append_child(el("text", "grow", f[2]));
         row.on("click", [path, kind](grove::Event&: e) -> void {
             if (kind == "script") then {
                 open_script(path);
@@ -1466,6 +1514,53 @@ function collider_card(const string&: line) -> grove::Element {
         card.append_child(number_row("body", base + "amin", "Around from", f[27], "0", "360", "1", "slider"));
         card.append_child(number_row("body", base + "amax", "Around to", f[28], "0", "360", "1", "slider"));
         card.append_child(number_row("body", base + "shell", "Wall thickness (0 = solid)", f[29], "0", "5", "0.01", "box"));
+    }
+    if (f.size() > 44l && f[2] == "triangle") then {
+        card.append_child(el("div", "sub-title", "Triangle built from"));
+        grove::Element: rule = grove::create_element("input_select");
+        auto: rules = f[44].split(";");
+        for (long int: q = 0l; q < rules.size(); q += 1l) {
+            auto: kv = rules[q].split("|");
+            if (kv.size() < 2l) then {
+                continue;
+            }
+            grove::Element: opt = el("option", "", kv[1]);
+            opt.set_attribute("value", kv[0]);
+            rule.append_child(opt);
+        }
+        rule.set_value_string(f[35]);
+        rule.on("change", [base](grove::Event&: e) -> void {
+            set_component(base + "tri_rule", e.target().value_string());
+            fill_components();
+        });
+        card.append_child(rule);
+        string: r = f[35];
+        if (r == "sss") then {
+            card.append_child(number_row("body", base + "tri_a", "Side a (m)", f[36], "0.001", "1000", "0.05", "box"));
+            card.append_child(number_row("body", base + "tri_b", "Side b (m)", f[37], "0.001", "1000", "0.05", "box"));
+            card.append_child(number_row("body", base + "tri_c", "Side c (m)", f[38], "0.001", "1000", "0.05", "box"));
+        } else if (r == "sas") then {
+            card.append_child(number_row("body", base + "tri_b", "Side b (m)", f[37], "0.001", "1000", "0.05", "box"));
+            card.append_child(number_row("body", base + "tri_A", "Angle A between them (degrees)", f[39], "0.1", "179.9", "1", "box"));
+            card.append_child(number_row("body", base + "tri_c", "Side c (m)", f[38], "0.001", "1000", "0.05", "box"));
+        } else if (r == "asa") then {
+            card.append_child(number_row("body", base + "tri_B", "Angle B (degrees)", f[40], "0.1", "179.9", "1", "box"));
+            card.append_child(number_row("body", base + "tri_a", "Side a between them (m)", f[36], "0.001", "1000", "0.05", "box"));
+            card.append_child(number_row("body", base + "tri_C", "Angle C (degrees)", f[41], "0.1", "179.9", "1", "box"));
+        } else if (r == "aas") then {
+            card.append_child(number_row("body", base + "tri_A", "Angle A (degrees)", f[39], "0.1", "179.9", "1", "box"));
+            card.append_child(number_row("body", base + "tri_B", "Angle B (degrees)", f[40], "0.1", "179.9", "1", "box"));
+            card.append_child(number_row("body", base + "tri_a", "Side a, across from A (m)", f[36], "0.001", "1000", "0.05", "box"));
+        } else if (r == "ssa") then {
+            card.append_child(number_row("body", base + "tri_a", "Side a (m)", f[36], "0.001", "1000", "0.05", "box"));
+            card.append_child(number_row("body", base + "tri_b", "Side b (m)", f[37], "0.001", "1000", "0.05", "box"));
+            card.append_child(number_row("body", base + "tri_A", "Angle A, across from a (degrees)", f[39], "0.1", "179.9", "1", "box"));
+            card.append_child(switch_row("Use the wider triangle (when two fit)", f[42] == "1", base + "tri_wide"));
+        } else then {
+            card.append_child(number_row("body", base + "tri_b", "Leg b (m)", f[37], "0.001", "1000", "0.05", "box"));
+            card.append_child(number_row("body", base + "tri_c", "Leg c (m)", f[38], "0.001", "1000", "0.05", "box"));
+        }
+        card.append_child(el("div", "hint", f[43]));
     }
     if (f.size() > 17l) then {
         card.append_child(mix_row("Friction mix", f[14], f[16], base + "friction_mix"));
@@ -2730,6 +2825,19 @@ grove::get_by_id("details-open").on("change", [](grove::Event&: e) -> void {
 
 grove::get_by_id("outline-options").on("click", [](grove::Event&: e) -> void {
     grove::get_by_id("outline-settings").toggle_class("hidden");
+});
+
+grove::get_by_id("project-fold").on("click", [](grove::Event&: e) -> void {
+    grove::Element: box = grove::get_by_id("files");
+    if (box.has_class("folded")) then {
+        box.remove_class("folded");
+        grove::get_by_id("project-fold").set_inner_text("\u25BE");
+        call("set_pref", "files.folded\t0");
+    } else then {
+        box.add_class("folded");
+        grove::get_by_id("project-fold").set_inner_text("\u25B8");
+        call("set_pref", "files.folded\t1");
+    }
 });
 
 grove::get_by_id("outline-side").on("click", [](grove::Event&: e) -> void {

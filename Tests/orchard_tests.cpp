@@ -1414,7 +1414,65 @@ void test_terrain() {
     fs::remove_all(dir);
 }
 
+void test_triangles() {
+    orchard::Collider c;
+    c.shape = orchard::ColliderShape::triangle;
+    orchard::Vec3 sides, angles;
+    c.triangle = orchard::TriangleRule::sss;
+    c.triangle_sides = {3.0f, 4.0f, 5.0f};
+    check(orchard::solve_triangle(c, sides, angles) && near(angles.z, 90.0f, 0.05f), "SSS 3, 4, 5 has a right angle across from the 5");
+    c.triangle_sides = {1.0f, 1.0f, 3.0f};
+    std::string why;
+    check(!orchard::solve_triangle(c, sides, angles, &why) && !why.empty(), "SSS that breaks the triangle inequality is refused with a reason");
+    c.triangle = orchard::TriangleRule::sas;
+    c.triangle_sides = {0.0f, 4.0f, 3.0f};
+    c.triangle_angles.x = 90.0f;
+    check(orchard::solve_triangle(c, sides, angles) && near(sides.x, 5.0f, 1e-3f), "SAS with a right angle between 3 and 4 gives 5");
+    c.triangle = orchard::TriangleRule::asa;
+    c.triangle_sides.x = 2.0f;
+    c.triangle_angles.y = 60.0f;
+    c.triangle_angles.z = 60.0f;
+    check(orchard::solve_triangle(c, sides, angles) && near(sides.y, 2.0f, 1e-3f) && near(sides.z, 2.0f, 1e-3f), "ASA 60, 2, 60 is equilateral");
+    c.triangle = orchard::TriangleRule::aas;
+    c.triangle_sides.x = 1.0f;
+    c.triangle_angles.x = 30.0f;
+    c.triangle_angles.y = 90.0f;
+    check(orchard::solve_triangle(c, sides, angles) && near(sides.y, 2.0f, 1e-3f), "AAS 30, 90 with a = 1 gives a hypotenuse of 2");
+    c.triangle = orchard::TriangleRule::ssa;
+    c.triangle_sides = {1.2f, 1.5f, 0.0f};
+    c.triangle_angles.x = 40.0f;
+    orchard::Vec3 narrow, wide;
+    const bool n_ok = orchard::solve_triangle(c, narrow, angles);
+    c.triangle_wide = true;
+    const bool w_ok = orchard::solve_triangle(c, wide, angles);
+    check(n_ok && w_ok && std::fabs(narrow.z - wide.z) > 0.1f, "SSA with two answers gives both");
+    c.triangle_sides = {0.5f, 1.5f, 0.0f};
+    check(!orchard::solve_triangle(c, sides, angles), "SSA where side a can't reach is refused");
+    c.triangle = orchard::TriangleRule::right;
+    c.triangle_sides = {0.0f, 3.0f, 4.0f};
+    check(orchard::solve_triangle(c, sides, angles) && near(sides.x, 5.0f, 1e-3f) && near(angles.x, 90.0f, 0.05f), "a right triangle from legs 3 and 4");
+    check(orchard::fit_triangle_size(c) && near(c.size.x * c.size.y * 0.5f, 6.0f, 1e-2f), "fitting the size keeps the real area (6 m\u00B2)");
+    c.size.z = 2.0f;
+    check(near(orchard::collider_volume(c), 12.0f, 0.05f), "a triangle prism's volume is area times depth");
+    const std::vector<orchard::Vec3> corners = orchard::triangle_corners(c);
+    float best = 0.0f;
+    for (int i = 0; i < 3; ++i) best = std::max(best, orchard::length(corners[static_cast<std::size_t>(i)] - corners[static_cast<std::size_t>((i + 1) % 3)]));
+    check(near(best, 5.0f, 1e-3f), "the drawn corners have the real side lengths");
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity e = s.create("Ramp");
+    s.add_body(e);
+    *s.add_collider(e, orchard::ColliderShape::triangle) = c;
+    (*s.colliders(e))[0].triangle = orchard::TriangleRule::ssa;
+    (*s.colliders(e))[0].triangle_wide = true;
+    std::string err;
+    const auto back = orchard::Scene::load(s.save(), &err);
+    const std::vector<orchard::Collider>* bc = back ? back->colliders(back->find("Ramp")) : nullptr;
+    check(bc && bc->size() == 1 && (*bc)[0].shape == orchard::ColliderShape::triangle && (*bc)[0].triangle == orchard::TriangleRule::ssa && (*bc)[0].triangle_wide && near((*bc)[0].triangle_sides.z, 4.0f), "triangle colliders round trip " + err);
+    for (orchard::TriangleRule r : orchard::triangle_rules()) check(orchard::parse_triangle_rule(orchard::to_string(r)) == r, std::string("triangle rule round trip ") + orchard::to_string(r));
+}
+
 int main() {
+    test_triangles();
     test_terrain();
     test_math();
     test_scene();

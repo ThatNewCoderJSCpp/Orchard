@@ -491,10 +491,15 @@ private:
             if (f.dt > 0.0 && f.dt < 1.0 / 75.0 && m_trace_spp < (trace == "rt" ? 4 : 8)) ++m_trace_spp;
             else if (f.dt > 1.0 / 40.0 && m_trace_spp > 1) --m_trace_spp;
             m_gpu.set_trace_samples(m_trace_spp);
-            draw_editor_view(f, seconds);
             if (m_session.playing() || seconds > 0.0) lw.animate(m_scene, seconds);
             else lw.refresh_geometry(m_scene);
-            m_gpu.draw_traced_over(f, lw.lighting_scene(), preview, lw.camera_for(m_view, f.viewport_width, f.viewport_height), 0u);
+            if (m_gpu.draw_traced_over(f, lw.lighting_scene(), preview, lw.camera_for(m_view, f.viewport_width, f.viewport_height), 0u)) {
+                m_overlay_only = true;
+                draw_editor_view(f, seconds);
+                m_overlay_only = false;
+                return;
+            }
+            draw_editor_view(f, seconds);
             return;
         }
         draw_editor_view(f, seconds);
@@ -509,6 +514,7 @@ private:
             const std::string q = pref("viewport.quality", "medium");
             view_options.lighting_quality = q == "low" ? 0 : q == "high" ? 2 : q == "ultra" ? 3 : 1;
         }
+        view_options.overlay_only = m_overlay_only;
         view_options.move_gizmo = m_tool == "move" && !m_session.playing();
         view_options.rotate_gizmo = m_tool == "rotate" && !m_session.playing();
         view_options.scale_gizmo = m_tool == "scale" && !m_session.playing();
@@ -1643,7 +1649,49 @@ private:
                 const orchard::Collider& c = (*cs)[i];
                 const std::string base = "collider:" + std::to_string(i) + ":";
                 group("Collider " + std::to_string(i + 1));
-                out += field(base + "shape", "Shape", "select", orchard::to_string(c.shape), options_of({{"box", "Box"}, {"sphere", "Sphere"}, {"capsule", "Capsule"}, {"cylinder", "Cylinder"}, {"cone", "Cone"}, {"rounded-box", "Rounded box"}, {"sphere-section", "Sphere section (hemisphere, dome, bowl, wedge)"}}));
+                out += field(base + "shape", "Shape", "select", orchard::to_string(c.shape), options_of({{"box", "Box"}, {"sphere", "Sphere"}, {"capsule", "Capsule"}, {"cylinder", "Cylinder"}, {"cone", "Cone"}, {"rounded-box", "Rounded box"}, {"sphere-section", "Sphere section (hemisphere, dome, bowl, wedge)"}, {"triangle", "Triangle prism"}}));
+                if (c.shape == orchard::ColliderShape::triangle) {
+                    std::vector<std::pair<std::string, std::string>> rules;
+                    for (orchard::TriangleRule r : orchard::triangle_rules()) rules.emplace_back(orchard::to_string(r), orchard::triangle_rule_label(r));
+                    out += field(base + "tri_rule", "Triangle built from", "select", orchard::to_string(c.triangle), options_of(rules));
+                    const std::string sa = number(c.triangle_sides.x), sb = number(c.triangle_sides.y), sc = number(c.triangle_sides.z);
+                    const std::string aa = number(c.triangle_angles.x), ab = number(c.triangle_angles.y), ac = number(c.triangle_angles.z);
+                    orchard::Vec3 ts, ta;
+                    std::string why;
+                    const std::string info = orchard::solve_triangle(c, ts, ta, &why) ? "Sides " + number(ts.x) + ", " + number(ts.y) + ", " + number(ts.z) + " m; angles " + number(std::round(ta.x * 10.0f) / 10.0f) + ", " + number(std::round(ta.y * 10.0f) / 10.0f) + ", " + number(std::round(ta.z * 10.0f) / 10.0f) + " degrees. Depth is size Z." : "No triangle: " + why;
+                    switch (c.triangle) {
+                    case orchard::TriangleRule::sss:
+                        out += field(base + "tri_a", "Side a (m)", "float", sa, "0.05");
+                        out += field(base + "tri_b", "Side b (m)", "float", sb, "0.05");
+                        out += field(base + "tri_c", "Side c (m)", "float", sc, "0.05", info);
+                        break;
+                    case orchard::TriangleRule::sas:
+                        out += field(base + "tri_b", "Side b (m)", "float", sb, "0.05");
+                        out += field(base + "tri_A", "Angle A between them (degrees)", "float", aa, "1");
+                        out += field(base + "tri_c", "Side c (m)", "float", sc, "0.05", info);
+                        break;
+                    case orchard::TriangleRule::asa:
+                        out += field(base + "tri_B", "Angle B (degrees)", "float", ab, "1");
+                        out += field(base + "tri_a", "Side a between them (m)", "float", sa, "0.05");
+                        out += field(base + "tri_C", "Angle C (degrees)", "float", ac, "1", info);
+                        break;
+                    case orchard::TriangleRule::aas:
+                        out += field(base + "tri_A", "Angle A (degrees)", "float", aa, "1");
+                        out += field(base + "tri_B", "Angle B (degrees)", "float", ab, "1");
+                        out += field(base + "tri_a", "Side a, across from A (m)", "float", sa, "0.05", info);
+                        break;
+                    case orchard::TriangleRule::ssa:
+                        out += field(base + "tri_a", "Side a (m)", "float", sa, "0.05");
+                        out += field(base + "tri_b", "Side b (m)", "float", sb, "0.05");
+                        out += field(base + "tri_A", "Angle A, across from a (degrees)", "float", aa, "1");
+                        out += field(base + "tri_wide", "Use the wider triangle (when two fit)", "bool", yesno(c.triangle_wide), "", info);
+                        break;
+                    case orchard::TriangleRule::right:
+                        out += field(base + "tri_b", "Leg b (m)", "float", sb, "0.05");
+                        out += field(base + "tri_c", "Leg c (m)", "float", sc, "0.05", info);
+                        break;
+                    }
+                }
                 out += field(base + "size", "Size", "vec3", vec_text(c.size), "0.1");
                 out += field(base + "offset", "Offset", "vec3", vec_text(c.offset), "0.1");
                 const orchard::Vec3 wscale = xylem::world_scale(m_scene, e);
@@ -2115,6 +2163,7 @@ private:
             return ok ? "ok" : "";
         }
         if (key.rfind("collider:", 0) == 0 && ends(":shape")) return set_component(e, key, value) ? "rebuild" : "";
+        if (key.rfind("collider:", 0) == 0 && key.find(":tri_") != std::string::npos) return set_component(e, key, value) ? "rebuild" : "";
         if (key.rfind("collider:", 0) == 0 && (ends(":mass") || ends(":density") || key.find(":lock_") != std::string::npos)) return set_component(e, key, value) ? "rebuild" : "";
         if (key == "v0" || key == "spin0" || key == "accel") return set_component(e, key, value) ? "ok" : "";
         if (key == "body_type") return set_component(e, key, value) ? "rebuild" : "";
@@ -2958,7 +3007,28 @@ private:
             mv.wish = orchard::length(move) > 0.0f ? orchard::normalize(move) * speed : orchard::Vec3{};
             mv.jump = keys.key_down("space");
             mv.jump_speed = c->jump_speed;
+            mv.ride_height = 0.05f;
             world->move_character(rider, mv, dt);
+            if (orchard::Transform* rt = m_scene.transform(rider)) {
+                orchard::Vec3 face = orchard::rotate(xylem::world_rotation(m_scene, rider), orchard::Vec3{0.0f, 0.0f, 1.0f});
+                face = face - up * orchard::dot(face, up);
+                if (orchard::length(face) > 1e-3f) {
+                    face = orchard::normalize(face);
+                    const float yaw = std::atan2(orchard::dot(orchard::cross(face, flat_forward), up), orchard::dot(face, flat_forward));
+                    if (std::fabs(yaw) > 0.002f) {
+                        const orchard::Quat turn{up.x * std::sin(yaw * 0.5f), up.y * std::sin(yaw * 0.5f), up.z * std::sin(yaw * 0.5f), std::cos(yaw * 0.5f)};
+                        const orchard::Entity rp = m_scene.parent(rider);
+                        if (m_scene.alive(rp)) {
+                            const orchard::Quat pr = xylem::world_rotation(m_scene, rp);
+                            const orchard::Quat pinv{-pr.x, -pr.y, -pr.z, pr.w};
+                            rt->rotation = orchard::normalize(pinv * turn * pr * rt->rotation);
+                        } else {
+                            rt->rotation = orchard::normalize(turn * rt->rotation);
+                        }
+                        world->moved(rider);
+                    }
+                }
+            }
             const orchard::Quat want = camera_rotation(look);
             const orchard::Entity parent = m_scene.parent(cam);
             if (m_scene.alive(parent)) {
@@ -3206,32 +3276,117 @@ private:
         return "ok";
     }
 
-    std::vector<grove::MenuItem> menu_items(orchard::Entity e) const {
-        std::vector<grove::MenuItem> items;
-        if (!m_scene.alive(e)) {
-            items.push_back(grove::menu_item("add:box", "Add a physics box"));
-            items.push_back(grove::menu_item("add:ball", "Add a physics ball"));
-            items.push_back(grove::menu_item("add:ground", "Add a floor"));
-            items.push_back(grove::menu_item("add:trigger", "Add a trigger zone"));
-            items.push_back(grove::menu_item("add:light", "Add a light"));
-            items.push_back(grove::menu_item("add:camera", "Add a camera (from this view)"));
-            items.push_back(grove::menu_item("add:player-camera", "Add a player camera (walk with W A S D)"));
-            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) items.push_back(grove::menu_item(std::string("add:physical-player:") + orchard::to_string(hk), std::string("Add a physical player: ") + orchard::humanoid_label(hk)));
-            items.push_back(grove::menu_item("add:water", "Add water"));
-            items.push_back(grove::menu_item("add:pool", "Add a pool (walls and water)"));
-            items.push_back(grove::menu_item("add:hemisphere", "Add a hemisphere"));
-            if (m_scene.dimension() == orchard::Dimension::three_d) {
-                items.push_back(grove::menu_item("add:terrain:hills", "Add terrain (hills; pick other shapes in its properties)"));
-                items.push_back(grove::menu_item("add:terrain:flat", "Add flat terrain (to sculpt with B)"));
-                items.push_back(grove::menu_item("add:terrain:forest", "Add a forest (1 km of hills with trees and rocks)"));
+    static std::string title_case(const std::string& text) {
+        std::string out = text;
+        bool start = true;
+        for (char& ch : out) {
+            if (ch == '-' || ch == '_') {
+                ch = ' ';
+                start = true;
+                continue;
             }
-            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) items.push_back(grove::menu_item(std::string("add:human:") + orchard::to_string(hk), std::string("Add a character: ") + orchard::humanoid_label(hk)));
-            items.push_back(grove::menu_item("add:sparks", "Add sparks"));
-            items.push_back(grove::menu_item("add:smoke", "Add smoke"));
-            items.push_back(grove::menu_item("add:fire", "Add fire"));
-            items.push_back(grove::menu_item("add:", "Add an empty"));
+            if (start) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            start = ch == ' ';
+        }
+        return out;
+    }
+
+    std::vector<grove::MenuItem> add_menu_items() const {
+        const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
+        std::vector<grove::MenuItem> items;
+        auto add = [&](const std::string& value, const std::string& label) { items.push_back(grove::menu_item(value, label)); };
+        auto page = [&](const std::string& id, const std::string& label) { items.push_back(grove::menu_item("page:" + id, label, "\u25B8")); };
+        auto header = [&](const std::string& label) { items.push_back(grove::menu_item("", label, "", true)); };
+        auto line = [&] {
+            grove::MenuItem sep;
+            sep.separator = true;
+            items.push_back(sep);
+        };
+        const std::string& at = m_menu_page;
+        if (at.empty()) {
+            header("Add to the scene");
+            page("player", "Physical player");
+            page("physics", "Physics object");
+            if (!flat) page("terrain", "Terrain");
+            page("characters", "Character colliders");
+            page("particles", "Particles");
+            line();
+            page("water", "Water");
+            page("lights", "Lights");
+            page("cameras", "Cameras");
+            page("level", "Floors and zones");
+            line();
+            add("add:", "Empty entity");
             return items;
         }
+        items.push_back(grove::menu_item(at == "triangle" ? "page:physics" : "page:", "\u2039 Back"));
+        if (at == "player") {
+            header("A body you walk around in (W A S D, Space, Shift)");
+            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) add(std::string("add:physical-player:") + orchard::to_string(hk), orchard::humanoid_label(hk));
+            line();
+            add("add:player-camera", "Walking camera only (no body)");
+        } else if (at == "physics") {
+            header("Falls and gets pushed around");
+            add("add:box", "Box");
+            add("add:ball", "Ball");
+            add("add:shape:capsule", "Capsule");
+            add("add:shape:rounded-box", "Rounded box");
+            add("add:triangle:sss", "Triangle (equilateral)");
+            page("triangle", "Triangle from SSS, SAS, ASA...");
+            if (!flat) {
+                add("add:shape:cylinder", "Cylinder");
+                add("add:shape:cone", "Cone");
+                add("add:hemisphere", "Hemisphere");
+                add("add:shape:dome", "Dome (shallow cap)");
+                add("add:shape:bowl", "Bowl (hollow, open top)");
+            }
+        } else if (at == "triangle") {
+            header("Triangle prism built from");
+            for (orchard::TriangleRule r : orchard::triangle_rules()) add(std::string("add:triangle:") + orchard::to_string(r), orchard::triangle_rule_label(r));
+        } else if (at == "terrain") {
+            header("Ground to walk on (pick other shapes in its properties)");
+            for (const std::string& name : orchard::terrain_presets()) {
+                std::string label = title_case(name);
+                if (name == "flat") label = "Flat (to sculpt with B)";
+                else if (name == "forest") label = "Forest (1 km of hills with trees and rocks)";
+                add("add:terrain:" + name, label);
+            }
+        } else if (at == "characters") {
+            header("Colliders shaped like a person (no controls)");
+            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) add(std::string("add:human:") + orchard::to_string(hk), orchard::humanoid_label(hk));
+        } else if (at == "particles") {
+            header("Particle effects");
+            for (const std::string& name : orchard::Emitter::presets()) add("add:particles:" + name, title_case(name));
+        } else if (at == "water") {
+            header("Water");
+            add("add:pool", "Pool (walls and water)");
+            add("add:water", "Water on its own");
+        } else if (at == "lights") {
+            header("Lights");
+            add("add:light", "Point light");
+            add("add:light:spot", "Spot light");
+            add("add:light:sun", "Sun (lights everything from one direction)");
+            add("add:light:rectangle", "Rectangle area light");
+            add("add:light:disk", "Disk area light");
+            add("add:light:sphere", "Sphere light");
+            add("add:light:tube", "Tube light");
+        } else if (at == "cameras") {
+            header("Cameras");
+            add("add:camera", "Camera (from this view)");
+            add("add:player-camera", "Walking camera (W A S D)");
+            if (!flat) add("add:camera:fly", "Flying camera (W A S D, E and Q)");
+        } else if (at == "level") {
+            header("Floors and zones");
+            add("add:ground", "Floor");
+            add("add:trigger", "Trigger zone");
+            add("add:", "Empty entity");
+        }
+        return items;
+    }
+
+    std::vector<grove::MenuItem> menu_items(orchard::Entity e) const {
+        std::vector<grove::MenuItem> items;
+        if (!m_scene.alive(e)) return add_menu_items();
         const bool busy = m_session.playing() || m_session.building();
         items.push_back(grove::menu_item("inspect", "Edit properties…", "Enter"));
         items.push_back(grove::menu_item("details", "Show details"));
@@ -3274,6 +3429,14 @@ private:
     }
 
     std::string menu_action(orchard::Entity e, const std::string& action) {
+        if (action.rfind("page:", 0) == 0) {
+            m_menu_page = action.substr(5);
+            grove::Node* owner = m_doc.find_by_id(m_menu_owner);
+            if (owner && grove::open_menu(m_doc, *owner, add_menu_items(), m_menu_x, m_menu_y)) return "menu";
+            m_menu_page.clear();
+            return "menu";
+        }
+        m_menu_page.clear();
         if (action.rfind("add:", 0) == 0) {
             const std::string kind = action.substr(4);
             orchard::Entity made;
@@ -3531,10 +3694,27 @@ private:
                      + "\t" + number(c.rounding) + "\t" + number(c.rolling_friction) + "\t" + number(c.spinning_friction)
                      + "\t" + number(c.grip.x) + "\t" + number(c.grip.y) + "\t" + number(c.grip.z) + "\t" + shape_names(flat)
                      + "\t" + number(c.polar_min) + "\t" + number(c.polar_max) + "\t" + number(c.azimuth_min) + "\t" + number(c.azimuth_max) + "\t" + number(c.shell) + "\t" + clean(c.source)
-                     + "\t" + number(mass) + "\t" + lock_letters(c) + "\t" + clean(c.name) + "\t" + (flat ? "kg/m\u00B2" : "\u00D7 water") + "\n";
+                     + "\t" + number(mass) + "\t" + lock_letters(c) + "\t" + clean(c.name) + "\t" + (flat ? "kg/m\u00B2" : "\u00D7 water")
+                     + "\t" + triangle_fields(c) + "\n";
             }
         }
         return out;
+    }
+
+    static std::string triangle_fields(const orchard::Collider& c) {
+        orchard::Vec3 sides, angles;
+        std::string why;
+        std::string info;
+        if (orchard::solve_triangle(c, sides, angles, &why)) {
+            info = "Sides a " + number(sides.x) + ", b " + number(sides.y) + ", c " + number(sides.z) + " m; angles A " + number(std::round(angles.x * 10.0f) / 10.0f) + "\u00B0, B " + number(std::round(angles.y * 10.0f) / 10.0f) + "\u00B0, C " + number(std::round(angles.z * 10.0f) / 10.0f) + "\u00B0";
+        } else {
+            info = "No triangle: " + why;
+        }
+        std::string rules;
+        for (orchard::TriangleRule r : orchard::triangle_rules()) rules += (rules.empty() ? "" : ";") + std::string(orchard::to_string(r)) + "|" + orchard::triangle_rule_label(r);
+        return std::string(orchard::to_string(c.triangle)) + "\t" + number(c.triangle_sides.x) + "\t" + number(c.triangle_sides.y) + "\t" + number(c.triangle_sides.z)
+             + "\t" + number(c.triangle_angles.x) + "\t" + number(c.triangle_angles.y) + "\t" + number(c.triangle_angles.z) + "\t" + (c.triangle_wide ? "1" : "0")
+             + "\t" + clean(info) + "\t" + rules;
     }
 
     static std::string lock_letters(const orchard::Collider& c) {
@@ -3709,7 +3889,40 @@ private:
             if (what == "shape") {
                 const std::optional<orchard::ColliderShape> shape = orchard::parse_collider_shape(value);
                 if (!shape) return false;
+                const bool to_triangle = *shape == orchard::ColliderShape::triangle && c.shape != orchard::ColliderShape::triangle;
                 c.shape = *shape;
+                if (to_triangle) {
+                    const float side = std::max(c.size.x, c.size.y);
+                    c.triangle = orchard::TriangleRule::sss;
+                    c.triangle_sides = {side, side, side};
+                    orchard::fit_triangle_size(c);
+                }
+            } else if (what.rfind("tri_", 0) == 0) {
+                if (what == "tri_rule") {
+                    const std::optional<orchard::TriangleRule> rule = orchard::parse_triangle_rule(value);
+                    if (!rule) return false;
+                    orchard::Vec3 sides, angles;
+                    if (orchard::solve_triangle(c, sides, angles)) {
+                        c.triangle_sides = sides;
+                        c.triangle_angles = angles;
+                    }
+                    c.triangle = *rule;
+                    if (*rule == orchard::TriangleRule::right) {
+                        c.triangle_angles.x = 90.0f;
+                    }
+                } else if (what == "tri_wide") {
+                    c.triangle_wide = on;
+                } else {
+                    if (!(v > 0.0f)) return false;
+                    if (what == "tri_a") c.triangle_sides.x = v;
+                    else if (what == "tri_b") c.triangle_sides.y = v;
+                    else if (what == "tri_c") c.triangle_sides.z = v;
+                    else if (what == "tri_A") c.triangle_angles.x = std::min(v, 179.9f);
+                    else if (what == "tri_B") c.triangle_angles.y = std::min(v, 179.9f);
+                    else if (what == "tri_C") c.triangle_angles.z = std::min(v, 179.9f);
+                    else return false;
+                }
+                orchard::fit_triangle_size(c);
             } else if (what == "source") {
                 c.source = value;
             } else if (what == "ox") c.offset.x = v;
@@ -3821,7 +4034,13 @@ private:
         const orchard::Vec3 y_axis{0.0f, 1.0f, 0.0f};
         const orchard::Vec3 axis = orchard::cross(y_axis, up);
         const float d = orchard::dot(y_axis, up);
-        t->rotation = d < -0.9999f ? orchard::Quat{1.0f, 0.0f, 0.0f, 0.0f} : orchard::normalize(orchard::Quat{axis.x, axis.y, axis.z, 1.0f + d});
+        const orchard::Quat stand = d < -0.9999f ? orchard::Quat{1.0f, 0.0f, 0.0f, 0.0f} : orchard::normalize(orchard::Quat{axis.x, axis.y, axis.z, 1.0f + d});
+        look = orchard::normalize(look);
+        orchard::Vec3 face = orchard::rotate(stand, orchard::Vec3{0.0f, 0.0f, 1.0f});
+        face = face - up * orchard::dot(face, up);
+        const float yaw = std::atan2(orchard::dot(orchard::cross(face, look), up), orchard::dot(face, look));
+        const orchard::Quat turn{up.x * std::sin(yaw * 0.5f), up.y * std::sin(yaw * 0.5f), up.z * std::sin(yaw * 0.5f), std::cos(yaw * 0.5f)};
+        t->rotation = orchard::normalize(turn * stand);
         const orchard::Quat inv{-t->rotation.x, -t->rotation.y, -t->rotation.z, t->rotation.w};
         m_scene.transform(cam)->rotation = orchard::normalize(inv * camera_rotation(look));
         return e;
@@ -3834,6 +4053,115 @@ private:
             if (kind.size() > 16) hk = orchard::parse_humanoid_kind(kind.substr(16));
             if (!hk) return orchard::Entity{};
             return add_physical_player(*hk, parent);
+        }
+        if (kind.rfind("shape:", 0) == 0 || kind.rfind("triangle:", 0) == 0) {
+            const bool tri = kind.rfind("triangle:", 0) == 0;
+            const std::string what = kind.substr(tri ? 9 : 6);
+            std::optional<orchard::ColliderShape> shape = tri ? std::optional<orchard::ColliderShape>(orchard::ColliderShape::triangle) : orchard::parse_collider_shape(what);
+            if (!shape) return orchard::Entity{};
+            if (flat && orchard::collider_shape_3d_only(*shape)) return orchard::Entity{};
+            const orchard::Entity e = m_scene.create(tri ? "Triangle" : title_case(what), parent);
+            m_scene.add_body(e);
+            orchard::Collider* c = m_scene.add_collider(e, *shape);
+            if (tri) {
+                const std::optional<orchard::TriangleRule> rule = orchard::parse_triangle_rule(what);
+                c->triangle = rule ? *rule : orchard::TriangleRule::sss;
+                switch (c->triangle) {
+                case orchard::TriangleRule::sss: c->triangle_sides = {1.0f, 1.0f, 1.0f}; break;
+                case orchard::TriangleRule::sas: c->triangle_sides = {1.0f, 1.0f, 1.5f}; c->triangle_angles.x = 60.0f; break;
+                case orchard::TriangleRule::asa: c->triangle_sides.x = 1.5f; c->triangle_angles.y = 50.0f; c->triangle_angles.z = 60.0f; break;
+                case orchard::TriangleRule::aas: c->triangle_sides.x = 1.0f; c->triangle_angles.x = 40.0f; c->triangle_angles.y = 60.0f; break;
+                case orchard::TriangleRule::ssa: c->triangle_sides = {1.2f, 1.5f, 1.0f}; c->triangle_angles.x = 40.0f; break;
+                case orchard::TriangleRule::right: c->triangle_sides = {1.0f, 1.0f, 1.5f}; c->triangle_angles.x = 90.0f; break;
+                }
+                c->size.z = 1.0f;
+                orchard::fit_triangle_size(*c);
+            } else if (what == "capsule") {
+                c->size = {0.6f, 1.6f, 0.6f};
+            } else if (what == "dome" || what == "bowl") {
+                c->shape = orchard::ColliderShape::sphere_section;
+                c->polar_min = what == "bowl" ? 90.0f : 0.0f;
+                c->polar_max = what == "bowl" ? 180.0f : 60.0f;
+                c->shell = what == "bowl" ? 0.06f : 0.0f;
+                c->size = {1.5f, 1.5f, 1.5f};
+            }
+            orchard::Transform* t = m_scene.transform(e);
+            if (flat) {
+                const orchard::Vec2 cc = m_view.pan_camera().center;
+                t->position = {cc.x, cc.y + 3.0f, 0.0f};
+            } else {
+                t->position = m_view.orbit_camera().target + camera_up_axis() * 3.0f;
+            }
+            return e;
+        }
+        if (kind.rfind("light:", 0) == 0) {
+            const std::string type = kind.substr(6);
+            orchard::Light l;
+            std::string name = "Light";
+            if (type == "spot") {
+                l = orchard::Light::spot();
+                name = "Spot light";
+            } else if (type == "sun" || type == "directional") {
+                l = orchard::Light::sun();
+                name = "Sun";
+            } else if (type == "rectangle" || type == "area") {
+                l = orchard::Light::area();
+                name = "Area light";
+            } else if (type == "disk") {
+                l.type = orchard::LightType::disk;
+                l.radius = 0.5f;
+                name = "Disk light";
+            } else if (type == "sphere") {
+                l.type = orchard::LightType::sphere;
+                l.radius = 0.25f;
+                name = "Sphere light";
+            } else if (type == "tube") {
+                l.type = orchard::LightType::tube;
+                l.length = 1.5f;
+                l.radius = 0.05f;
+                name = "Tube light";
+            } else if (type != "point") {
+                return orchard::Entity{};
+            }
+            const orchard::Entity e = m_scene.create(name, parent);
+            m_scene.add_light(e) = l;
+            orchard::Transform* t = m_scene.transform(e);
+            if (flat) {
+                const orchard::Vec2 cc = m_view.pan_camera().center;
+                t->position = {cc.x, cc.y + 3.0f, 0.0f};
+                return e;
+            }
+            const orchard::Vec3 up = camera_up_axis();
+            const orchard::Vec3 target = m_view.orbit_camera().target;
+            t->position = target + up * (l.type == orchard::LightType::directional ? 8.0f : 3.0f);
+            if (l.type == orchard::LightType::spot || l.type == orchard::LightType::rectangle || l.type == orchard::LightType::disk) {
+                t->rotation = camera_rotation(target - t->position + camera_forward_axis() * 0.01f);
+            } else if (l.type == orchard::LightType::directional) {
+                orchard::Vec3 side = orchard::cross(up, camera_forward_axis());
+                if (orchard::length(side) < 1e-3f) side = orchard::Vec3{1.0f, 0.0f, 0.0f};
+                t->rotation = camera_rotation(up * -1.0f + orchard::normalize(side) * 0.4f + camera_forward_axis() * 0.5f);
+            }
+            return e;
+        }
+        if (kind.rfind("particles:", 0) == 0) {
+            const std::optional<orchard::Emitter> named = orchard::Emitter::named(kind.substr(10));
+            if (!named) return orchard::Entity{};
+            const orchard::Entity e = m_scene.create(title_case(kind.substr(10)), parent);
+            m_scene.add_emitter(e) = *named;
+            orchard::Transform* t = m_scene.transform(e);
+            if (flat) {
+                const orchard::Vec2 cc = m_view.pan_camera().center;
+                t->position = {cc.x, cc.y + 0.5f, 0.0f};
+            } else {
+                t->position = m_view.orbit_camera().target + camera_up_axis() * 0.5f;
+            }
+            return e;
+        }
+        if (kind == "camera:fly") {
+            const orchard::Entity e = add_preset("camera", parent);
+            if (orchard::Camera* cam = m_scene.camera(e)) cam->control = orchard::CameraControl::fly;
+            m_scene.set_name(e, "Flying camera");
+            return e;
         }
         if (kind.rfind("human:", 0) == 0) {
             const std::optional<orchard::HumanoidKind> hk = orchard::parse_humanoid_kind(kind.substr(6));
@@ -4811,6 +5139,76 @@ private:
             return out;
         });
 
+        native("file_tree", [this](const std::vector<std::string>&) {
+            std::string out;
+            if (!m_project) return out;
+            std::vector<std::pair<std::string, std::string>> all;
+            for (const std::string& s : m_project->scenes()) all.emplace_back(s, "scene");
+            for (const std::string& s : m_project->scripts()) all.emplace_back(s, "script");
+            for (const std::string& s : m_project->graphs()) all.emplace_back(s, "graph");
+            for (const std::string& s : m_project->entity_templates()) all.emplace_back(s, "entity");
+            for (const std::string& s : m_project->models()) all.emplace_back(s, "model");
+            for (const std::string& s : m_project->images()) all.emplace_back(s, "image");
+            std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) {
+                const std::size_t sa = std::count(a.first.begin(), a.first.end(), '/'), sb = std::count(b.first.begin(), b.first.end(), '/');
+                const std::string da = a.first.substr(0, a.first.rfind('/') == std::string::npos ? 0 : a.first.rfind('/'));
+                const std::string db = b.first.substr(0, b.first.rfind('/') == std::string::npos ? 0 : b.first.rfind('/'));
+                if (da != db) {
+                    if (sa == 0 || sb == 0) return sa != 0;
+                    std::string ka = da, kb = db;
+                    std::replace(ka.begin(), ka.end(), '/', '\x01');
+                    std::replace(kb.begin(), kb.end(), '/', '\x01');
+                    return ka < kb;
+                }
+                return a.first < b.first;
+            });
+            all.erase(std::unique(all.begin(), all.end(), [](const auto& a, const auto& b) { return a.first == b.first; }), all.end());
+            const std::string closed = pref("files.closed", "");
+            auto is_closed = [&closed](const std::string& folder) { return closed.find("|" + folder + "|") != std::string::npos; };
+            std::set<std::string> shown;
+            for (const auto& [path, kind] : all) {
+                std::vector<std::string> parts;
+                std::size_t at = 0;
+                while (true) {
+                    const std::size_t slash = path.find('/', at);
+                    if (slash == std::string::npos) break;
+                    parts.push_back(path.substr(0, slash));
+                    at = slash + 1;
+                }
+                bool hidden = false;
+                for (std::size_t d = 0; d < parts.size() && !hidden; ++d) {
+                    const std::string& folder = parts[d];
+                    if (!shown.count(folder)) {
+                        shown.insert(folder);
+                        std::size_t count = 0;
+                        for (const auto& other : all)
+                            if (other.first.rfind(folder + "/", 0) == 0) ++count;
+                        const std::size_t cut = folder.rfind('/');
+                        out += std::to_string(d) + "\tfolder\t" + (cut == std::string::npos ? folder : folder.substr(cut + 1)) + "\t" + folder + "\t" + (is_closed(folder) ? "closed" : "open") + "\t" + std::to_string(count) + "\n";
+                    }
+                    if (is_closed(folder)) hidden = true;
+                }
+                if (hidden) continue;
+                const std::size_t cut = path.rfind('/');
+                out += std::to_string(parts.size()) + "\t" + kind + "\t" + (cut == std::string::npos ? path : path.substr(cut + 1)) + "\t" + path + "\t\t\n";
+            }
+            return out;
+        });
+
+        native("toggle_folder", [this](const std::vector<std::string>& f) {
+            const std::string folder = arg(f, 0);
+            if (folder.empty() || folder.find('|') != std::string::npos) return std::string();
+            std::string closed = pref("files.closed", "");
+            const std::string key = "|" + folder + "|";
+            const std::size_t at = closed.find(key);
+            if (at != std::string::npos) closed.erase(at, key.size() - 1);
+            else closed += (closed.empty() ? "|" : "") + folder + "|";
+            if (closed == "|") closed.clear();
+            m_prefs["files.closed"] = closed;
+            save_prefs();
+            return std::string("ok");
+        });
+
         native("place_model", [this](const std::vector<std::string>& f) {
             if (!m_project) return std::string("error\topen a project first");
             if (m_session.playing()) return std::string("error\tstop playing first");
@@ -4932,7 +5330,7 @@ private:
         });
 
         native("outliner_prefs", [this](const std::vector<std::string>&) {
-            return pref("outliner.side", "left") + "\t" + pref("outliner.group", "sections") + "\t" + pref("outliner.sort", "scene") + "\t" + pref("outliner.empty_sections", "0") + "\t" + pref("outliner.collapsed", "") + "\t" + pref("preview_effects", "0") + "\t" + pref("details.open", "1") + "\t" + pref("viewport.trace", "off") + "\t" + pref("viewport.cull", "1") + "\t" + pref("viewport.shadows", "1") + "\t" + pref("viewport.lights", "1") + "\t" + pref("viewport.materials", "1") + "\t" + pref("viewport.particles", "1") + "\t" + pref("viewport.quality", "medium");
+            return pref("outliner.side", "left") + "\t" + pref("outliner.group", "sections") + "\t" + pref("outliner.sort", "scene") + "\t" + pref("outliner.empty_sections", "0") + "\t" + pref("outliner.collapsed", "") + "\t" + pref("preview_effects", "0") + "\t" + pref("details.open", "1") + "\t" + pref("viewport.trace", "off") + "\t" + pref("viewport.cull", "1") + "\t" + pref("viewport.shadows", "1") + "\t" + pref("viewport.lights", "1") + "\t" + pref("viewport.materials", "1") + "\t" + pref("viewport.particles", "1") + "\t" + pref("viewport.quality", "medium") + "\t" + pref("files.folded", "0");
         });
 
         native("set_pref", [this](const std::vector<std::string>& f) {
@@ -5039,7 +5437,11 @@ private:
                 m_selected = e;
                 redraw();
             }
-            const bool ok = grove::open_menu(m_doc, *owner, menu_items(e), std::atof(arg(f, 2).c_str()), std::atof(arg(f, 3).c_str()));
+            m_menu_page.clear();
+            m_menu_owner = arg(f, 0);
+            m_menu_x = std::atof(arg(f, 2).c_str());
+            m_menu_y = std::atof(arg(f, 3).c_str());
+            const bool ok = grove::open_menu(m_doc, *owner, menu_items(e), m_menu_x, m_menu_y);
             return ok ? (m_scene.alive(e) ? std::to_string(e.id()) : std::string("none")) : std::string();
         });
 
@@ -5112,6 +5514,11 @@ private:
     bool m_player_ready = false;
     std::string m_component_error;
     int m_trace_spp = 1;
+    std::string m_menu_page;
+    std::string m_menu_owner;
+    double m_menu_x = 0.0;
+    double m_menu_y = 0.0;
+    bool m_overlay_only = false;
     float m_player_yaw = 0.0f;
     float m_player_pitch = 0.0f;
     float m_player_fall = 0.0f;

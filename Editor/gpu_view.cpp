@@ -159,6 +159,17 @@ Mat4 shape_matrix(const Mat4& world, const Collider& c) {
     return world * translation(c.offset) * scaling(size);
 }
 
+void prism_edges(fg::Renderer& r, const Mat4& world, const Collider& c, Color color, float width, bool depth) {
+    const std::vector<Vec3> p = triangle_prism_points(c);
+    const Mat4 m = world * translation(c.offset);
+    for (int k = 0; k < 3; ++k) {
+        const int n = (k + 1) % 3;
+        r.draw_line_3d(point(m, p[static_cast<std::size_t>(2 * k)]), point(m, p[static_cast<std::size_t>(2 * n)]), color, width, depth);
+        r.draw_line_3d(point(m, p[static_cast<std::size_t>(2 * k + 1)]), point(m, p[static_cast<std::size_t>(2 * n + 1)]), color, width, depth);
+        r.draw_line_3d(point(m, p[static_cast<std::size_t>(2 * k)]), point(m, p[static_cast<std::size_t>(2 * k + 1)]), color, width, depth);
+    }
+}
+
 void box_edges(fg::Renderer& r, const Mat4& m, Color color, float width, bool depth) {
     vector3d p[8];
     for (int i = 0; i < 8; ++i) p[i] = point(m, {(i & 1) ? 0.5f : -0.5f, (i & 2) ? 0.5f : -0.5f, (i & 4) ? 0.5f : -0.5f});
@@ -296,6 +307,7 @@ struct GpuView::Meshes {
     const std::vector<xylem::FluidDraw>* fluids = nullptr;
     std::vector<fg::Mesh3D> fluid_meshes;
     std::map<std::array<int, 5>, fg::Mesh3D> sections;
+    std::map<std::array<int, 6>, fg::Mesh3D> prisms;
     fg::TextureLibrary textures;
     std::map<std::uint64_t, std::shared_ptr<fizmo::images::BitmapImage>> fluid_images;
     std::map<std::uint64_t, fg::Texture> fluid_textures;
@@ -431,6 +443,34 @@ struct GpuView::Meshes {
         return sections.emplace(key, std::move(m)).first->second;
     }
 
+    const fg::Mesh3D& prism(const Collider& c) {
+        Collider unit = c;
+        unit.size = {1.0f, 1.0f, 1.0f};
+        const std::vector<Vec3> t = triangle_corners(unit);
+        const std::array<int, 6> key{static_cast<int>(std::lround(t[0].x * 2000.0f)), static_cast<int>(std::lround(t[0].y * 2000.0f)), static_cast<int>(std::lround(t[1].x * 2000.0f)), static_cast<int>(std::lround(t[1].y * 2000.0f)), static_cast<int>(std::lround(t[2].x * 2000.0f)), static_cast<int>(std::lround(t[2].y * 2000.0f))};
+        auto it = prisms.find(key);
+        if (it != prisms.end()) return it->second;
+        fg::Mesh3D m;
+        const Color white(255, 255, 255);
+        Vec3 p[3] = {t[0], t[1], t[2]};
+        if ((p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x) < 0.0f) std::swap(p[1], p[2]);
+        auto face = [&](Vec3 a, Vec3 b, Vec3 c2) {
+            const Vec3 n = normalize(cross(b - a, c2 - a));
+            const auto base = static_cast<std::uint32_t>(m.vertices().size());
+            for (const Vec3& q : {a, b, c2}) m.add_vertex(fg::Vertex3D(vector3d{q.x, q.y, q.z}, vector3d{n.x, n.y, n.z}, white));
+            m.add_triangle(base, base + 1, base + 2);
+        };
+        const Vec3 front{0.0f, 0.0f, 0.5f}, back{0.0f, 0.0f, -0.5f};
+        face(p[0] + front, p[1] + front, p[2] + front);
+        face(p[0] + back, p[2] + back, p[1] + back);
+        for (int k = 0; k < 3; ++k) {
+            const Vec3 a = p[k], b = p[(k + 1) % 3];
+            face(a + back, b + back, b + front);
+            face(a + back, b + front, a + front);
+        }
+        return prisms.emplace(key, std::move(m)).first->second;
+    }
+
     const fg::Mesh3D& tint(const fg::Mesh3D& base, Color c) {
         const std::uint32_t key = fg::Vertex3D::pack(c);
         auto it = tinted.find({&base, key});
@@ -485,7 +525,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
     const unsigned w = static_cast<unsigned>(std::max(1.0, std::round(f.width)));
     const unsigned h = static_cast<unsigned>(std::max(1.0, std::round(f.height)));
     view.set_view_size(w, h);
-    r.draw_rect(0, 0, w, h, fg::Paint::fill(view.dimension() == Dimension::three_d ? background_top : background_bottom));
+    if (!m_options.overlay_only) r.draw_rect(0, 0, w, h, fg::Paint::fill(view.dimension() == Dimension::three_d ? background_top : background_bottom));
 
     auto paint_mesh = [&](const fg::Mesh3D& mesh, const Mat4& model, Color color, std::uint8_t alpha) {
         const fg::Mesh3D& tinted_mesh = m_meshes->tint(mesh, with_alpha(color, alpha));
@@ -533,7 +573,9 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
             const bool bounce_light = m_options.scene_lights && m_meshes->lights && m_options.materials;
             const int quality = std::clamp(m_options.lighting_quality, 0, 3);
             if (quality >= 2) any_reflective = true;
-            if (m_options.shadows || (m_options.scene_lights && m_meshes->lights) || any_reflective) {
+            if (m_options.overlay_only) {
+                r.set_scene_lighting(fg::SceneLighting3D::off());
+            } else if (m_options.shadows || (m_options.scene_lights && m_meshes->lights) || any_reflective) {
                 fg::SunShadow3D sun = fg::SunShadow3D::off();
                 if (m_options.shadows) {
                     if (quality == 0) sun = fg::SunShadow3D::low();
@@ -677,7 +719,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
             const Vec3 target_r = axes.to_render(oc.target);
             const float cx = std::round(target_r.x / step) * step, cz = std::round(target_r.z / step) * step;
             const float extent = lines * step;
-            for (int i = -lines; i <= lines; ++i) {
+            for (int i = m_options.overlay_only ? lines + 1 : -lines; i <= lines; ++i) {
                 const float x = cx + i * step, z = cz + i * step;
                 const Color line_color = i % 5 == 0 ? grid_major : grid_minor;
                 if (std::fabs(x) >= step * 0.5f) r.draw_line_3d(wv(x, 0.0f, cz - extent), wv(x, 0.0f, cz + extent), line_color, 1.0f, true);
@@ -686,8 +728,27 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
             struct OverlayLine {
                 vector3d a, b;
                 Color c;
+                float w = 2.0f;
             };
             std::vector<OverlayLine> overlay_axes;
+            std::vector<OverlayLine> overlay_late;
+            auto late_line = [&](vector3d a, vector3d b, Color c, float w) { overlay_late.push_back({a, b, c, w}); };
+            auto late_ring = [&](const Mat4& m, Vec3 center, Vec3 u, Vec3 v, float radius, Color c, float w) {
+                const int n = 24;
+                vector3d prev = point(m, center + u * radius);
+                for (int k = 1; k <= n; ++k) {
+                    const float a = 6.2831853f * static_cast<float>(k) / n;
+                    const vector3d at = point(m, center + u * (std::cos(a) * radius) + v * (std::sin(a) * radius));
+                    late_line(prev, at, c, w);
+                    prev = at;
+                }
+            };
+            auto late_arrow = [&](const Mat4& m, Vec3 from, Vec3 dir, Vec3 side, float len, Color c, float w) {
+                const Vec3 tip = from + dir * len;
+                late_line(point(m, from), point(m, tip), c, w);
+                late_line(point(m, tip), point(m, tip - dir * (len * 0.25f) + side * (len * 0.15f)), c, w);
+                late_line(point(m, tip), point(m, tip - dir * (len * 0.25f) - side * (len * 0.15f)), c, w);
+            };
             {
                 const Vec3 world_x = axes.from_render({1.0f, 0.0f, 0.0f});
                 const Vec3 world_z = axes.from_render({0.0f, 0.0f, 1.0f});
@@ -701,7 +762,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 const float reach = extent * 1.5f;
                 const float height = std::max(step * 3.0f, oc.distance * 0.35f);
                 auto origin_axis = [&](vector3d a, vector3d b, Color c) {
-                    r.draw_line_3d(a, b, c, 3.0f, true);
+                    if (!m_options.overlay_only) r.draw_line_3d(a, b, c, 3.0f, true);
                     overlay_axes.push_back({a, b, c});
                 };
                 origin_axis(wv(-reach, lift, 0.0f), wv(reach, lift, 0.0f), render_x);
@@ -780,7 +841,8 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                         }
                         const std::uint64_t key = base | (static_cast<std::uint64_t>(ci & 0xffff) << 4);
                         if (c.sensor || !c.enabled) {
-                            if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, with_alpha(col, c.enabled ? 255 : 110), 1.5f, true);
+                            if (c.shape == ColliderShape::triangle) prism_edges(r, world, c, with_alpha(col, c.enabled ? 255 : 110), 1.5f, true);
+                            else if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, with_alpha(col, c.enabled ? 255 : 110), 1.5f, true);
                             else ring_edges(r, m, with_alpha(col, c.enabled ? 255 : 110), 1.5f, true);
                             continue;
                         }
@@ -788,6 +850,8 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                             items.push_back({Kind::cube, m, col, key, mat});
                         } else if (c.shape == ColliderShape::sphere) {
                             items.push_back({Kind::sphere, m, col, key, mat});
+                        } else if (c.shape == ColliderShape::triangle) {
+                            items.push_back({Kind::section, world * translation(c.offset) * scaling(c.size), col, key, mat, &m_meshes->prism(c)});
                         } else if (c.shape == ColliderShape::sphere_section) {
                             const float d = std::max({c.size.x, c.size.y, c.size.z});
                             items.push_back({Kind::section, world * translation(c.offset) * scaling({d, d, d}), col, key, mat, &m_meshes->section(c)});
@@ -808,16 +872,14 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                     if (playing) continue;
                     const vector3d o = point(world, {0, 0, 0});
                     const Vec3 tip[4] = {{-0.5f, -0.32f, -0.9f}, {0.5f, -0.32f, -0.9f}, {0.5f, 0.32f, -0.9f}, {-0.5f, 0.32f, -0.9f}};
-                    for (int pass = 0; pass < 2; ++pass) {
-                        const Color c = pass == 0 ? with_alpha(camera_color, 80) : camera_color;
-                        const float lw = pass == 0 ? 1.5f : 2.5f;
-                        for (int i = 0; i < 4; ++i) {
-                            r.draw_line_3d(o, point(world, tip[i]), c, lw, pass == 1);
-                            r.draw_line_3d(point(world, tip[i]), point(world, tip[(i + 1) % 4]), c, lw, pass == 1);
-                        }
-                        r.draw_line_3d(point(world, {-0.18f, 0.36f, -0.9f}), point(world, {0.0f, 0.55f, -0.9f}), c, lw, pass == 1);
-                        r.draw_line_3d(point(world, {0.0f, 0.55f, -0.9f}), point(world, {0.18f, 0.36f, -0.9f}), c, lw, pass == 1);
+                    const Color c = camera_color;
+                    const float lw = e == selected ? 3.0f : 2.0f;
+                    for (int i = 0; i < 4; ++i) {
+                        late_line(o, point(world, tip[i]), c, lw);
+                        late_line(point(world, tip[i]), point(world, tip[(i + 1) % 4]), c, lw);
                     }
+                    late_line(point(world, {-0.18f, 0.36f, -0.9f}), point(world, {0.0f, 0.55f, -0.9f}), c, lw);
+                    late_line(point(world, {0.0f, 0.55f, -0.9f}), point(world, {0.18f, 0.36f, -0.9f}), c, lw);
                     icons.push_back({o, 1, camera_color, e == selected});
                 } else if (scene.light(e) || named(scene, e, "Light")) {
                     const vector3d o = point(world, {0, 0, 0});
@@ -826,12 +888,86 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                     if (!playing) {
                         const Vec3 ow{static_cast<float>(o.x), static_cast<float>(o.y), static_cast<float>(o.z)};
                         const Vec3 ground = ow - axes.up() * axes.height(ow);
-                        r.draw_line_3d(o, vector3d{ground.x, ground.y, ground.z}, with_alpha(icon, 60), 1.0f, false);
-                        r.draw_line_3d(o, vector3d{ground.x, ground.y, ground.z}, with_alpha(icon, 160), 1.5f, true);
+                        late_line(o, vector3d{ground.x, ground.y, ground.z}, with_alpha(icon, 110), 1.0f);
                         if (const Light* l = scene.light(e)) {
-                            if (l->type == LightType::spot || l->type == LightType::directional) {
-                                const vector3d d = point(world, axes.forward() * 1.2f);
-                                r.draw_line_3d(o, d, with_alpha(icon, 200), 2.0f, false);
+                            const Vec3 f = axes.forward(), u = axes.up(), rt = axes.right();
+                            const Color lc = with_alpha(icon, e == selected ? 255 : 200);
+                            const float lw = e == selected ? 2.5f : 1.75f;
+                            const Vec3 zero{};
+                            switch (l->type) {
+                            case LightType::point:
+                            case LightType::sphere: {
+                                const float inner = std::max(0.15f, l->radius);
+                                const float outer = inner + 0.35f;
+                                const Vec3 dirs[6] = {f, f * -1.0f, u, u * -1.0f, rt, rt * -1.0f};
+                                for (const Vec3& d : dirs) late_line(point(world, d * inner), point(world, d * outer), lc, lw);
+                                const float diag = 0.57735f;
+                                for (int k = 0; k < 8; ++k) {
+                                    const Vec3 d = (f * ((k & 1) ? diag : -diag)) + (u * ((k & 2) ? diag : -diag)) + (rt * ((k & 4) ? diag : -diag));
+                                    late_line(point(world, d * inner), point(world, d * (inner + 0.2f)), with_alpha(lc, 140), 1.0f);
+                                }
+                                if (l->type == LightType::sphere && l->radius > 0.0f) {
+                                    late_ring(world, zero, rt, u, l->radius, lc, lw);
+                                    late_ring(world, zero, rt, f, l->radius, lc, lw);
+                                    late_ring(world, zero, f, u, l->radius, lc, lw);
+                                }
+                                if (l->range > 0.0f) late_ring(world, zero, rt, f, l->range, with_alpha(icon, 90), 1.0f);
+                                break;
+                            }
+                            case LightType::spot: {
+                                const float len = l->range > 0.0f ? std::min(l->range, 4.0f) : 2.0f;
+                                const float outer = std::tan(std::clamp(l->outer_cone, 1.0f, 85.0f) * 0.0174533f) * len;
+                                const float inner = std::tan(std::clamp(std::min(l->inner_cone, l->outer_cone), 0.5f, 85.0f) * 0.0174533f) * len;
+                                const Vec3 end = f * len;
+                                for (int k = 0; k < 8; ++k) {
+                                    const float a = 6.2831853f * static_cast<float>(k) / 8.0f;
+                                    late_line(o, point(world, end + rt * (std::cos(a) * outer) + u * (std::sin(a) * outer)), lc, k % 2 == 0 ? lw : 1.0f);
+                                }
+                                late_ring(world, end, rt, u, outer, lc, lw);
+                                late_ring(world, end, rt, u, inner, with_alpha(icon, 120), 1.0f);
+                                late_line(o, point(world, end), with_alpha(icon, 160), 1.0f);
+                                break;
+                            }
+                            case LightType::directional: {
+                                for (int k = 0; k < 5; ++k) {
+                                    const float a = 6.2831853f * static_cast<float>(k) / 5.0f;
+                                    const Vec3 from = rt * (std::cos(a) * 0.35f) + u * (std::sin(a) * 0.35f);
+                                    late_arrow(world, from, f, u, 1.4f, lc, lw);
+                                }
+                                late_arrow(world, zero, f, rt, 1.8f, lc, lw + 0.5f);
+                                late_ring(world, zero, rt, u, 0.35f, lc, lw);
+                                break;
+                            }
+                            case LightType::rectangle: {
+                                const float hw = std::max(0.05f, l->width * 0.5f), hh = std::max(0.05f, l->height * 0.5f);
+                                const Vec3 c4[4] = {rt * -hw + u * -hh, rt * hw + u * -hh, rt * hw + u * hh, rt * -hw + u * hh};
+                                for (int k = 0; k < 4; ++k) late_line(point(world, c4[k]), point(world, c4[(k + 1) % 4]), lc, lw);
+                                late_line(point(world, c4[0]), point(world, c4[2]), with_alpha(icon, 90), 1.0f);
+                                late_line(point(world, c4[1]), point(world, c4[3]), with_alpha(icon, 90), 1.0f);
+                                late_arrow(world, zero, f, u, 1.0f, lc, lw);
+                                if (l->two_sided) late_arrow(world, zero, f * -1.0f, u, 1.0f, with_alpha(icon, 150), lw);
+                                break;
+                            }
+                            case LightType::disk: {
+                                const float rad = std::max(0.05f, l->radius > 0.0f ? l->radius : l->width * 0.5f);
+                                late_ring(world, zero, rt, u, rad, lc, lw);
+                                late_arrow(world, zero, f, u, 1.0f, lc, lw);
+                                if (l->two_sided) late_arrow(world, zero, f * -1.0f, u, 1.0f, with_alpha(icon, 150), lw);
+                                break;
+                            }
+                            case LightType::tube: {
+                                const float half = std::max(0.05f, l->length * 0.5f);
+                                const float rad = std::max(0.03f, l->radius);
+                                late_line(point(world, rt * -half), point(world, rt * half), lc, lw + 1.0f);
+                                late_ring(world, rt * -half, u, f, rad + 0.05f, lc, 1.0f);
+                                late_ring(world, rt * half, u, f, rad + 0.05f, lc, 1.0f);
+                                for (int k = -2; k <= 2; ++k) {
+                                    const Vec3 at = rt * (half * static_cast<float>(k) / 2.0f);
+                                    late_line(point(world, at + u * (rad + 0.08f)), point(world, at + u * (rad + 0.3f)), with_alpha(icon, 150), 1.0f);
+                                    late_line(point(world, at - u * (rad + 0.08f)), point(world, at - u * (rad + 0.3f)), with_alpha(icon, 150), 1.0f);
+                                }
+                                break;
+                            }
                             }
                         }
                         icons.push_back({o, 0, icon, e == selected});
@@ -869,346 +1005,351 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
             };
 
             Meshes& mesh = *m_meshes;
-            m_stats = GpuViewStats{};
-            m_stats.items = items.size();
-            std::vector<fg::Visibility3D::Handle> handle(items.size(), fg::Visibility3D::INVALID);
-            const bool culling = m_options.culling;
-            if (culling) {
-                ++mesh.frame;
-                const Vec3 up = axes.up();
-                fg::VisibilitySettings3D vs = mesh.vis.settings();
-                vs.occlusion = m_options.occlusion;
-                vs.up_axis = std::fabs(up.x) > 0.5f ? 0 : (std::fabs(up.z) > 0.5f ? 2 : 1);
-                vs.max_distance = 5000.0;
-                vs.min_screen_pixels = 0.75;
-                vs.shadows.enabled = m_options.shadows;
-                vs.shadows.real_distance = m_options.shadow_distance;
-                vs.shadows.blob_distance = std::max(m_options.blob_distance, m_options.shadow_distance);
-                const int up_axis = vs.up_axis;
-                vs.ground = [up_axis](const vector3d& from, const vector3d&, double reach, vector3d& hit, vector3d& normal) {
-                    const double height = up_axis == 0 ? from.x : (up_axis == 2 ? from.z : from.y);
-                    if (height < -1e-6 || height > reach) return false;
-                    hit = from;
-                    normal = vector3d{0.0, 0.0, 0.0};
-                    if (up_axis == 0) { hit.x = 0.0; normal.x = 1.0; }
-                    else if (up_axis == 2) { hit.z = 0.0; normal.z = 1.0; }
-                    else { hit.y = 0.0; normal.y = 1.0; }
-                    return true;
+            if (!m_options.overlay_only) {
+                m_stats = GpuViewStats{};
+                m_stats.items = items.size();
+                std::vector<fg::Visibility3D::Handle> handle(items.size(), fg::Visibility3D::INVALID);
+                const bool culling = m_options.culling;
+                if (culling) {
+                    ++mesh.frame;
+                    const Vec3 up = axes.up();
+                    fg::VisibilitySettings3D vs = mesh.vis.settings();
+                    vs.occlusion = m_options.occlusion;
+                    vs.up_axis = std::fabs(up.x) > 0.5f ? 0 : (std::fabs(up.z) > 0.5f ? 2 : 1);
+                    vs.max_distance = 5000.0;
+                    vs.min_screen_pixels = 0.75;
+                    vs.shadows.enabled = m_options.shadows;
+                    vs.shadows.real_distance = m_options.shadow_distance;
+                    vs.shadows.blob_distance = std::max(m_options.blob_distance, m_options.shadow_distance);
+                    const int up_axis = vs.up_axis;
+                    vs.ground = [up_axis](const vector3d& from, const vector3d&, double reach, vector3d& hit, vector3d& normal) {
+                        const double height = up_axis == 0 ? from.x : (up_axis == 2 ? from.z : from.y);
+                        if (height < -1e-6 || height > reach) return false;
+                        hit = from;
+                        normal = vector3d{0.0, 0.0, 0.0};
+                        if (up_axis == 0) { hit.x = 0.0; normal.x = 1.0; }
+                        else if (up_axis == 2) { hit.z = 0.0; normal.z = 1.0; }
+                        else { hit.y = 0.0; normal.y = 1.0; }
+                        return true;
+                    };
+                    vs.reuse_move = 0.0;
+                    mesh.vis.set_settings(vs);
+                    const fg::LodLevels3D lods = m_options.lod ? fg::LodLevels3D::of({40.0, 120.0}) : fg::LodLevels3D::none();
+                    for (std::size_t i = 0; i < items.size(); ++i) {
+                        const Item& it = items[i];
+                        const fg::VisBox3D box = bounds_of(it.m);
+                        const bool solid = it.kind == Kind::cube && aligned(it.m);
+                        auto found = mesh.handles.find(it.key);
+                        fg::Visibility3D::Handle h;
+                        if (found == mesh.handles.end()) {
+                            h = mesh.vis.add(box, fg::VIS_CASTER, it.kind == Kind::cube ? fg::LodLevels3D::none() : lods, it.key);
+                            mesh.handles.emplace(it.key, h);
+                        } else {
+                            h = found->second;
+                            mesh.vis.update(h, box);
+                            mesh.vis.set_lods(h, it.kind == Kind::cube ? fg::LodLevels3D::none() : lods);
+                        }
+                        mesh.vis.set_flags(h, fg::VIS_CASTER | (solid ? fg::VIS_OCCLUDER : 0u));
+                        if (solid) mesh.vis.set_occluder_box(h, box);
+                        mesh.seen[it.key] = mesh.frame;
+                        handle[i] = h;
+                    }
+                    for (auto it = mesh.handles.begin(); it != mesh.handles.end();) {
+                        if (mesh.seen[it->first] != mesh.frame) {
+                            mesh.vis.remove(it->second);
+                            mesh.seen.erase(it->first);
+                            it = mesh.handles.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                    mesh.vis.cull(cam);
+                    m_stats.occluded = mesh.vis.stats().occluded;
+                    m_stats.real_shadows = mesh.vis.stats().real_shadows;
+                    m_stats.blob_shadows = mesh.vis.stats().blob_shadows;
+                }
+
+                struct BatchKey {
+                    const fg::Mesh3D* mesh;
+                    std::uint32_t color;
+                    bool cast;
+                    bool operator<(const BatchKey& o) const { return std::tie(mesh, color, cast) < std::tie(o.mesh, o.color, o.cast); }
                 };
-                vs.reuse_move = 0.0;
-                mesh.vis.set_settings(vs);
-                const fg::LodLevels3D lods = m_options.lod ? fg::LodLevels3D::of({40.0, 120.0}) : fg::LodLevels3D::none();
+                std::map<BatchKey, std::pair<Color, std::vector<fg::Instance3D>>> batches;
                 for (std::size_t i = 0; i < items.size(); ++i) {
                     const Item& it = items[i];
-                    const fg::VisBox3D box = bounds_of(it.m);
-                    const bool solid = it.kind == Kind::cube && aligned(it.m);
-                    auto found = mesh.handles.find(it.key);
-                    fg::Visibility3D::Handle h;
-                    if (found == mesh.handles.end()) {
-                        h = mesh.vis.add(box, fg::VIS_CASTER, it.kind == Kind::cube ? fg::LodLevels3D::none() : lods, it.key);
-                        mesh.handles.emplace(it.key, h);
-                    } else {
-                        h = found->second;
-                        mesh.vis.update(h, box);
-                        mesh.vis.set_lods(h, it.kind == Kind::cube ? fg::LodLevels3D::none() : lods);
+                    int lod = 0;
+                    bool cast = true;
+                    if (culling) {
+                        if (!mesh.vis.visible(handle[i])) {
+                            ++m_stats.culled;
+                            continue;
+                        }
+                        lod = std::clamp(mesh.vis.lod(handle[i]), 0, 2);
+                        cast = !m_options.shadows || mesh.vis.shadow(handle[i]) == fg::ShadowMode3D::Real;
                     }
-                    mesh.vis.set_flags(h, fg::VIS_CASTER | (solid ? fg::VIS_OCCLUDER : 0u));
-                    if (solid) mesh.vis.set_occluder_box(h, box);
-                    mesh.seen[it.key] = mesh.frame;
-                    handle[i] = h;
-                }
-                for (auto it = mesh.handles.begin(); it != mesh.handles.end();) {
-                    if (mesh.seen[it->first] != mesh.frame) {
-                        mesh.vis.remove(it->second);
-                        mesh.seen.erase(it->first);
-                        it = mesh.handles.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-                mesh.vis.cull(cam);
-                m_stats.occluded = mesh.vis.stats().occluded;
-                m_stats.real_shadows = mesh.vis.stats().real_shadows;
-                m_stats.blob_shadows = mesh.vis.stats().blob_shadows;
-            }
-
-            struct BatchKey {
-                const fg::Mesh3D* mesh;
-                std::uint32_t color;
-                bool cast;
-                bool operator<(const BatchKey& o) const { return std::tie(mesh, color, cast) < std::tie(o.mesh, o.color, o.cast); }
-            };
-            std::map<BatchKey, std::pair<Color, std::vector<fg::Instance3D>>> batches;
-            for (std::size_t i = 0; i < items.size(); ++i) {
-                const Item& it = items[i];
-                int lod = 0;
-                bool cast = true;
-                if (culling) {
-                    if (!mesh.vis.visible(handle[i])) {
-                        ++m_stats.culled;
+                    const fg::Mesh3D* m = &mesh.cube;
+                    if (it.kind == Kind::sphere) m = lod == 0 ? &mesh.sphere : &mesh.sphere_lod[lod - 1];
+                    else if (it.kind == Kind::cylinder) m = lod == 0 ? &mesh.cylinder : &mesh.cylinder_lod[lod - 1];
+                    else if (it.kind == Kind::cone) m = lod == 0 ? &mesh.cone : &mesh.cone_lod[lod - 1];
+                    else if (it.kind == Kind::section && it.custom) m = it.custom;
+                    ++m_stats.drawn;
+                    if (it.mat) {
+                        fg::Material3D mat = material_3d(*it.mat);
+                        if (m_options.materials) m_meshes->apply_textures(*it.mat, mat);
+                        if (!cast) mat.shadow = fg::Shadow3D::None;
+                        r.draw_mesh(m_meshes->tint(*m, it.color), to_fizmo(it.m), mat);
                         continue;
                     }
-                    lod = std::clamp(mesh.vis.lod(handle[i]), 0, 2);
-                    cast = !m_options.shadows || mesh.vis.shadow(handle[i]) == fg::ShadowMode3D::Real;
-                }
-                const fg::Mesh3D* m = &mesh.cube;
-                if (it.kind == Kind::sphere) m = lod == 0 ? &mesh.sphere : &mesh.sphere_lod[lod - 1];
-                else if (it.kind == Kind::cylinder) m = lod == 0 ? &mesh.cylinder : &mesh.cylinder_lod[lod - 1];
-                else if (it.kind == Kind::cone) m = lod == 0 ? &mesh.cone : &mesh.cone_lod[lod - 1];
-                else if (it.kind == Kind::section && it.custom) m = it.custom;
-                ++m_stats.drawn;
-                if (it.mat) {
-                    fg::Material3D mat = material_3d(*it.mat);
-                    if (m_options.materials) m_meshes->apply_textures(*it.mat, mat);
-                    if (!cast) mat.shadow = fg::Shadow3D::None;
-                    r.draw_mesh(m_meshes->tint(*m, it.color), to_fizmo(it.m), mat);
-                    continue;
-                }
-                float scale = 1.0f;
-                const bool instanceable = m_options.batching && uniform_scale(it.m, scale) && (it.kind == Kind::sphere || (it.kind == Kind::cube && aligned(it.m)));
-                if (instanceable) {
-                    const vector3d c = point(it.m, {0.0f, 0.0f, 0.0f});
-                    auto& batch = batches[{m, fg::Vertex3D::pack(it.color), cast}];
-                    batch.first = it.color;
-                    batch.second.emplace_back(static_cast<float>(c.x), static_cast<float>(c.y), static_cast<float>(c.z), scale, it.color);
-                    ++m_stats.instanced;
-                } else {
-                    paint_cast(*m, it.m, it.color, cast);
-                }
-            }
-            for (const auto& kv : batches) {
-                fg::Material3D mat = tinted(kv.second.first, true);
-                mat.shadow = kv.first.cast ? fg::Shadow3D::Cast : fg::Shadow3D::None;
-                r.draw_instances(*kv.first.mesh, vector3d{0.0, 0.0, 0.0}, kv.second.second, mat);
-                ++m_stats.batches;
-            }
-            if (culling && m_options.shadows) {
-                const Vec3 up = axes.up();
-                for (const fg::BlobShadow3D& b : mesh.vis.blobs()) {
-                    const float d = static_cast<float>(b.radius * 2.0);
-                    const Vec3 size{std::fabs(up.x) > 0.5f ? 0.01f : d, std::fabs(up.y) > 0.5f ? 0.01f : d, std::fabs(up.z) > 0.5f ? 0.01f : d};
-                    const Vec3 at = Vec3{static_cast<float>(b.center.x), static_cast<float>(b.center.y), static_cast<float>(b.center.z)} + up * 0.012f;
-                    fg::Material3D mat = fg::Material3D::unlit();
-                    mat.blend = fg::Blend3D::Alpha;
-                    mat.depth_write = false;
-                    mat.cull = fg::Cull3D::None;
-                    const Color shade(0, 0, 0, static_cast<std::uint8_t>(std::clamp(b.opacity, 0.0f, 1.0f) * 255.0f));
-                    r.draw_mesh(mesh.tint(mesh.sphere_lod[0], shade), to_fizmo(translation(at) * scaling(size)), mat);
-                }
-            }
-
-            {
-                auto visible = [&cam](const Mat4& world, Vec3 lo, Vec3 hi) {
-                    vector3d a{1e30, 1e30, 1e30}, b{-1e30, -1e30, -1e30};
-                    for (int i = 0; i < 8; ++i) {
-                        const vector3d p = point(world, {(i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z});
-                        a = vector3d{std::min(a.x, p.x), std::min(a.y, p.y), std::min(a.z, p.z)};
-                        b = vector3d{std::max(b.x, p.x), std::max(b.y, p.y), std::max(b.z, p.z)};
+                    float scale = 1.0f;
+                    const bool instanceable = m_options.batching && uniform_scale(it.m, scale) && (it.kind == Kind::sphere || (it.kind == Kind::cube && aligned(it.m)));
+                    if (instanceable) {
+                        const vector3d c = point(it.m, {0.0f, 0.0f, 0.0f});
+                        auto& batch = batches[{m, fg::Vertex3D::pack(it.color), cast}];
+                        batch.first = it.color;
+                        batch.second.emplace_back(static_cast<float>(c.x), static_cast<float>(c.y), static_cast<float>(c.z), scale, it.color);
+                        ++m_stats.instanced;
+                    } else {
+                        paint_cast(*m, it.m, it.color, cast);
                     }
-                    return cam.is_visible(a, b);
-                };
-                Meshes& meshes = *m_meshes;
-                const bool use_materials = m_options.materials;
-                auto material_for = [&scene, &meshes, use_materials](Entity e, fg::Material3D& out) {
-                    const Material* mat = use_materials ? scene.material(e) : nullptr;
-                    if (!mat) return false;
-                    out = material_3d(*mat);
-                    meshes.apply_textures(*mat, out);
-                    return true;
-                };
-                m_models.draw(r, scene, visible, material_for);
-                m_terrain.draw(r, cam, scene, playing ? Entity{} : selected);
-                m_terrain.visible_scatter(cam, m_scatter_visible);
-                m_scatter_models.clear();
-                m_scatter_models.reserve(m_scatter_visible.size());
-                for (std::size_t i : m_scatter_visible) {
-                    const TerrainScatterDraw& d = m_terrain.scatter()[i];
-                    m_scatter_models.push_back({*d.model, d.matrix, true});
                 }
-                if (!m_scatter_models.empty()) m_models.draw_instances(r, m_scatter_models, visible);
-                if (m_brush_visible && !playing) m_terrain.draw_brush(r, scene, m_brush_entity, m_brush_point, m_brush_radius);
-                if (m_extra_models) m_models.draw_instances(r, *m_extra_models, visible);
-            }
-            if (scene.alive(selected) && !playing) {
-                const Mat4 world = scene.world_matrix(selected);
-                const std::vector<Collider>* cs = scene.colliders(selected);
-                Vec3 mlo, mhi;
-                if (scene.model(selected) && m_models.local_bounds(scene.model(selected)->source, mlo, mhi)) {
-                    box_edges(r, world * translation((mlo + mhi) * 0.5f) * scaling((mhi - mlo) * 1.01f), selected_color, 2.0f, false);
-                    if (m_options.show_bones) m_models.draw_bones(r, scene, selected);
-                } else if (cs && !cs->empty()) {
-                    for (const Collider& c : *cs) {
-                        const Mat4 m = shape_matrix(world, c);
-                        if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, selected_color, 2.0f, false);
-                        else ring_edges(r, m, selected_color, 2.0f, false);
-                    }
-                } else if (!(scene.camera(selected) || named(scene, selected, "Camera")) && !scene.light(selected) && !named(scene, selected, "Light")) {
-                    box_edges(r, world * scaling({1.04f, 1.04f, 1.04f}), selected_color, 2.0f, false);
+                for (const auto& kv : batches) {
+                    fg::Material3D mat = tinted(kv.second.first, true);
+                    mat.shadow = kv.first.cast ? fg::Shadow3D::Cast : fg::Shadow3D::None;
+                    r.draw_instances(*kv.first.mesh, vector3d{0.0, 0.0, 0.0}, kv.second.second, mat);
+                    ++m_stats.batches;
                 }
-            }
-            if (m_meshes->fluids && !m_meshes->fluids->empty()) {
-                Meshes& mm = *m_meshes;
-                std::size_t used = 0;
-                auto fresh = [&mm, &used]() -> fg::Mesh3D& {
-                    if (used >= mm.fluid_meshes.size()) mm.fluid_meshes.emplace_back();
-                    fg::Mesh3D& m = mm.fluid_meshes[used++];
-                    m = fg::Mesh3D();
-                    return m;
-                };
-                auto liquid = [](const xylem::FluidDraw& d) {
-                    fg::Material3D mat = fg::Material3D::physical(0.0f, 0.06f);
-                    mat.cull = fg::Cull3D::None;
-                    mat.reflectivity = d.reflections == ReflectionMode::highlights ? 0.0f : std::clamp(d.reflectivity, 0.0f, 1.0f);
-                    mat.shadow = fg::Shadow3D::None;
-                    if (d.opacity < 0.999f) {
+                if (culling && m_options.shadows) {
+                    const Vec3 up = axes.up();
+                    for (const fg::BlobShadow3D& b : mesh.vis.blobs()) {
+                        const float d = static_cast<float>(b.radius * 2.0);
+                        const Vec3 size{std::fabs(up.x) > 0.5f ? 0.01f : d, std::fabs(up.y) > 0.5f ? 0.01f : d, std::fabs(up.z) > 0.5f ? 0.01f : d};
+                        const Vec3 at = Vec3{static_cast<float>(b.center.x), static_cast<float>(b.center.y), static_cast<float>(b.center.z)} + up * 0.012f;
+                        fg::Material3D mat = fg::Material3D::unlit();
                         mat.blend = fg::Blend3D::Alpha;
                         mat.depth_write = false;
-                    }
-                    return mat;
-                };
-                auto tint = [](const xylem::FluidDraw& d) {
-                    return Color(to_byte(d.color.x), to_byte(d.color.y), to_byte(d.color.z), static_cast<std::uint8_t>(std::lround(std::clamp(d.opacity, 0.05f, 1.0f) * 255.0f)));
-                };
-                auto put = [](fg::Mesh3D& m, Vec3 p, Vec3 n, Color c) {
-                    m.add_vertex(fg::Vertex3D(vector3d{p.x, p.y, p.z}, vector3d{n.x, n.y, n.z}, c));
-                };
-                auto quad = [&put](fg::Mesh3D& m, Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 n, Color col) {
-                    const auto base = static_cast<std::uint32_t>(m.vertices().size());
-                    put(m, a, n, col);
-                    put(m, b, n, col);
-                    put(m, c, n, col);
-                    put(m, d, n, col);
-                    m.add_triangle(base, base + 1, base + 2);
-                    m.add_triangle(base, base + 2, base + 3);
-                };
-                auto slab = [&quad](fg::Mesh3D& m, Vec3 o, Vec3 ex, Vec3 ey, Vec3 ez, Color col) {
-                    const Vec3 nx = normalize(ex), ny = normalize(ey), nz = normalize(ez);
-                    quad(m, o + ey, o + ey + ex, o + ey + ex + ez, o + ey + ez, ny, col);
-                    quad(m, o, o + ez, o + ez + ex, o + ex, ny * -1.0f, col);
-                    quad(m, o, o + ex, o + ex + ey, o + ey, nz * -1.0f, col);
-                    quad(m, o + ez, o + ez + ey, o + ez + ey + ex, o + ez + ex, nz, col);
-                    quad(m, o, o + ey, o + ey + ez, o + ez, nx * -1.0f, col);
-                    quad(m, o + ex, o + ex + ez, o + ex + ez + ey, o + ex + ey, nx, col);
-                };
-                const Vec3 up_world = axes.up();
-                for (const xylem::FluidDraw& d : *m_meshes->fluids) {
-                    const Color col = tint(d);
-                    const fg::Material3D mat = liquid(d);
-                    if (d.cell < 0.0f) {
-                        fg::Mesh3D& m = fresh();
-                        const float frac = d.size.y > 0.0f ? std::clamp(d.level_height / d.size.y, 0.0f, 1.0f) : 0.0f;
-                        Vec3 ex{d.size.x, 0.0f, 0.0f}, ey{0.0f, d.size.y, 0.0f}, ez{0.0f, 0.0f, d.size.z};
-                        if (std::fabs(up_world.y) > 0.5f) ey = ey * frac;
-                        else if (std::fabs(up_world.z) > 0.5f) ez = ez * frac;
-                        else ex = ex * frac;
-                        Vec3 o = d.origin;
-                        if (up_world.x < -0.5f) o = o + Vec3{d.size.x, 0.0f, 0.0f} - ex;
-                        if (up_world.y < -0.5f) o = o + Vec3{0.0f, d.size.y, 0.0f} - ey;
-                        if (up_world.z < -0.5f) o = o + Vec3{0.0f, 0.0f, d.size.z} - ez;
-                        if (frac > 0.0f) slab(m, o, ex, ey, ez, col);
-                        r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
-                        continue;
-                    }
-                    if (d.level == FluidLevel::still) {
-                        fg::Mesh3D& m = fresh();
-                        if (d.level_height > 0.0f) slab(m, d.origin, d.axis_u * d.size.x, d.axis_up * d.level_height, d.axis_w * d.size.z, col);
-                        r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
-                        continue;
-                    }
-                    if (d.level == FluidLevel::waves && d.nx > 1 && d.nz > 1) {
-                        fg::Mesh3D& m = fresh();
-                        const std::size_t cols = static_cast<std::size_t>(d.nx) * static_cast<std::size_t>(d.nz);
-                        if (d.values.size() < cols * 2) continue;
-                        auto at = [&](int i, int k) {
-                            const float h = d.values[static_cast<std::size_t>(k) * static_cast<std::size_t>(d.nx) + static_cast<std::size_t>(i)];
-                            return d.origin + d.axis_u * ((static_cast<float>(i) + 0.5f) * d.cell) + d.axis_w * ((static_cast<float>(k) + 0.5f) * d.cell) + d.axis_up * h;
-                        };
-                        auto wet = [&](int i, int k) { return d.values[cols + static_cast<std::size_t>(k) * static_cast<std::size_t>(d.nx) + static_cast<std::size_t>(i)] > 1e-3f; };
-                        for (int k = 0; k < d.nz; ++k) {
-                            for (int i = 0; i < d.nx; ++i) {
-                                const Vec3 p = at(i, k);
-                                const Vec3 dx = at(std::min(i + 1, d.nx - 1), k) - at(std::max(i - 1, 0), k);
-                                const Vec3 dz = at(i, std::min(k + 1, d.nz - 1)) - at(i, std::max(k - 1, 0));
-                                Vec3 n = normalize(cross(dz, dx));
-                                if (dot(n, d.axis_up) < 0.0f) n = n * -1.0f;
-                                put(m, p, n, col);
-                            }
-                        }
-                        for (int k = 0; k + 1 < d.nz; ++k) {
-                            for (int i = 0; i + 1 < d.nx; ++i) {
-                                if (!wet(i, k) && !wet(i + 1, k) && !wet(i, k + 1) && !wet(i + 1, k + 1)) continue;
-                                const auto a = static_cast<std::uint32_t>(k * d.nx + i);
-                                const auto b = a + 1, c2 = a + static_cast<std::uint32_t>(d.nx), e2 = c2 + 1;
-                                m.add_triangle(a, c2, b);
-                                m.add_triangle(b, c2, e2);
-                            }
-                        }
-                        r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
-                        continue;
-                    }
-                    if ((d.level == FluidLevel::blocky || d.level == FluidLevel::flowing) && d.nx > 0 && d.ny > 0 && d.nz > 0) {
-                        fg::Mesh3D& m = fresh();
-                        auto fill_at = [&](int i, int j, int k) -> float {
-                            if (i < 0 || j < 0 || k < 0 || i >= d.nx || j >= d.ny || k >= d.nz) return 0.0f;
-                            const std::size_t idx = (static_cast<std::size_t>(j) * static_cast<std::size_t>(d.nz) + static_cast<std::size_t>(k)) * static_cast<std::size_t>(d.nx) + static_cast<std::size_t>(i);
-                            return idx < d.values.size() ? d.values[idx] : 0.0f;
-                        };
-                        const Vec3 eu = d.axis_u * d.cell, ew = d.axis_w * d.cell;
-                        for (int j = 0; j < d.ny; ++j) {
-                            for (int k = 0; k < d.nz; ++k) {
-                                for (int i = 0; i < d.nx; ++i) {
-                                    const float f0 = std::min(fill_at(i, j, k), 1.0f);
-                                    if (f0 <= 0.02f) continue;
-                                    const bool covered = fill_at(i, j + 1, k) > 0.02f;
-                                    const float h = covered ? 1.0f : f0;
-                                    const Vec3 o = d.origin + d.axis_u * (static_cast<float>(i) * d.cell) + d.axis_up * (static_cast<float>(j) * d.cell) + d.axis_w * (static_cast<float>(k) * d.cell);
-                                    const Vec3 ey = d.axis_up * (h * d.cell);
-                                    if (!covered) quad(m, o + ey, o + ey + eu, o + ey + eu + ew, o + ey + ew, d.axis_up, col);
-                                    if (fill_at(i - 1, j, k) <= 0.02f) quad(m, o, o + ey, o + ey + ew, o + ew, d.axis_u * -1.0f, col);
-                                    if (fill_at(i + 1, j, k) <= 0.02f) quad(m, o + eu, o + eu + ew, o + eu + ew + ey, o + eu + ey, d.axis_u, col);
-                                    if (fill_at(i, j, k - 1) <= 0.02f) quad(m, o, o + eu, o + eu + ey, o + ey, d.axis_w * -1.0f, col);
-                                    if (fill_at(i, j, k + 1) <= 0.02f) quad(m, o + ew, o + ew + ey, o + ew + ey + eu, o + ew + eu, d.axis_w, col);
-                                }
-                            }
-                        }
-                        r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
-                        continue;
-                    }
-                    if (d.level == FluidLevel::realistic && !d.mesh_indices.empty() && d.mesh_normals.size() == d.mesh_positions.size()) {
-                        fg::Mesh3D& m = fresh();
-                        const float fr = static_cast<float>(col.red()), fgc = static_cast<float>(col.green()), fb = static_cast<float>(col.blue()), fa = static_cast<float>(col.alpha());
-                        for (std::size_t i = 0; i < d.mesh_positions.size(); ++i) {
-                            const float foam = i < d.mesh_foam.size() ? std::clamp(d.mesh_foam[i], 0.0f, 1.0f) : 0.0f;
-                            const Color c(static_cast<std::uint8_t>(std::lround(fr + (255.0f - fr) * foam * 0.85f)), static_cast<std::uint8_t>(std::lround(fgc + (255.0f - fgc) * foam * 0.85f)), static_cast<std::uint8_t>(std::lround(fb + (255.0f - fb) * foam * 0.85f)), static_cast<std::uint8_t>(std::min(255.0f, fa + (255.0f - fa) * foam * 0.6f)));
-                            put(m, d.mesh_positions[i], d.mesh_normals[i], c);
-                        }
-                        for (std::size_t i = 0; i + 2 < d.mesh_indices.size(); i += 3) m.add_triangle(d.mesh_indices[i], d.mesh_indices[i + 1], d.mesh_indices[i + 2]);
-                        r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
-                        if (!d.spray.empty()) {
-                            std::vector<fg::Instance3D> drops;
-                            drops.reserve(d.spray.size());
-                            const float s = std::max(d.radius, 0.01f) * 1.4f;
-                            for (const Vec3& p : d.spray) drops.emplace_back(p.x, p.y, p.z, s, col);
-                            r.draw_instances(mm.sphere_lod[1], vector3d{0.0, 0.0, 0.0}, drops, mat);
-                        }
-                        continue;
-                    }
-                    if (d.level == FluidLevel::realistic && !d.particles.empty()) {
-                        std::vector<fg::Instance3D> drops;
-                        drops.reserve(d.particles.size());
-                        for (const Vec3& p : d.particles) drops.emplace_back(p.x, p.y, p.z, d.radius * 2.2f, col);
-                        r.draw_instances(mm.sphere_lod[1], vector3d{0.0, 0.0, 0.0}, drops, mat);
+                        mat.cull = fg::Cull3D::None;
+                        const Color shade(0, 0, 0, static_cast<std::uint8_t>(std::clamp(b.opacity, 0.0f, 1.0f) * 255.0f));
+                        r.draw_mesh(mesh.tint(mesh.sphere_lod[0], shade), to_fizmo(translation(at) * scaling(size)), mat);
                     }
                 }
+
+                {
+                    auto visible = [&cam](const Mat4& world, Vec3 lo, Vec3 hi) {
+                        vector3d a{1e30, 1e30, 1e30}, b{-1e30, -1e30, -1e30};
+                        for (int i = 0; i < 8; ++i) {
+                            const vector3d p = point(world, {(i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z});
+                            a = vector3d{std::min(a.x, p.x), std::min(a.y, p.y), std::min(a.z, p.z)};
+                            b = vector3d{std::max(b.x, p.x), std::max(b.y, p.y), std::max(b.z, p.z)};
+                        }
+                        return cam.is_visible(a, b);
+                    };
+                    Meshes& meshes = *m_meshes;
+                    const bool use_materials = m_options.materials;
+                    auto material_for = [&scene, &meshes, use_materials](Entity e, fg::Material3D& out) {
+                        const Material* mat = use_materials ? scene.material(e) : nullptr;
+                        if (!mat) return false;
+                        out = material_3d(*mat);
+                        meshes.apply_textures(*mat, out);
+                        return true;
+                    };
+                    m_models.draw(r, scene, visible, material_for);
+                    m_terrain.draw(r, cam, scene, playing ? Entity{} : selected);
+                    m_terrain.visible_scatter(cam, m_scatter_visible);
+                    m_scatter_models.clear();
+                    m_scatter_models.reserve(m_scatter_visible.size());
+                    for (std::size_t i : m_scatter_visible) {
+                        const TerrainScatterDraw& d = m_terrain.scatter()[i];
+                        m_scatter_models.push_back({*d.model, d.matrix, true});
+                    }
+                    if (!m_scatter_models.empty()) m_models.draw_instances(r, m_scatter_models, visible);
+                    if (m_brush_visible && !playing) m_terrain.draw_brush(r, scene, m_brush_entity, m_brush_point, m_brush_radius);
+                    if (m_extra_models) m_models.draw_instances(r, *m_extra_models, visible);
+                }
+                if (scene.alive(selected) && !playing) {
+                    const Mat4 world = scene.world_matrix(selected);
+                    const std::vector<Collider>* cs = scene.colliders(selected);
+                    Vec3 mlo, mhi;
+                    if (scene.model(selected) && m_models.local_bounds(scene.model(selected)->source, mlo, mhi)) {
+                        box_edges(r, world * translation((mlo + mhi) * 0.5f) * scaling((mhi - mlo) * 1.01f), selected_color, 2.0f, false);
+                        if (m_options.show_bones) m_models.draw_bones(r, scene, selected);
+                    } else if (cs && !cs->empty()) {
+                        for (const Collider& c : *cs) {
+                            const Mat4 m = shape_matrix(world, c);
+                            if (c.shape == ColliderShape::triangle) prism_edges(r, world, c, selected_color, 2.0f, false);
+                            else if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, selected_color, 2.0f, false);
+                            else ring_edges(r, m, selected_color, 2.0f, false);
+                        }
+                    } else if (!(scene.camera(selected) || named(scene, selected, "Camera")) && !scene.light(selected) && !named(scene, selected, "Light")) {
+                        box_edges(r, world * scaling({1.04f, 1.04f, 1.04f}), selected_color, 2.0f, false);
+                    }
+                }
+                if (m_meshes->fluids && !m_meshes->fluids->empty()) {
+                    Meshes& mm = *m_meshes;
+                    std::size_t used = 0;
+                    auto fresh = [&mm, &used]() -> fg::Mesh3D& {
+                        if (used >= mm.fluid_meshes.size()) mm.fluid_meshes.emplace_back();
+                        fg::Mesh3D& m = mm.fluid_meshes[used++];
+                        m = fg::Mesh3D();
+                        return m;
+                    };
+                    auto liquid = [](const xylem::FluidDraw& d) {
+                        fg::Material3D mat = fg::Material3D::physical(0.0f, 0.06f);
+                        mat.cull = fg::Cull3D::None;
+                        mat.reflectivity = d.reflections == ReflectionMode::highlights ? 0.0f : std::clamp(d.reflectivity, 0.0f, 1.0f);
+                        mat.shadow = fg::Shadow3D::None;
+                        if (d.opacity < 0.999f) {
+                            mat.blend = fg::Blend3D::Alpha;
+                            mat.depth_write = false;
+                        }
+                        return mat;
+                    };
+                    auto tint = [](const xylem::FluidDraw& d) {
+                        return Color(to_byte(d.color.x), to_byte(d.color.y), to_byte(d.color.z), static_cast<std::uint8_t>(std::lround(std::clamp(d.opacity, 0.05f, 1.0f) * 255.0f)));
+                    };
+                    auto put = [](fg::Mesh3D& m, Vec3 p, Vec3 n, Color c) {
+                        m.add_vertex(fg::Vertex3D(vector3d{p.x, p.y, p.z}, vector3d{n.x, n.y, n.z}, c));
+                    };
+                    auto quad = [&put](fg::Mesh3D& m, Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 n, Color col) {
+                        const auto base = static_cast<std::uint32_t>(m.vertices().size());
+                        put(m, a, n, col);
+                        put(m, b, n, col);
+                        put(m, c, n, col);
+                        put(m, d, n, col);
+                        m.add_triangle(base, base + 1, base + 2);
+                        m.add_triangle(base, base + 2, base + 3);
+                    };
+                    auto slab = [&quad](fg::Mesh3D& m, Vec3 o, Vec3 ex, Vec3 ey, Vec3 ez, Color col) {
+                        const Vec3 nx = normalize(ex), ny = normalize(ey), nz = normalize(ez);
+                        quad(m, o + ey, o + ey + ex, o + ey + ex + ez, o + ey + ez, ny, col);
+                        quad(m, o, o + ez, o + ez + ex, o + ex, ny * -1.0f, col);
+                        quad(m, o, o + ex, o + ex + ey, o + ey, nz * -1.0f, col);
+                        quad(m, o + ez, o + ez + ey, o + ez + ey + ex, o + ez + ex, nz, col);
+                        quad(m, o, o + ey, o + ey + ez, o + ez, nx * -1.0f, col);
+                        quad(m, o + ex, o + ex + ez, o + ex + ez + ey, o + ex + ey, nx, col);
+                    };
+                    const Vec3 up_world = axes.up();
+                    for (const xylem::FluidDraw& d : *m_meshes->fluids) {
+                        const Color col = tint(d);
+                        const fg::Material3D mat = liquid(d);
+                        if (d.cell < 0.0f) {
+                            fg::Mesh3D& m = fresh();
+                            const float frac = d.size.y > 0.0f ? std::clamp(d.level_height / d.size.y, 0.0f, 1.0f) : 0.0f;
+                            Vec3 ex{d.size.x, 0.0f, 0.0f}, ey{0.0f, d.size.y, 0.0f}, ez{0.0f, 0.0f, d.size.z};
+                            if (std::fabs(up_world.y) > 0.5f) ey = ey * frac;
+                            else if (std::fabs(up_world.z) > 0.5f) ez = ez * frac;
+                            else ex = ex * frac;
+                            Vec3 o = d.origin;
+                            if (up_world.x < -0.5f) o = o + Vec3{d.size.x, 0.0f, 0.0f} - ex;
+                            if (up_world.y < -0.5f) o = o + Vec3{0.0f, d.size.y, 0.0f} - ey;
+                            if (up_world.z < -0.5f) o = o + Vec3{0.0f, 0.0f, d.size.z} - ez;
+                            if (frac > 0.0f) slab(m, o, ex, ey, ez, col);
+                            r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
+                            continue;
+                        }
+                        if (d.level == FluidLevel::still) {
+                            fg::Mesh3D& m = fresh();
+                            if (d.level_height > 0.0f) slab(m, d.origin, d.axis_u * d.size.x, d.axis_up * d.level_height, d.axis_w * d.size.z, col);
+                            r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
+                            continue;
+                        }
+                        if (d.level == FluidLevel::waves && d.nx > 1 && d.nz > 1) {
+                            fg::Mesh3D& m = fresh();
+                            const std::size_t cols = static_cast<std::size_t>(d.nx) * static_cast<std::size_t>(d.nz);
+                            if (d.values.size() < cols * 2) continue;
+                            auto at = [&](int i, int k) {
+                                const float h = d.values[static_cast<std::size_t>(k) * static_cast<std::size_t>(d.nx) + static_cast<std::size_t>(i)];
+                                return d.origin + d.axis_u * ((static_cast<float>(i) + 0.5f) * d.cell) + d.axis_w * ((static_cast<float>(k) + 0.5f) * d.cell) + d.axis_up * h;
+                            };
+                            auto wet = [&](int i, int k) { return d.values[cols + static_cast<std::size_t>(k) * static_cast<std::size_t>(d.nx) + static_cast<std::size_t>(i)] > 1e-3f; };
+                            for (int k = 0; k < d.nz; ++k) {
+                                for (int i = 0; i < d.nx; ++i) {
+                                    const Vec3 p = at(i, k);
+                                    const Vec3 dx = at(std::min(i + 1, d.nx - 1), k) - at(std::max(i - 1, 0), k);
+                                    const Vec3 dz = at(i, std::min(k + 1, d.nz - 1)) - at(i, std::max(k - 1, 0));
+                                    Vec3 n = normalize(cross(dz, dx));
+                                    if (dot(n, d.axis_up) < 0.0f) n = n * -1.0f;
+                                    put(m, p, n, col);
+                                }
+                            }
+                            for (int k = 0; k + 1 < d.nz; ++k) {
+                                for (int i = 0; i + 1 < d.nx; ++i) {
+                                    if (!wet(i, k) && !wet(i + 1, k) && !wet(i, k + 1) && !wet(i + 1, k + 1)) continue;
+                                    const auto a = static_cast<std::uint32_t>(k * d.nx + i);
+                                    const auto b = a + 1, c2 = a + static_cast<std::uint32_t>(d.nx), e2 = c2 + 1;
+                                    m.add_triangle(a, c2, b);
+                                    m.add_triangle(b, c2, e2);
+                                }
+                            }
+                            r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
+                            continue;
+                        }
+                        if ((d.level == FluidLevel::blocky || d.level == FluidLevel::flowing) && d.nx > 0 && d.ny > 0 && d.nz > 0) {
+                            fg::Mesh3D& m = fresh();
+                            auto fill_at = [&](int i, int j, int k) -> float {
+                                if (i < 0 || j < 0 || k < 0 || i >= d.nx || j >= d.ny || k >= d.nz) return 0.0f;
+                                const std::size_t idx = (static_cast<std::size_t>(j) * static_cast<std::size_t>(d.nz) + static_cast<std::size_t>(k)) * static_cast<std::size_t>(d.nx) + static_cast<std::size_t>(i);
+                                return idx < d.values.size() ? d.values[idx] : 0.0f;
+                            };
+                            const Vec3 eu = d.axis_u * d.cell, ew = d.axis_w * d.cell;
+                            for (int j = 0; j < d.ny; ++j) {
+                                for (int k = 0; k < d.nz; ++k) {
+                                    for (int i = 0; i < d.nx; ++i) {
+                                        const float f0 = std::min(fill_at(i, j, k), 1.0f);
+                                        if (f0 <= 0.02f) continue;
+                                        const bool covered = fill_at(i, j + 1, k) > 0.02f;
+                                        const float h = covered ? 1.0f : f0;
+                                        const Vec3 o = d.origin + d.axis_u * (static_cast<float>(i) * d.cell) + d.axis_up * (static_cast<float>(j) * d.cell) + d.axis_w * (static_cast<float>(k) * d.cell);
+                                        const Vec3 ey = d.axis_up * (h * d.cell);
+                                        if (!covered) quad(m, o + ey, o + ey + eu, o + ey + eu + ew, o + ey + ew, d.axis_up, col);
+                                        if (fill_at(i - 1, j, k) <= 0.02f) quad(m, o, o + ey, o + ey + ew, o + ew, d.axis_u * -1.0f, col);
+                                        if (fill_at(i + 1, j, k) <= 0.02f) quad(m, o + eu, o + eu + ew, o + eu + ew + ey, o + eu + ey, d.axis_u, col);
+                                        if (fill_at(i, j, k - 1) <= 0.02f) quad(m, o, o + eu, o + eu + ey, o + ey, d.axis_w * -1.0f, col);
+                                        if (fill_at(i, j, k + 1) <= 0.02f) quad(m, o + ew, o + ew + ey, o + ew + ey + eu, o + ew + eu, d.axis_w, col);
+                                    }
+                                }
+                            }
+                            r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
+                            continue;
+                        }
+                        if (d.level == FluidLevel::realistic && !d.mesh_indices.empty() && d.mesh_normals.size() == d.mesh_positions.size()) {
+                            fg::Mesh3D& m = fresh();
+                            const float fr = static_cast<float>(col.red()), fgc = static_cast<float>(col.green()), fb = static_cast<float>(col.blue()), fa = static_cast<float>(col.alpha());
+                            for (std::size_t i = 0; i < d.mesh_positions.size(); ++i) {
+                                const float foam = i < d.mesh_foam.size() ? std::clamp(d.mesh_foam[i], 0.0f, 1.0f) : 0.0f;
+                                const Color c(static_cast<std::uint8_t>(std::lround(fr + (255.0f - fr) * foam * 0.85f)), static_cast<std::uint8_t>(std::lround(fgc + (255.0f - fgc) * foam * 0.85f)), static_cast<std::uint8_t>(std::lround(fb + (255.0f - fb) * foam * 0.85f)), static_cast<std::uint8_t>(std::min(255.0f, fa + (255.0f - fa) * foam * 0.6f)));
+                                put(m, d.mesh_positions[i], d.mesh_normals[i], c);
+                            }
+                            for (std::size_t i = 0; i + 2 < d.mesh_indices.size(); i += 3) m.add_triangle(d.mesh_indices[i], d.mesh_indices[i + 1], d.mesh_indices[i + 2]);
+                            r.draw_mesh(m, fizmo::linalg::Matrix4d::identity(), mat);
+                            if (!d.spray.empty()) {
+                                std::vector<fg::Instance3D> drops;
+                                drops.reserve(d.spray.size());
+                                const float s = std::max(d.radius, 0.01f) * 1.4f;
+                                for (const Vec3& p : d.spray) drops.emplace_back(p.x, p.y, p.z, s, col);
+                                r.draw_instances(mm.sphere_lod[1], vector3d{0.0, 0.0, 0.0}, drops, mat);
+                            }
+                            continue;
+                        }
+                        if (d.level == FluidLevel::realistic && !d.particles.empty()) {
+                            std::vector<fg::Instance3D> drops;
+                            drops.reserve(d.particles.size());
+                            for (const Vec3& p : d.particles) drops.emplace_back(p.x, p.y, p.z, d.radius * 2.2f, col);
+                            r.draw_instances(mm.sphere_lod[1], vector3d{0.0, 0.0, 0.0}, drops, mat);
+                        }
+                    }
+                }
+                if (m_options.particles) {
+                    m_particles.set_budget(m_options.particle_budget, m_options.particle_quality);
+                    m_particles.sync(scene, axes.up(), m_options.particles_running);
+                    if (m_options.particles_running) m_particles.step_3d(f.dt, cam);
+                    m_particles.draw_3d(r);
+                }
             }
-            if (m_options.particles) {
-                m_particles.set_budget(m_options.particle_budget, m_options.particle_quality);
-                m_particles.sync(scene, axes.up(), m_options.particles_running);
-                if (m_options.particles_running) m_particles.step_3d(f.dt, cam);
-                m_particles.draw_3d(r);
-            }
-            if (!playing)
+            if (!playing) {
                 for (const OverlayLine& l : overlay_axes) r.draw_line_3d(l.a, l.b, with_alpha(l.c, 150), 2.0f, false);
+                for (const OverlayLine& l : overlay_late) r.draw_line_3d(l.a, l.b, l.c, l.w, false);
+            }
             if (m_options.move_gizmo && scene.alive(selected) && !playing) {
                 const Vec4 c4 = scene.world_matrix(selected) * Vec4{0.0f, 0.0f, 0.0f, 1.0f};
                 const Vec3 at{c4.x, c4.y, c4.z};
@@ -1429,6 +1570,13 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 const Color fill = c.sensor || !c.enabled ? Color(0, 0, 0, 0) : with_alpha(col, 120);
                 const Color edge = sel ? selected_color : col;
                 if (c.shape == ColliderShape::sphere) circle(m, fill, edge, sel ? 2u : 1u);
+                else if (c.shape == ColliderShape::triangle) {
+                    const std::vector<Vec3> t = triangle_corners(c);
+                    const Mat4 at = world * translation(c.offset);
+                    const fg::RenderPoint pts[3] = {local(at, t[0].x, t[0].y), local(at, t[1].x, t[1].y), local(at, t[2].x, t[2].y)};
+                    if (fill.alpha() > 0) r.draw_polygon(pts, 3, fg::Paint::fill(fill));
+                    r.draw_polyline(pts, 3, fg::Paint::stroke(edge, sel ? 2u : 1u), true);
+                }
                 else quad(m, fill, edge, sel ? 2u : 1u);
             }
         } else if (scene.emitter(e)) {

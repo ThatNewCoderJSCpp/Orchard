@@ -1049,6 +1049,28 @@ void World::set_settings(const fl::LightingSettings& settings) {
 
 namespace {
 
+fl::Mesh prism_mesh(const orchard::Collider& c) {
+    std::vector<orchard::Vec3> t = orchard::triangle_corners(c);
+    if ((t[1].x - t[0].x) * (t[2].y - t[0].y) - (t[1].y - t[0].y) * (t[2].x - t[0].x) < 0.0f) std::swap(t[1], t[2]);
+    const float hz = 0.5f * c.size.z;
+    fl::Mesh out;
+    auto face = [&](orchard::Vec3 a, orchard::Vec3 b, orchard::Vec3 d) {
+        const auto base = static_cast<std::uint32_t>(out.positions.size());
+        for (const orchard::Vec3& q : { a, b, d }) out.positions.push_back(fl::Vec3f{ q.x, q.y, q.z });
+        out.indices.insert(out.indices.end(), { base, base + 1, base + 2 });
+    };
+    const orchard::Vec3 front{ 0.0f, 0.0f, hz }, back{ 0.0f, 0.0f, -hz };
+    face(t[0] + front, t[1] + front, t[2] + front);
+    face(t[0] + back, t[2] + back, t[1] + back);
+    for (int k = 0; k < 3; ++k) {
+        const orchard::Vec3 a = t[static_cast<std::size_t>(k)], b = t[static_cast<std::size_t>((k + 1) % 3)];
+        face(a + back, b + back, b + front);
+        face(a + back, b + front, a + front);
+    }
+    out.compute_normals();
+    return out;
+}
+
 fl::Mesh section_mesh(const orchard::Collider& c) {
     const float d = std::max({ c.size.x, c.size.y, c.size.z, 1e-4f });
     const float outer = 0.5f;
@@ -1589,6 +1611,8 @@ void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info,
                 } else if (c.shape == orchard::ColliderShape::sphere_section) {
                     const float d = std::max({ c.size.x, c.size.y, c.size.z });
                     parts.emplace_back(m_scene.add_mesh(section_mesh(c)), offset * scale_matrix({ d, d, d }));
+                } else if (c.shape == orchard::ColliderShape::triangle) {
+                    parts.emplace_back(m_scene.add_mesh(prism_mesh(c)), offset);
                 } else if (c.shape == orchard::ColliderShape::cylinder || c.shape == orchard::ColliderShape::cone) {
                     const bool cone = c.shape == orchard::ColliderShape::cone;
                     const float r = std::max(c.size.x, c.size.z) * 0.5f;

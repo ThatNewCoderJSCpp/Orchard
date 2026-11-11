@@ -815,6 +815,11 @@ struct World::Impl {
                 const Real r = sx * 0.5_r;
                 const Real half = std::max(0.0_r, sy * 0.5_r - r);
                 shape = fp::Shape2D::make_capsule(RVec2{0.0_r, -half}, RVec2{0.0_r, half}, r);
+            } else if (c.shape == orchard::ColliderShape::triangle) {
+                std::vector<RVec2> pts;
+                for (const orchard::Vec3& q : orchard::triangle_corners(c)) pts.push_back(RVec2{static_cast<Real>(q.x * p.scale.x), static_cast<Real>(q.y * p.scale.y)});
+                if (((pts[1].x - pts[0].x) * (pts[2].y - pts[0].y) - (pts[1].y - pts[0].y) * (pts[2].x - pts[0].x)) < 0.0_r) std::swap(pts[1], pts[2]);
+                shape = fp::Shape2D::make_polygon(pts.data(), pts.size());
             } else {
                 shape = fp::Shape2D::make_box(sx * 0.5_r, sy * 0.5_r);
             }
@@ -878,6 +883,10 @@ struct World::Impl {
                         shape = fp::Shape3D::make_sphere(RVec3{0.0_r, 0.0_r, 0.0_r}, std::max({sx, sy, sz}) * 0.5_r);
                     }
                 }
+            } else if (c.shape == orchard::ColliderShape::triangle) {
+                std::vector<RVec3> pts;
+                for (const orchard::Vec3& q : orchard::triangle_prism_points(c, p.scale)) pts.push_back(RVec3{static_cast<Real>(q.x), static_cast<Real>(q.y), static_cast<Real>(q.z)});
+                shape = fp::Shape3D::make_convex(pts);
             } else if (c.shape == orchard::ColliderShape::convex_hull || c.shape == orchard::ColliderShape::mesh) {
                 const bool as_mesh = c.shape == orchard::ColliderShape::mesh && b.type == orchard::BodyType::fixed;
                 std::string why;
@@ -1837,9 +1846,22 @@ CharacterState World::move_character(orchard::Entity e, const CharacterMove& mov
             starts.push_back(center - side_b * radius);
         }
     }
+    const std::size_t inner_rays = starts.size();
+    const float foot_a = 0.45f * width_a, foot_b = 0.45f * width_b;
+    if (move.ride_height > 0.0f && foot_a > radius + 0.01f) {
+        starts.push_back(center + side_a * foot_a);
+        starts.push_back(center - side_a * foot_a);
+        if (m->dimension == orchard::Dimension::three_d) {
+            starts.push_back(center + side_b * foot_b);
+            starts.push_back(center - side_b * foot_b);
+            for (int sa = -1; sa <= 1; sa += 2)
+                for (int sb = -1; sb <= 1; sb += 2) starts.push_back(center + side_a * (foot_a * 0.7f * static_cast<float>(sa)) + side_b * (foot_b * 0.7f * static_cast<float>(sb)));
+        }
+    }
     const float min_up = std::cos(std::clamp(move.max_slope, 0.0f, 89.0f) * static_cast<float>(deg_to_rad));
     const float reach = feet + std::max(0.01f, move.ground_probe);
     float best = 1e30f;
+    float best_inner = 1e30f;
     orchard::Vec3 best_normal = up;
     orchard::Entity best_hit;
     bool center_hit = false;
@@ -1855,13 +1877,18 @@ CharacterState World::move_character(orchard::Entity e, const CharacterMove& mov
             center_hit = true;
             center_normal = nn;
         }
-        if (d < best) {
+        if (r >= inner_rays) {
+            best = std::min(best, d);
+            continue;
+        }
+        best_inner = std::min(best_inner, d);
+        if (d <= best) {
             best = d;
             best_normal = nn;
             best_hit = hit;
         }
     }
-    const bool touching_ground = best < 1e29f;
+    const bool touching_ground = best_inner < 1e29f;
     if (center_hit) best_normal = center_normal;
     if (orchard::dot(best_normal, up) < min_up) best_normal = up;
 
@@ -1889,8 +1916,9 @@ CharacterState World::move_character(orchard::Entity e, const CharacterMove& mov
         orchard::Vec3 along = flatten(wish, n);
         if (orchard::length(along) > 1e-5f) along = orchard::normalize(along) * speed;
         const orchard::Vec3 tangent = approach(flatten(v, n), along, move.ground_accel * dt);
-        const float gap = best - feet;
-        const float snap = std::clamp(gap / std::max(dt, 1e-3f), 0.0f, 4.0f) + 0.05f;
+        const float hover = std::max(0.0f, move.ride_height);
+        const float gap = best - feet - hover;
+        const float snap = hover > 0.0f ? std::clamp(gap / std::max(dt, 1e-3f) * 0.5f, -3.0f, 4.0f) : std::clamp(gap / std::max(dt, 1e-3f), 0.0f, 4.0f) + 0.05f;
         v = tangent - n * snap;
     } else {
         const orchard::Vec3 h = flatten(v, up);

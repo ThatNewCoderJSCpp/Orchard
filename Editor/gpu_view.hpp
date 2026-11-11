@@ -51,6 +51,7 @@ struct GpuViewOptions {
     bool show_bones = true;
     bool ambient_occlusion = true;
     int lighting_quality = 1;
+    bool overlay_only = false;
 };
 
 struct GpuViewStats {

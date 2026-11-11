@@ -74,6 +74,7 @@ const char* to_string(ColliderShape shape) {
     case ColliderShape::sphere_section: return "sphere-section";
     case ColliderShape::convex_hull: return "convex-hull";
     case ColliderShape::mesh: return "mesh";
+    case ColliderShape::triangle: return "triangle";
     }
     return "box";
 }
@@ -88,11 +89,165 @@ std::optional<ColliderShape> parse_collider_shape(const std::string& text) {
     if (text == "sphere-section" || text == "sphere_section" || text == "hemisphere" || text == "dome" || text == "bowl" || text == "wedge") return ColliderShape::sphere_section;
     if (text == "convex-hull" || text == "convex_hull" || text == "convex" || text == "hull") return ColliderShape::convex_hull;
     if (text == "mesh" || text == "triangle-mesh" || text == "trimesh") return ColliderShape::mesh;
+    if (text == "triangle" || text == "triangle-prism" || text == "triangular-prism" || text == "prism" || text == "ramp") return ColliderShape::triangle;
     return std::nullopt;
 }
 
+const char* to_string(TriangleRule rule) {
+    switch (rule) {
+    case TriangleRule::sss: return "sss";
+    case TriangleRule::sas: return "sas";
+    case TriangleRule::asa: return "asa";
+    case TriangleRule::aas: return "aas";
+    case TriangleRule::ssa: return "ssa";
+    case TriangleRule::right: return "right";
+    }
+    return "sss";
+}
+
+std::optional<TriangleRule> parse_triangle_rule(const std::string& text) {
+    std::string t;
+    for (char ch : text) t += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (t == "sss") return TriangleRule::sss;
+    if (t == "sas") return TriangleRule::sas;
+    if (t == "asa") return TriangleRule::asa;
+    if (t == "aas" || t == "saa") return TriangleRule::aas;
+    if (t == "ssa" || t == "ass") return TriangleRule::ssa;
+    if (t == "right" || t == "hl" || t == "ll" || t == "legs") return TriangleRule::right;
+    return std::nullopt;
+}
+
+const char* triangle_rule_label(TriangleRule rule) {
+    switch (rule) {
+    case TriangleRule::sss: return "SSS (three sides)";
+    case TriangleRule::sas: return "SAS (two sides and the angle between them)";
+    case TriangleRule::asa: return "ASA (two angles and the side between them)";
+    case TriangleRule::aas: return "AAS (two angles and a side that isn't between them)";
+    case TriangleRule::ssa: return "SSA (two sides and an angle that isn't between them)";
+    case TriangleRule::right: return "Right triangle (two legs)";
+    }
+    return "SSS (three sides)";
+}
+
+const std::vector<TriangleRule>& triangle_rules() {
+    static const std::vector<TriangleRule> all = {TriangleRule::sss, TriangleRule::sas, TriangleRule::asa, TriangleRule::aas, TriangleRule::ssa, TriangleRule::right};
+    return all;
+}
+
+bool solve_triangle(const Collider& c, Vec3& sides, Vec3& angles, std::string* why) {
+    constexpr float deg = 3.14159265358979f / 180.0f;
+    auto fail = [why](const char* text) {
+        if (why) *why = text;
+        return false;
+    };
+    float a = c.triangle_sides.x, b = c.triangle_sides.y, cc = c.triangle_sides.z;
+    float A = c.triangle_angles.x, B = c.triangle_angles.y, C = c.triangle_angles.z;
+    switch (c.triangle) {
+    case TriangleRule::sss:
+        if (a <= 0.0f || b <= 0.0f || cc <= 0.0f) return fail("every side has to be longer than 0");
+        if (a + b <= cc || a + cc <= b || b + cc <= a) return fail("each side has to be shorter than the other two put together");
+        break;
+    case TriangleRule::sas:
+        if (b <= 0.0f || cc <= 0.0f) return fail("both sides have to be longer than 0");
+        if (A <= 0.0f || A >= 180.0f) return fail("the angle has to be between 0 and 180 degrees");
+        a = std::sqrt(std::max(0.0f, b * b + cc * cc - 2.0f * b * cc * std::cos(A * deg)));
+        break;
+    case TriangleRule::asa:
+        if (a <= 0.0f) return fail("the side has to be longer than 0");
+        if (B <= 0.0f || C <= 0.0f || B + C >= 180.0f) return fail("the two angles have to be above 0 and add up to less than 180 degrees");
+        A = 180.0f - B - C;
+        b = a * std::sin(B * deg) / std::sin(A * deg);
+        cc = a * std::sin(C * deg) / std::sin(A * deg);
+        break;
+    case TriangleRule::aas:
+        if (a <= 0.0f) return fail("the side has to be longer than 0");
+        if (A <= 0.0f || B <= 0.0f || A + B >= 180.0f) return fail("the two angles have to be above 0 and add up to less than 180 degrees");
+        C = 180.0f - A - B;
+        b = a * std::sin(B * deg) / std::sin(A * deg);
+        cc = a * std::sin(C * deg) / std::sin(A * deg);
+        break;
+    case TriangleRule::ssa: {
+        if (a <= 0.0f || b <= 0.0f) return fail("both sides have to be longer than 0");
+        if (A <= 0.0f || A >= 180.0f) return fail("the angle has to be between 0 and 180 degrees");
+        const float sb = b * std::sin(A * deg) / a;
+        if (sb > 1.0f + 1e-6f) return fail("side a is too short to reach: no triangle has these sides and angle");
+        float Bs = std::asin(std::min(1.0f, sb)) / deg;
+        const bool two = A < 90.0f && a < b && sb < 1.0f - 1e-6f;
+        if (two && c.triangle_wide) Bs = 180.0f - Bs;
+        if (A + Bs >= 180.0f) return fail("these sides and angle don't make a triangle");
+        B = Bs;
+        C = 180.0f - A - B;
+        cc = a * std::sin(C * deg) / std::sin(A * deg);
+        break;
+    }
+    case TriangleRule::right:
+        if (b <= 0.0f || cc <= 0.0f) return fail("both legs have to be longer than 0");
+        a = std::sqrt(b * b + cc * cc);
+        break;
+    }
+    if (!(a > 0.0f && b > 0.0f && cc > 0.0f) || !std::isfinite(a + b + cc)) return fail("these values don't make a triangle");
+    A = std::acos(std::clamp((b * b + cc * cc - a * a) / (2.0f * b * cc), -1.0f, 1.0f)) / deg;
+    B = std::acos(std::clamp((a * a + cc * cc - b * b) / (2.0f * a * cc), -1.0f, 1.0f)) / deg;
+    C = 180.0f - A - B;
+    sides = {a, b, cc};
+    angles = {A, B, C};
+    return true;
+}
+
+namespace {
+
+bool raw_triangle(const Collider& c, Vec3 out[3], float& width, float& height) {
+    Vec3 sides, angles;
+    if (!solve_triangle(c, sides, angles)) {
+        sides = {1.0f, 1.0f, 1.0f};
+        angles = {60.0f, 60.0f, 60.0f};
+    }
+    const float A = angles.x * 3.14159265358979f / 180.0f;
+    out[0] = {0.0f, 0.0f, 0.0f};
+    out[1] = {sides.z, 0.0f, 0.0f};
+    out[2] = {sides.y * std::cos(A), sides.y * std::sin(A), 0.0f};
+    const float lo = std::min({out[0].x, out[1].x, out[2].x});
+    const float hi = std::max({out[0].x, out[1].x, out[2].x});
+    width = std::max(1e-6f, hi - lo);
+    height = std::max(1e-6f, out[2].y);
+    for (int k = 0; k < 3; ++k) out[k].x -= lo;
+    return true;
+}
+
+} // namespace
+
+std::vector<Vec3> triangle_corners(const Collider& c) {
+    Vec3 raw[3];
+    float width = 1.0f, height = 1.0f;
+    raw_triangle(c, raw, width, height);
+    std::vector<Vec3> out;
+    for (int k = 0; k < 3; ++k) out.push_back({(raw[k].x / width - 0.5f) * c.size.x, (raw[k].y / height - 0.5f) * c.size.y, 0.0f});
+    return out;
+}
+
+std::vector<Vec3> triangle_prism_points(const Collider& c, Vec3 scale) {
+    std::vector<Vec3> out;
+    const float hz = 0.5f * c.size.z * scale.z;
+    for (const Vec3& p : triangle_corners(c)) {
+        out.push_back({p.x * scale.x, p.y * scale.y, -hz});
+        out.push_back({p.x * scale.x, p.y * scale.y, hz});
+    }
+    return out;
+}
+
+bool fit_triangle_size(Collider& c, std::string* why) {
+    Vec3 sides, angles;
+    if (!solve_triangle(c, sides, angles, why)) return false;
+    Vec3 raw[3];
+    float width = 1.0f, height = 1.0f;
+    raw_triangle(c, raw, width, height);
+    c.size.x = width;
+    c.size.y = height;
+    return true;
+}
+
 const std::vector<ColliderShape>& collider_shapes() {
-    static const std::vector<ColliderShape> all = {ColliderShape::box, ColliderShape::sphere, ColliderShape::capsule, ColliderShape::cylinder, ColliderShape::cone, ColliderShape::rounded_box, ColliderShape::sphere_section, ColliderShape::convex_hull, ColliderShape::mesh};
+    static const std::vector<ColliderShape> all = {ColliderShape::box, ColliderShape::sphere, ColliderShape::capsule, ColliderShape::cylinder, ColliderShape::cone, ColliderShape::rounded_box, ColliderShape::sphere_section, ColliderShape::triangle, ColliderShape::convex_hull, ColliderShape::mesh};
     return all;
 }
 
@@ -115,6 +270,7 @@ float collider_volume(const Collider& c, Vec3 scale, Dimension dimension) {
             const float h = std::max(0.0f, y - 2.0f * r);
             return 2.0f * r * h + pi * r * r;
         }
+        if (c.shape == ColliderShape::triangle) return x * y * 0.5f;
         return x * y;
     }
     switch (c.shape) {
@@ -145,6 +301,7 @@ float collider_volume(const Collider& c, Vec3 scale, Dimension dimension) {
         const float around = std::clamp(c.azimuth_max - c.azimuth_min, 0.0f, 360.0f) / 360.0f;
         return 2.0f * pi / 3.0f * (outer * outer * outer - inner * inner * inner) * (std::cos(p0) - std::cos(p1)) * around;
     }
+    case ColliderShape::triangle: return 0.5f * x * y * z;
     case ColliderShape::box:
     case ColliderShape::convex_hull:
     case ColliderShape::mesh: break;
@@ -2505,6 +2662,10 @@ std::string Scene::save() const {
             if (c.grip.x != 1.0f || c.grip.y != 1.0f || c.grip.z != 1.0f) out << " grip:" << number(c.grip.x) << "," << number(c.grip.y) << "," << number(c.grip.z);
             if (c.shape == ColliderShape::sphere_section) out << " arc:" << number(c.polar_min) << "," << number(c.polar_max) << "," << number(c.azimuth_min) << "," << number(c.azimuth_max);
             if (c.shell != base.shell) out << " shell:" << number(c.shell);
+            if (c.shape == ColliderShape::triangle) {
+                out << " triangle:" << to_string(c.triangle) << "," << number(c.triangle_sides.x) << "," << number(c.triangle_sides.y) << "," << number(c.triangle_sides.z)
+                    << "," << number(c.triangle_angles.x) << "," << number(c.triangle_angles.y) << "," << number(c.triangle_angles.z) << "," << (c.triangle_wide ? 1 : 0);
+            }
             if (!c.source.empty()) out << " source:" << escape_token(c.source);
             if (!c.name.empty()) out << " name:" << escape_token(c.name);
             if (c.locks != 0) out << " locks:" << c.locks;
@@ -2795,6 +2956,20 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     }
                     if (key == "shell") {
                         c.shell = std::max(0.0f, static_cast<float>(std::atof(val.c_str())));
+                        continue;
+                    }
+                    if (key == "triangle") {
+                        const std::size_t comma = val.find(',');
+                        if (const std::optional<TriangleRule> rule = parse_triangle_rule(val.substr(0, comma))) c.triangle = *rule;
+                        if (comma != std::string::npos) {
+                            float t[7] = {c.triangle_sides.x, c.triangle_sides.y, c.triangle_sides.z, c.triangle_angles.x, c.triangle_angles.y, c.triangle_angles.z, 0.0f};
+                            std::sscanf(val.c_str() + comma + 1, "%f,%f,%f,%f,%f,%f,%f", &t[0], &t[1], &t[2], &t[3], &t[4], &t[5], &t[6]);
+                            for (float& x : t)
+                                if (!std::isfinite(x)) x = 0.0f;
+                            c.triangle_sides = {t[0], t[1], t[2]};
+                            c.triangle_angles = {t[3], t[4], t[5]};
+                            c.triangle_wide = t[6] > 0.5f;
+                        }
                         continue;
                     }
                     if (key == "rounding") {

@@ -1058,3 +1058,53 @@ button.seg.lock {
 .node.part-fluid .node-icon {
     color: #6fb6e8;
 }
+
+.project-head {
+    padding: 6px 0 0 0;
+    border-color: var(--line);
+    border-width: 1px 0 0 0;
+}
+
+.project-files {
+    flex: 1;
+    min-height: 90px;
+    padding: 0;
+}
+
+.project-files.folded {
+    flex: 0;
+    min-height: 0;
+    height: 0;
+}
+
+.tree.files-folded {
+    flex: 1;
+}
+
+.folder {
+    padding: 3px 6px;
+    border-radius: 6px;
+    gap: 6px;
+    align-items: center;
+
+    &:hover {
+        background: var(--raised);
+    }
+}
+
+.folder-name {
+    font-weight: bold;
+}
+
+.folder-arrow {
+    width: 12px;
+}
+
+.file-icon {
+    width: 16px;
+}
+
+.file .count,
+.folder .count {
+    color: var(--muted);
+}

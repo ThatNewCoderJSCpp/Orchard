@@ -73,7 +73,7 @@
             <row class="workspace">
                 <column id="outliner" class="side left outliner">
                     <row class="side-head">
-                        <div class="card-title grow">OUTLINER</div>
+                        <div class="card-title grow">THIS SCENE</div>
                         <button id="outline-options" class="small ghost" title="Outliner options">&#8943;</button>
                         <button id="outline-side" class="small ghost" title="Move the outliner to the other side">&#8644;</button>
                     </row>
@@ -132,6 +132,12 @@
                         <button id="add-entity" class="small">+ Add</button>
                     </row>
                     <column id="tree" class="scroll tree" tabindex="0"></column>
+                    <row class="side-head project-head">
+                        <button id="project-fold" class="small ghost fold" title="Show or hide the project's files">&#9662;</button>
+                        <div class="card-title grow">PROJECT</div>
+                        <input_file id="import-files" class="small" filter="Models and images: *.glb *.gltf *.obj *.fbx *.png *.jpg *.jpeg *.tga *.webp; Models: *.glb *.gltf *.obj *.fbx; All files: *" multiple hide-value title="Copy models (glTF/GLB from Blender, OBJ) and images into the project's Assets folder. Blender: File &gt; Export &gt; glTF 2.0 (.glb)">Import...</input_file>
+                    </row>
+                    <column id="files" class="scroll files project-files" title="Click a script or graph to open it, a model to place it. Right-click for more."></column>
                 </column>
 
                 <column class="center">
@@ -306,21 +312,11 @@
 
             <column class="bottom">
                 <row class="tabs">
-                    <button class="tab" to="files-page">Files</button>
                     <button class="tab" to="entities-page">Entities</button>
                     <button class="tab" to="code-page">Script</button>
                     <button class="tab" to="console-page">Console</button>
-                    <div id="code-title" class="muted code-title">Pick a script or graph in Files. Graphs show the Walnut they turn into.</div>
+                    <div id="code-title" class="muted code-title">Pick a script or graph under Project on the left. Graphs show the Walnut they turn into.</div>
                 </row>
-                <page id="files-page" current>
-                    <column class="files-page">
-                        <row class="files-bar">
-                            <input_file id="import-files" filter="Models and images: *.glb *.gltf *.obj *.fbx *.png *.jpg *.jpeg *.tga *.webp; Models: *.glb *.gltf *.obj *.fbx; All files: *" multiple hide-value title="Copy models (glTF/GLB from Blender, OBJ) and images into the project's Assets folder">Import...</input_file>
-                            <text class="muted">Blender: File &gt; Export &gt; glTF 2.0 (.glb). Click a model to place it, right-click for more.</text>
-                        </row>
-                        <column id="files" class="scroll files"></column>
-                    </column>
-                </page>
                 <page id="entities-page">
                     <column class="entities-page">
                         <row class="entities-head">
@@ -335,7 +331,7 @@
                 <page id="code-page">
                     <input_code id="code" language="walnut" class="code" readonly></input_code>
                 </page>
-                <page id="console-page">
+                <page id="console-page" current>
                     <column id="console" class="scroll console"></column>
                 </page>
             </column>

@@ -119,6 +119,7 @@ struct CharacterMove {
     float max_slope = 50.0f;
     float ground_probe = 0.2f;
     bool upright = true;
+    float ride_height = 0.0f;
 };
 
 struct CharacterState {

@@ -57,8 +57,23 @@ enum class ColliderShape {
     rounded_box,
     sphere_section,
     convex_hull,
-    mesh
+    mesh,
+    triangle
 };
+
+enum class TriangleRule {
+    sss,
+    sas,
+    asa,
+    aas,
+    ssa,
+    right
+};
+
+const char* to_string(TriangleRule rule);
+std::optional<TriangleRule> parse_triangle_rule(const std::string& text);
+const char* triangle_rule_label(TriangleRule rule);
+const std::vector<TriangleRule>& triangle_rules();
 
 enum class BodyQuality {
     project_default,
@@ -193,11 +208,19 @@ struct Collider {
     std::string name;
     float mass = 0.0f;
     std::uint32_t locks = 0;
+    TriangleRule triangle = TriangleRule::sss;
+    Vec3 triangle_sides{1.0f, 1.0f, 1.0f};
+    Vec3 triangle_angles{60.0f, 60.0f, 60.0f};
+    bool triangle_wide = false;
 
     bool locked(ColliderLock l) const { return (locks & l) != 0; }
     void lock(ColliderLock l, bool on) { locks = on ? (locks | l) : (locks & ~static_cast<std::uint32_t>(l)); }
 };
 
+bool solve_triangle(const Collider& c, Vec3& sides, Vec3& angles, std::string* why = nullptr);
+std::vector<Vec3> triangle_corners(const Collider& c);
+std::vector<Vec3> triangle_prism_points(const Collider& c, Vec3 scale = Vec3{1.0f, 1.0f, 1.0f});
+bool fit_triangle_size(Collider& c, std::string* why = nullptr);
 float collider_volume(const Collider& c, Vec3 scale = Vec3{1.0f, 1.0f, 1.0f}, Dimension dimension = Dimension::three_d);
 float collider_density_unit(Dimension dimension);
 float collider_mass(const Collider& c, Vec3 scale = Vec3{1.0f, 1.0f, 1.0f}, Dimension dimension = Dimension::three_d);

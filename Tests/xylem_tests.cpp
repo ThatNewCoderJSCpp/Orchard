@@ -519,8 +519,79 @@ void test_running_stays_down() {
     check(airborne < 10, "and it stays on the ground (" + str(static_cast<float>(airborne)) + " frames in the air)");
 }
 
+void test_detailed_player_walks_hills() {
+    for (orchard::HumanoidKind hk : {orchard::HumanoidKind::detailed, orchard::HumanoidKind::full_body}) {
+        orchard::Scene s(orchard::Dimension::three_d);
+        const orchard::Entity te = s.create("Terrain");
+        orchard::Terrain& t = s.add_terrain(te);
+        t = orchard::terrain_preset("hills");
+        orchard::TerrainHeights heights;
+        orchard::generate_heights(t, heights);
+        s.transform(te)->position = orchard::Vec3{0.0f, -heights.height_at(0.0f, 0.0f), 0.0f};
+        const orchard::Entity p = orchard::add_humanoid(s, hk, {}, "Player");
+        orchard::Body& b = *s.body(p);
+        b.set(orchard::body_sleep, false);
+        b.continuous = orchard::BodyContinuous::on;
+        std::vector<orchard::Entity> todo{p};
+        while (!todo.empty()) {
+            const orchard::Entity at = todo.back();
+            todo.pop_back();
+            if (std::vector<orchard::Collider>* cs = s.colliders(at))
+                for (orchard::Collider& c : *cs) {
+                    c.friction = 0.0f;
+                    c.friction_combine = orchard::CombineMode::minimum;
+                }
+            for (orchard::Entity ch : s.children(at)) todo.push_back(ch);
+        }
+        s.transform(p)->position = orchard::Vec3{0.0f, 0.3f, 0.0f};
+        xylem::World w(orchard::Dimension::three_d);
+        w.build(s);
+        int stuck = 0;
+        orchard::Vec3 prev = s.transform(p)->position;
+        for (int i = 0; i < 60 * 15; ++i) {
+            const float a = static_cast<float>(i) / 60.0f * 0.15f;
+            xylem::CharacterMove mv;
+            mv.wish = orchard::Vec3{std::cos(a), 0.0f, std::sin(a)} * 4.0f;
+            mv.ride_height = 0.05f;
+            w.move_character(p, mv, 1.0f / 60.0f);
+            w.step(1.0f / 60.0f);
+            const orchard::Vec3 at = s.transform(p)->position;
+            orchard::Vec3 d = at - prev;
+            d.y = 0.0f;
+            if (i > 60 && orchard::length(d) * 60.0f < 2.0f) ++stuck;
+            prev = at;
+        }
+        check(stuck < 10, std::string("a ") + orchard::humanoid_label(hk) + " player walks over hills without its feet catching (" + str(static_cast<float>(stuck)) + " slow frames)");
+    }
+}
+
+void test_triangle_prism_lands() {
+    for (orchard::Dimension dim : {orchard::Dimension::three_d, orchard::Dimension::two_d}) {
+        orchard::Scene s(dim);
+        const orchard::Entity floor_e = s.create("Floor");
+        s.transform(floor_e)->position = {0.0f, -0.5f, 0.0f};
+        s.add_body(floor_e).type = orchard::BodyType::fixed;
+        s.add_collider(floor_e)->size = {20.0f, 1.0f, 20.0f};
+        const orchard::Entity t = s.create("Triangle");
+        s.transform(t)->position = {0.0f, 2.0f, 0.0f};
+        s.add_body(t);
+        orchard::Collider* c = s.add_collider(t, orchard::ColliderShape::triangle);
+        c->triangle = orchard::TriangleRule::right;
+        c->triangle_sides = {0.0f, 1.0f, 2.0f};
+        orchard::fit_triangle_size(*c);
+        xylem::World w(dim);
+        w.build(s);
+        for (int i = 0; i < 60 * 4; ++i) w.step(1.0f / 60.0f);
+        const float y = s.transform(t)->position.y;
+        const float v = orchard::length(w.velocity(t));
+        check(y > 0.1f && y < 1.0f && v < 0.05f, std::string("a triangle prism lands on the floor and stops (") + (dim == orchard::Dimension::two_d ? "2D" : "3D") + ", height " + str(y) + ", speed " + str(v) + ")");
+    }
+}
+
 int main() {
     test_running_stays_down();
+    test_detailed_player_walks_hills();
+    test_triangle_prism_lands();
     test_balls_settle();
     test_start_motion();
     test_mass_and_locks();
