@@ -1,4 +1,5 @@
 #include <chlorophyll/chlorophyll.hpp>
+#include <orchard/solid.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -1558,6 +1559,7 @@ void World::build(const orchard::Scene& scene, const orchard::ProjectInfo& info,
         }
         const orchard::Material* om = scene.material(e);
         if (om && !om->visible) continue;
+        if (orchard::is_negative_part(scene, e)) continue;
         m_instances_of[e.id()];
         m_parts_of[e.id()];
         if (geometry) {
@@ -1689,6 +1691,7 @@ void World::sync(const orchard::Scene& scene) {
         if (is_camera(scene, e)) continue;
         const orchard::Material* om = scene.material(e);
         if (om && !om->visible) continue;
+        if (orchard::is_negative_part(scene, e)) continue;
         ++seen_objects;
         const auto ids = m_instances_of.find(e.id());
         if (ids == m_instances_of.end()) {

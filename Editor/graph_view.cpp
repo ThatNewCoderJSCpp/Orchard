@@ -473,8 +473,13 @@ void GraphView::clear_selection() {
 }
 
 std::vector<GraphCategory> GraphView::catalog() {
+    return catalog(graph::GraphKind::script);
+}
+
+std::vector<GraphCategory> GraphView::catalog(graph::GraphKind kind) {
     std::vector<GraphCategory> out;
-    for (const graph::NodeType& t : graph::node_types()) {
+    for (const graph::NodeType* type : graph::node_types(kind)) {
+        const graph::NodeType& t = *type;
         auto it = std::find_if(out.begin(), out.end(), [&](const GraphCategory& c) { return c.name == t.category; });
         if (it == out.end()) {
             out.push_back(GraphCategory{t.category, {}});
@@ -620,7 +625,7 @@ bool GraphView::duplicate_selected() {
 void GraphView::refresh_compile() const {
     if (m_compiled_revision == m_revision) return;
     m_compiled = GraphCompile{};
-    m_compiled.code = m_graph.to_walnut(&m_compiled.errors);
+    m_compiled.code = m_graph.compile(&m_compiled.errors);
     for (int id : nodes_in_error(m_compiled.errors)) m_compiled.error_nodes.insert(id);
     m_compiled_revision = m_revision;
 }
@@ -947,6 +952,16 @@ Color category_color(const std::string& category) {
     if (category == "Math") return Color(46, 136, 136);
     if (category == "Logic") return Color(130, 84, 178);
     if (category == "Text") return Color(178, 146, 52);
+    if (category == "Brain") return Color(176, 64, 56);
+    if (category == "Tree") return Color(120, 124, 132);
+    if (category == "Decorators") return Color(130, 84, 178);
+    if (category == "Conditions") return Color(178, 146, 52);
+    if (category == "Moving") return Color(60, 108, 178);
+    if (category == "Fighting") return Color(186, 70, 70);
+    if (category == "Alarms") return Color(196, 120, 48);
+    if (category == "Hunter") return Color(110, 70, 120);
+    if (category == "Flying") return Color(46, 136, 136);
+    if (category == "Notes & Scripts") return Color(70, 140, 72);
     return Color(96, 102, 92);
 }
 

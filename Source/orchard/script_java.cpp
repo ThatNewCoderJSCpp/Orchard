@@ -14,7 +14,7 @@ namespace {
 using create_vm_fn = jint(JNICALL*)(JavaVM**, void**, void*);
 using created_vms_fn = jint(JNICALL*)(JavaVM**, jsize, jsize*);
 
-const char* const k_api_files[] = {"Vec3.java", "Native.java", "Entity.java", "World.java", "Script.java", "Host.java"};
+const char* const k_api_files[] = {"Vec3.java", "Native.java", "Entity.java", "Lib.java", "World.java", "Script.java", "Host.java"};
 
 std::string java_home(const ScriptToolchain& tools) {
     if (!tools.java_home.empty()) return tools.java_home;
@@ -108,6 +108,31 @@ jlong JNICALL n_game_entity(JNIEnv* env, jclass, jint op, jlong e, jlong other, 
     if (count > 0) env->GetDoubleArrayRegion(args, 0, count, values);
     const std::string s = text ? utf(env, text) : std::string();
     return static_cast<jlong>(host().game_entity(op, static_cast<orchard_entity>(e), static_cast<orchard_entity>(other), values, static_cast<int>(count), s.c_str()));
+}
+jstring JNICALL n_game_text(JNIEnv* env, jclass, jint op, jlong e, jlong other, jdoubleArray args, jstring text) {
+    std::vector<double> values;
+    jsize count = args ? env->GetArrayLength(args) : 0;
+    if (count > 0) {
+        values.resize(static_cast<std::size_t>(count));
+        env->GetDoubleArrayRegion(args, 0, count, values.data());
+    }
+    const std::string s = text ? utf(env, text) : std::string();
+    const char* r = ORCHARD_HOST_HAS(&host(), game_text) ? host().game_text(op, static_cast<orchard_entity>(e), static_cast<orchard_entity>(other), values.empty() ? nullptr : values.data(), static_cast<int>(count), s.c_str()) : "";
+    return env->NewStringUTF(r ? r : "");
+}
+jdoubleArray JNICALL n_game_values(JNIEnv* env, jclass, jint op, jlong e, jlong other, jdoubleArray args, jstring text) {
+    std::vector<double> values;
+    jsize count = args ? env->GetArrayLength(args) : 0;
+    if (count > 0) {
+        values.resize(static_cast<std::size_t>(count));
+        env->GetDoubleArrayRegion(args, 0, count, values.data());
+    }
+    const std::string s = text ? utf(env, text) : std::string();
+    std::vector<double> out(4096);
+    const int n = ORCHARD_HOST_HAS(&host(), game_values) ? host().game_values(op, static_cast<orchard_entity>(e), static_cast<orchard_entity>(other), values.empty() ? nullptr : values.data(), static_cast<int>(count), s.c_str(), out.data(), static_cast<int>(out.size())) : 0;
+    jdoubleArray r = env->NewDoubleArray(n > 0 ? n : 0);
+    if (n > 0) env->SetDoubleArrayRegion(r, 0, n, out.data());
+    return r;
 }
 jboolean JNICALL n_exists(JNIEnv*, jclass, jlong e) { return host().exists(static_cast<orchard_entity>(e)) ? JNI_TRUE : JNI_FALSE; }
 void JNICALL n_destroy(JNIEnv*, jclass, jlong e) { host().destroy(static_cast<orchard_entity>(e)); }
@@ -248,6 +273,8 @@ JNIEnv* start_jvm(const ScriptToolchain& tools, const std::string& api_dir, std:
         {const_cast<char*>("touching"), const_cast<char*>("(JJ)Z"), reinterpret_cast<void*>(&n_touching)},
         {const_cast<char*>("game"), const_cast<char*>("(IJJ[DLjava/lang/String;)D"), reinterpret_cast<void*>(&n_game)},
         {const_cast<char*>("gameEntity"), const_cast<char*>("(IJJ[DLjava/lang/String;)J"), reinterpret_cast<void*>(&n_game_entity)},
+        {const_cast<char*>("gameText"), const_cast<char*>("(IJJ[DLjava/lang/String;)Ljava/lang/String;"), reinterpret_cast<void*>(&n_game_text)},
+        {const_cast<char*>("gameValues"), const_cast<char*>("(IJJ[DLjava/lang/String;)[D"), reinterpret_cast<void*>(&n_game_values)},
     };
     if (env->RegisterNatives(native, methods, static_cast<jint>(sizeof(methods) / sizeof(methods[0]))) != JNI_OK) {
         if (error) *error = "couldn't connect Orchard's Java API: " + take_exception(env);

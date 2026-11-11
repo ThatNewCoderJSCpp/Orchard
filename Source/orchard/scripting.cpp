@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <regex>
+#include <set>
 #include <sstream>
 
 #if defined(_WIN32)
@@ -426,6 +427,438 @@ const char* host_animation_event(orchard_entity e) {
     return last.c_str();
 }
 
+std::vector<std::string> split_text(const char* text) {
+    std::vector<std::string> out(1);
+    if (!text) return out;
+    for (const char* c = text; *c; ++c) {
+        if (*c == '\x1f') out.emplace_back();
+        else out.back() += *c;
+    }
+    return out;
+}
+
+std::string part(const std::vector<std::string>& p, std::size_t i, const std::string& fallback = std::string()) {
+    return i < p.size() ? p[i] : fallback;
+}
+
+std::vector<int> parse_layers(const std::string& s) {
+    std::vector<int> out;
+    std::string cur;
+    for (char c : s + ",") {
+        if (c == ',' || c == ' ' || c == 'x') {
+            if (!cur.empty()) out.push_back(std::atoi(cur.c_str()));
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    return out;
+}
+
+ai::VoxelAgent voxel_agent(const double* args, int count, int from) {
+    auto arg = [args, count](int i, double fb) { return args && i < count ? args[i] : fb; };
+    ai::VoxelAgent a;
+    a.height = static_cast<int>(arg(from, 2.0));
+    a.step_up = static_cast<int>(arg(from + 1, 1.0));
+    a.jump_up = a.step_up;
+    a.max_drop = static_cast<int>(arg(from + 2, 3.0));
+    a.jump_across = static_cast<int>(arg(from + 3, 0.0));
+    a.danger_weight = static_cast<float>(arg(from + 4, 10.0));
+    return a;
+}
+
+double host_lib(int op, Entity e, Entity o, const double* args, int count, const char* text) {
+    ScriptRuntime& r = rt();
+    ai::AiWorld& w = r.ai();
+    Scene* s = r.scene();
+    auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
+    auto argf = [&](int i, double fallback) { return static_cast<float>(arg(i, fallback)); };
+    auto v3 = [&](int i) { return Vec3{argf(i, 0.0), argf(i + 1, 0.0), argf(i + 2, 0.0)}; };
+    const std::vector<std::string> t = split_text(text);
+    switch (op) {
+    case ORCHARD_GAME_RANDOM_SEED:
+        r.random().seed(static_cast<std::uint64_t>(arg(0, 0.0)));
+        w.random().seed(static_cast<std::uint64_t>(arg(0, 0.0)) ^ 0x5bd1e995ull);
+        return 0.0;
+    case ORCHARD_GAME_RANDOM_GAUSSIAN: return r.random().gaussian(arg(0, 0.0), arg(1, 1.0));
+    case ORCHARD_GAME_SECURE_RANDOM: return secure_random().range(arg(0, 0.0), arg(1, 1.0));
+    case ORCHARD_GAME_SECURE_RANDOM_INTEGER: return static_cast<double>(secure_random().integer(static_cast<long long>(std::floor(arg(0, 0.0))), static_cast<long long>(std::floor(arg(1, 100.0)))));
+    case ORCHARD_GAME_SECURE_CHANCE: return secure_random().chance(arg(0, 0.5)) ? 1.0 : 0.0;
+    case ORCHARD_GAME_RANDOM_CHANCE: return r.random().chance(arg(0, 0.5)) ? 1.0 : 0.0;
+    case ORCHARD_GAME_RANDOM_RANGE: return r.random().range(arg(0, 0.0), arg(1, 1.0));
+    case ORCHARD_GAME_RANDOM_WHOLE:
+    case ORCHARD_GAME_RANDOM_INTEGER: return static_cast<double>(r.random().integer(static_cast<long long>(std::floor(arg(0, 0.0))), static_cast<long long>(std::floor(arg(1, 10.0)))));
+    case ORCHARD_GAME_RANDOM_WEIGHTED: {
+        std::vector<double> wts;
+        for (int i = 0; i < count; ++i) wts.push_back(args[i]);
+        return wts.empty() ? -1.0 : static_cast<double>(r.random().weighted(wts));
+    }
+    case ORCHARD_GAME_NOISE: return noise(argf(0, 0.0), argf(1, 0.0), argf(2, 0.0), static_cast<std::uint32_t>(arg(3, 0.0)));
+    case ORCHARD_GAME_FRACTAL_NOISE: return fractal_noise(argf(0, 0.0), argf(1, 0.0), argf(2, 0.0), static_cast<int>(arg(3, 4.0)), static_cast<std::uint32_t>(arg(4, 0.0)));
+    case ORCHARD_GAME_BAG_ADD: r.bag(part(t, 0)).add(part(t, 1), static_cast<std::size_t>(std::max(1.0, arg(0, 1.0)))); return 0.0;
+    case ORCHARD_GAME_BAG_COUNT:
+    case ORCHARD_GAME_BAG_REMAINING: return r.has_bag(part(t, 0)) ? static_cast<double>(r.bag(part(t, 0)).remaining()) : 0.0;
+    case ORCHARD_GAME_BAG_SIZE: return r.has_bag(part(t, 0)) ? static_cast<double>(r.bag(part(t, 0)).size()) : 0.0;
+    case ORCHARD_GAME_BAG_RESET: if (r.has_bag(part(t, 0))) r.bag(part(t, 0)).refill(); return 0.0;
+    case ORCHARD_GAME_BAG_CLEAR: r.drop_bag(part(t, 0)); return 0.0;
+    case ORCHARD_GAME_BAG_REMOVE: return r.has_bag(part(t, 0)) && r.bag(part(t, 0)).remove(part(t, 1)) ? 1.0 : 0.0;
+    case ORCHARD_GAME_BAG_AVOID_REPEATS: r.bag(part(t, 0)).avoid_boundary_repeat(arg(0, 1.0) != 0.0); return 0.0;
+    case ORCHARD_GAME_SOUND_PLAY: return r.play_sound(part(t, 0), Vec3{}, Entity{}, false, argf(0, 1.0), argf(1, 1.0));
+    case ORCHARD_GAME_SOUND_PLAY_AT: return r.play_sound(part(t, 0), v3(0), Entity{}, true, argf(3, 1.0), argf(4, 1.0), false, argf(5, 25.0));
+    case ORCHARD_GAME_SOUND_PLAY_ON: return r.play_sound(part(t, 0), s && s->alive(e) ? r.gameplay().position(e) : Vec3{}, e, true, argf(0, 1.0), argf(1, 1.0), false, argf(2, 25.0));
+    case ORCHARD_GAME_SOUND_LOOP: return r.play_sound(part(t, 0), Vec3{}, Entity{}, false, argf(0, 1.0), 1.0f, true);
+    case ORCHARD_GAME_SOUND_LOOP_ON: return r.play_sound(part(t, 0), s && s->alive(e) ? r.gameplay().position(e) : Vec3{}, e, true, argf(0, 1.0), 1.0f, true, argf(1, 25.0));
+    case ORCHARD_GAME_SOUND_STOP: r.stop_sound(static_cast<int>(arg(0, 0.0))); return 0.0;
+    case ORCHARD_GAME_SOUND_STOP_ALL: r.stop_all_sounds(); return 0.0;
+    case ORCHARD_GAME_SOUND_SET_VOLUME: r.set_sound_volume(static_cast<int>(arg(0, 0.0)), argf(1, 1.0)); return 0.0;
+    case ORCHARD_GAME_SOUND_SET_PITCH: r.set_sound_pitch(static_cast<int>(arg(0, 0.0)), argf(1, 1.0)); return 0.0;
+    case ORCHARD_GAME_SOUND_PAUSE: r.pause_sound(static_cast<int>(arg(0, 0.0)), arg(1, 1.0) != 0.0); return 0.0;
+    case ORCHARD_GAME_SOUND_PLAYING: return r.sound_playing(static_cast<int>(arg(0, 0.0))) ? 1.0 : 0.0;
+    case ORCHARD_GAME_SOUND_PLAY_SOURCE: return r.play_sound_source(e);
+    case ORCHARD_GAME_SOUND_STOP_SOURCE: r.stop_sound_source(e); return 0.0;
+    case ORCHARD_GAME_AI_ADD: return w.add_agent(e, part(t, 0, "guard")) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_SET_BRAIN: return w.set_brain(e, part(t, 0)) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_SET_BEHAVIOR: {
+        std::string why;
+        const bool ok = w.set_behavior(e, part(t, 0), &why);
+        if (!ok && !why.empty()) r.log("AI behavior: " + why, true);
+        return ok ? 1.0 : 0.0;
+    }
+    case ORCHARD_GAME_AI_DEFINE_BEHAVIOR: {
+        std::string why;
+        const bool ok = w.define_behavior(part(t, 0), part(t, 1), &why);
+        if (!ok) r.log("AI behavior " + part(t, 0) + ": " + why, true);
+        return ok ? 1.0 : 0.0;
+    }
+    case ORCHARD_GAME_AI_ENABLE: return w.set_enabled(e, arg(0, 1.0) != 0.0) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_IS_AGENT: return w.is_agent(e) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_SET_TEAM: return w.set_team(e, part(t, 0)) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_SET_RELATION: w.set_relation(part(t, 0), part(t, 1), static_cast<int>(arg(0, -1.0))); return 0.0;
+    case ORCHARD_GAME_AI_RELATION: return w.relation(part(t, 0), part(t, 1));
+    case ORCHARD_GAME_AI_HOSTILE: return w.hostile(e, o) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_MOVE_TO: return w.move_to(e, v3(0), arg(3, 0.0) != 0.0) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_STOP: w.stop_moving(e); return 0.0;
+    case ORCHARD_GAME_AI_ARRIVED: return w.arrived(e) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_IS_MOVING: return w.moving(e) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_SET_TARGET: return w.set_target(e, o) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_CAN_SEE: return w.can_see(e, o) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_AWARENESS: return w.awareness(e, o);
+    case ORCHARD_GAME_AI_SUSPICION: return w.suspicion(e);
+    case ORCHARD_GAME_AI_ALERT_LEVEL: return w.alert_level(e);
+    case ORCHARD_GAME_AI_FINISH_ACTION: return w.finish_action(e, arg(0, 1.0) != 0.0) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_SET_VISIBILITY: w.set_visibility(e, argf(0, 1.0)); return 0.0;
+    case ORCHARD_GAME_AI_MAKE_NOISE: w.make_noise(v3(0), argf(3, 15.0), e, part(t, 0, "noise")); return 0.0;
+    case ORCHARD_GAME_AI_MAKE_NOISE_FROM: w.make_noise(s && s->alive(e) ? r.gameplay().position(e) : Vec3{}, argf(0, 15.0), e, part(t, 0, "noise")); return 0.0;
+    case ORCHARD_GAME_AI_SET_TEAM_ALERT: {
+        const std::string ph = part(t, 1, "alert");
+        const ai::AlertPhase p = ph == "calm" ? ai::AlertPhase::calm : ph == "caution" ? ai::AlertPhase::caution : ph == "evasion" ? ai::AlertPhase::evasion : ai::AlertPhase::alert;
+        w.set_team_alert(part(t, 0), p, v3(0));
+        return 0.0;
+    }
+    case ORCHARD_GAME_AI_PATH_LENGTH: {
+        ai::NavPathOptions opt;
+        opt.partial = false;
+        const ai::NavPath p = w.find_path(v3(0), v3(3), opt);
+        return p.found ? p.length : -1.0;
+    }
+    case ORCHARD_GAME_AI_ADD_DANGER: return w.add_danger(v3(0), argf(3, 3.0), argf(4, 5.0), argf(5, 0.0));
+    case ORCHARD_GAME_AI_CLEAR_DANGER: w.clear_danger(); return 0.0;
+    case ORCHARD_GAME_AI_BAKE: return static_cast<double>(w.bake(v3(0), v3(3)));
+    case ORCHARD_GAME_AI_LINE_OF_SIGHT: return w.line_of_sight(v3(0), v3(3)) ? 1.0 : 0.0;
+    case ORCHARD_GAME_AI_SET_NUMBER:
+        if (ai::Blackboard* b = w.blackboard(e)) b->set_number(part(t, 0), arg(0, 0.0));
+        return 0.0;
+    case ORCHARD_GAME_AI_GET_NUMBER: {
+        ai::Blackboard* b = w.blackboard(e);
+        return b ? b->number(part(t, 0), 0.0) : 0.0;
+    }
+    case ORCHARD_GAME_AI_SET_TEXT:
+        if (ai::Blackboard* b = w.blackboard(e)) b->set(part(t, 0), part(t, 1));
+        return 0.0;
+    case ORCHARD_GAME_AI_DIRECTOR_INTENSITY: return w.director().intensity();
+    case ORCHARD_GAME_AI_DIRECTOR_MENACE: return w.director().menace();
+    case ORCHARD_GAME_AI_DIRECTOR_NOTE: w.director().note(part(t, 0), argf(0, 1.0)); return 0.0;
+    case ORCHARD_GAME_AI_DIRECTOR_HABIT: return w.director().habit(part(t, 0));
+    case ORCHARD_GAME_AI_SET_SPAWNS: w.set_spawns(part(t, 0), static_cast<int>(arg(0, 10.0)), argf(1, 15.0), argf(2, 40.0), argf(3, 3.0)); return 0.0;
+    case ORCHARD_GAME_AI_AGENT_COUNT: return static_cast<double>(w.agent_count());
+    case ORCHARD_GAME_VOXEL_DEFINE: {
+        ai::Block b;
+        b.solid = arg(0, 1.0) != 0.0;
+        b.climbable = arg(1, 0.0) != 0.0;
+        b.liquid = arg(2, 0.0) != 0.0;
+        b.cost = argf(3, 1.0);
+        b.danger = argf(4, 0.0);
+        b.open = arg(5, 0.0) != 0.0;
+        if (b.open) b.solid = true;
+        return w.voxels().define(part(t, 0), b);
+    }
+    case ORCHARD_GAME_VOXEL_SET: {
+        const int id = w.voxels().type_id(part(t, 0, "air"));
+        w.voxels().set(static_cast<int>(std::floor(arg(0, 0.0))), static_cast<int>(std::floor(arg(1, 0.0))), static_cast<int>(std::floor(arg(2, 0.0))), id < 0 ? 0 : id);
+        return 0.0;
+    }
+    case ORCHARD_GAME_VOXEL_FILL: {
+        const int id = w.voxels().type_id(part(t, 0, "air"));
+        auto ip = [&](int i) { return static_cast<int>(std::floor(arg(i, 0.0))); };
+        w.voxels().fill(ai::BlockPos{ip(0), ip(1), ip(2)}, ai::BlockPos{ip(3), ip(4), ip(5)}, id < 0 ? 0 : id);
+        return 0.0;
+    }
+    case ORCHARD_GAME_VOXEL_CLEAR: w.voxels().clear(); return 0.0;
+    case ORCHARD_GAME_VOXEL_FLOOR: w.voxels().solid_floor = static_cast<int>(std::floor(arg(0, 0.0))); return 0.0;
+    case ORCHARD_GAME_GOAP_ACTION: w.planner(part(t, 0)).add(part(t, 1), part(t, 2), part(t, 3), argf(0, 1.0)); return 0.0;
+    case ORCHARD_GAME_GOAP_REMOVE: w.planner(part(t, 0)).remove(part(t, 1)); return 0.0;
+    case ORCHARD_GAME_GOAP_CLEAR: w.planner(part(t, 0)).clear(); return 0.0;
+    case ORCHARD_GAME_CHESS_NEW: return w.new_chess(part(t, 0));
+    case ORCHARD_GAME_CHESS_FREE: w.drop_chess(static_cast<int>(arg(0, 0.0))); return 0.0;
+    case ORCHARD_GAME_CHESS_LOAD: {
+        ai::Chess* c = w.chess(static_cast<int>(arg(0, 0.0)));
+        return c && c->load_fen(part(t, 0)) ? 1.0 : 0.0;
+    }
+    case ORCHARD_GAME_CHESS_MOVE: {
+        ai::Chess* c = w.chess(static_cast<int>(arg(0, 0.0)));
+        return c && c->play(part(t, 0)) ? 1.0 : 0.0;
+    }
+    case ORCHARD_GAME_CHESS_IS_LEGAL: {
+        ai::Chess* c = w.chess(static_cast<int>(arg(0, 0.0)));
+        return c && c->parse_move(part(t, 0)) ? 1.0 : 0.0;
+    }
+    case ORCHARD_GAME_CHESS_UNDO: {
+        ai::Chess* c = w.chess(static_cast<int>(arg(0, 0.0)));
+        return c && c->undo() ? 1.0 : 0.0;
+    }
+    case ORCHARD_GAME_CHESS_TURN: {
+        ai::Chess* c = w.chess(static_cast<int>(arg(0, 0.0)));
+        return c ? c->turn() : 0.0;
+    }
+    case ORCHARD_GAME_CHESS_PIECE: {
+        ai::Chess* c = w.chess(static_cast<int>(arg(0, 0.0)));
+        return c ? c->piece_at(part(t, 0)) : 0.0;
+    }
+    case ORCHARD_GAME_NN_CREATE: {
+        const auto hidden = ai::parse_activation(part(t, 2, "tanh"));
+        const auto output = ai::parse_activation(part(t, 3, "sigmoid"));
+        const std::vector<int> layers = parse_layers(part(t, 1));
+        if (layers.size() < 2 || !hidden || !output) return 0.0;
+        w.make_net(part(t, 0), layers, *hidden, *output);
+        return 1.0;
+    }
+    case ORCHARD_GAME_NN_TRAIN: {
+        ai::NeuralNet* n = w.net(part(t, 0));
+        if (!n) return -1.0;
+        const double rate = arg(0, 0.05);
+        std::vector<double> in, target;
+        for (int i = 1; i < count; ++i) (static_cast<int>(in.size()) < n->inputs() ? in : target).push_back(args[i]);
+        return n->train(in, target, rate);
+    }
+    case ORCHARD_GAME_NN_LOAD: {
+        auto n = ai::NeuralNet::load(part(t, 1));
+        if (!n) return 0.0;
+        ai::NeuralNet& dst = w.make_net(part(t, 0), n->layers(), ai::Activation::tanh, ai::Activation::sigmoid);
+        dst = *n;
+        return 1.0;
+    }
+    case ORCHARD_GAME_Q_CHOOSE: return w.learner(part(t, 0), static_cast<int>(arg(0, 4.0))).choose(part(t, 1));
+    case ORCHARD_GAME_Q_BEST: return w.learner(part(t, 0), 0).best(part(t, 1));
+    case ORCHARD_GAME_Q_LEARN: w.learner(part(t, 0), 0).learn(part(t, 1), static_cast<int>(arg(0, 0.0)), arg(1, 0.0), part(t, 2), arg(2, 0.0) != 0.0); return 0.0;
+    case ORCHARD_GAME_Q_SETTINGS: {
+        ai::QLearner& q = w.learner(part(t, 0), 0);
+        q.epsilon = arg(0, 0.1);
+        q.alpha = arg(1, 0.2);
+        q.gamma = arg(2, 0.9);
+        return 0.0;
+    }
+    case ORCHARD_GAME_Q_LOAD: return w.learner(part(t, 0), 0).load(part(t, 1)) ? 1.0 : 0.0;
+    case ORCHARD_GAME_MARKOV_TRAIN: w.markov(part(t, 0), static_cast<int>(arg(0, 1.0))).train_text(part(t, 1), arg(1, 0.0) != 0.0); return 0.0;
+    default: return 0.0;
+    }
+}
+
+const char* host_game_text(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text) {
+    static std::string out;
+    out.clear();
+    if (!g_runtime) return out.c_str();
+    ScriptRuntime& r = rt();
+    ai::AiWorld& w = r.ai();
+    const Entity e = entity_of(entity);
+    static_cast<void>(other);
+    auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
+    const std::vector<std::string> t = split_text(text);
+    auto chess = [&]() { return w.chess(static_cast<int>(arg(0, 0.0))); };
+    switch (op) {
+    case ORCHARD_GAME_SECURE_PICK:
+    case ORCHARD_GAME_RANDOM_PICK: {
+        std::vector<std::string> choices;
+        std::string cur;
+        const std::string all = part(t, 0);
+        const char sep = all.find('|') != std::string::npos ? '|' : ',';
+        for (char c : all + sep) {
+            if (c == sep) {
+                std::size_t a = cur.find_first_not_of(' '), b = cur.find_last_not_of(' ');
+                if (a != std::string::npos) choices.push_back(cur.substr(a, b - a + 1));
+                cur.clear();
+            } else {
+                cur += c;
+            }
+        }
+        if (!choices.empty()) out = op == ORCHARD_GAME_SECURE_PICK ? choices[secure_random().index(choices.size())] : r.random().pick(choices);
+        break;
+    }
+    case ORCHARD_GAME_SECURE_RANDOM_TEXT: out = secure_random().text(static_cast<std::size_t>(std::clamp(arg(0, 16.0), 0.0, 4096.0)), part(t, 0, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")); break;
+    case ORCHARD_GAME_SECURE_TOKEN: out = secure_random().token(static_cast<std::size_t>(std::clamp(arg(0, 32.0), 1.0, 4096.0))); break;
+    case ORCHARD_GAME_SECURE_HEX: out = secure_random().hex(static_cast<std::size_t>(std::clamp(arg(0, 16.0), 1.0, 4096.0))); break;
+    case ORCHARD_GAME_SECURE_UUID: out = secure_random().uuid(); break;
+    case ORCHARD_GAME_RANDOM_TEXT: out = r.random().text(static_cast<std::size_t>(std::clamp(arg(0, 8.0), 0.0, 4096.0)), part(t, 0, "abcdefghijklmnopqrstuvwxyz")); break;
+    case ORCHARD_GAME_BAG_NEXT:
+        if (r.has_bag(part(t, 0)) && !r.bag(part(t, 0)).empty()) out = r.bag(part(t, 0)).next();
+        break;
+    case ORCHARD_GAME_BAG_PEEK:
+        if (r.has_bag(part(t, 0))) {
+            ShuffleBag<std::string>& b = r.bag(part(t, 0));
+            if (b.remaining() == 0 && !b.empty()) b.refill();
+            if (const std::string* p = b.peek()) out = *p;
+        }
+        break;
+    case ORCHARD_GAME_AI_BRAIN_BEHAVIOR: out = ai::brain_behavior(part(t, 0)); break;
+    case ORCHARD_GAME_AI_BEHAVIOR_TEXT: out = w.behavior_text(e); break;
+    case ORCHARD_GAME_AI_TEAM: out = w.team(e); break;
+    case ORCHARD_GAME_AI_STATE: out = w.state(e); break;
+    case ORCHARD_GAME_AI_ACTION: out = w.action(e); break;
+    case ORCHARD_GAME_AI_EVENT: out = w.next_event(e); break;
+    case ORCHARD_GAME_AI_PENDING: out = w.pending_action(e); break;
+    case ORCHARD_GAME_AI_PENDING_ARG: out = w.pending_argument(e, static_cast<int>(arg(0, 0.0))); break;
+    case ORCHARD_GAME_AI_TEAM_ALERT: out = ai::to_string(w.team_alert(part(t, 0))); break;
+    case ORCHARD_GAME_AI_GET_TEXT:
+        if (ai::Blackboard* b = w.blackboard(e)) out = b->text(part(t, 0));
+        break;
+    case ORCHARD_GAME_AI_DIRECTOR_PHASE: out = w.director().phase_name(); break;
+    case ORCHARD_GAME_VOXEL_GET: {
+        const int id = w.voxels().get(static_cast<int>(std::floor(arg(0, 0.0))), static_cast<int>(std::floor(arg(1, 0.0))), static_cast<int>(std::floor(arg(2, 0.0))));
+        if (const ai::VoxelWorld::Type* ty = w.voxels().type(id)) out = ty->name;
+        break;
+    }
+    case ORCHARD_GAME_GOAP_PLAN: {
+        const ai::GoapPlan plan = w.planner(part(t, 0)).plan(ai::parse_state(part(t, 1)), ai::parse_state(part(t, 2)));
+        for (const std::string& a : plan.actions) out += (out.empty() ? "" : ",") + a;
+        break;
+    }
+    case ORCHARD_GAME_CHESS_FEN:
+        if (ai::Chess* c = chess()) out = c->fen();
+        break;
+    case ORCHARD_GAME_CHESS_BEST:
+        if (ai::Chess* c = chess()) {
+            const ai::Chess::SearchInfo info = c->search_level(static_cast<int>(arg(1, 5.0)), &w.random());
+            if (info.found) out = info.move.uci();
+        }
+        break;
+    case ORCHARD_GAME_CHESS_STATUS:
+        if (ai::Chess* c = chess()) out = c->status();
+        break;
+    case ORCHARD_GAME_CHESS_MOVES:
+        if (ai::Chess* c = chess())
+            for (const ai::Chess::Move& m : c->legal_moves()) out += (out.empty() ? "" : " ") + m.uci();
+        break;
+    case ORCHARD_GAME_CHESS_BOARD:
+        if (ai::Chess* c = chess()) out = c->board_text();
+        break;
+    case ORCHARD_GAME_CHESS_HISTORY:
+        if (ai::Chess* c = chess())
+            for (const std::string& m : c->history_san()) out += (out.empty() ? "" : " ") + m;
+        break;
+    case ORCHARD_GAME_NN_SAVE:
+        if (ai::NeuralNet* n = w.net(part(t, 0))) out = n->save();
+        break;
+    case ORCHARD_GAME_Q_SAVE: out = w.learner(part(t, 0), 0).save(); break;
+    case ORCHARD_GAME_MARKOV_GENERATE: out = w.markov(part(t, 0), 1).generate_text(w.random(), static_cast<int>(arg(0, 20.0)), arg(1, 0.0) != 0.0); break;
+    default: break;
+    }
+    return out.c_str();
+}
+
+int host_game_values(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text, double* out, int capacity) {
+    if (!g_runtime || !out || capacity <= 0) return 0;
+    ScriptRuntime& r = rt();
+    ai::AiWorld& w = r.ai();
+    const Entity e = entity_of(entity);
+    static_cast<void>(other);
+    auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
+    auto argf = [&](int i, double fallback) { return static_cast<float>(arg(i, fallback)); };
+    auto v3 = [&](int i) { return Vec3{argf(i, 0.0), argf(i + 1, 0.0), argf(i + 2, 0.0)}; };
+    const std::vector<std::string> t = split_text(text);
+    int n = 0;
+    auto put = [&](double v) {
+        if (n < capacity) out[n++] = v;
+    };
+    auto put3 = [&](Vec3 v) {
+        put(v.x);
+        put(v.y);
+        put(v.z);
+    };
+    switch (op) {
+    case ORCHARD_GAME_RANDOM_IN_SPHERE: put3(r.random().in_sphere(argf(0, 1.0))); break;
+    case ORCHARD_GAME_RANDOM_ON_SPHERE: put3(r.random().on_sphere(argf(0, 1.0))); break;
+    case ORCHARD_GAME_RANDOM_IN_CIRCLE: {
+        Vec3 v = r.random().in_circle(argf(0, 1.0));
+        if (r.scene() && r.scene()->dimension() == Dimension::two_d) v = Vec3{v.x, v.z, 0.0f};
+        put3(v);
+        break;
+    }
+    case ORCHARD_GAME_RANDOM_IN_CONE: put3(r.random().direction_in_cone(v3(0), argf(3, 30.0))); break;
+    case ORCHARD_GAME_AI_FIND_PATH: {
+        const ai::NavPath p = w.find_path(v3(0), v3(3));
+        for (const ai::NavPoint& pt : p.points) put3(pt.position);
+        break;
+    }
+    case ORCHARD_GAME_AI_PATH:
+        for (const Vec3& p : w.current_path(e)) put3(p);
+        break;
+    case ORCHARD_GAME_AI_RANDOM_POINT: put3(w.random_point(v3(0), argf(3, 10.0))); break;
+    case ORCHARD_GAME_AI_SNAP: put3(w.nav().snap(v3(0), 3.0f)); break;
+    case ORCHARD_GAME_AI_FIND_COVER: {
+        const ai::CoverSpot c = w.find_cover(e, v3(0), argf(3, 12.0));
+        if (c.found) {
+            put3(c.position);
+            put(c.full ? 1.0 : 0.0);
+        }
+        break;
+    }
+    case ORCHARD_GAME_AI_LAST_SEEN: {
+        const Entity target = w.target(e);
+        if (r.scene() && r.scene()->alive(target)) put3(r.gameplay().position(target));
+        break;
+    }
+    case ORCHARD_GAME_AI_LOB: put3(ai::lob_velocity(v3(0), v3(3), argf(6, 2.0), r.physics() ? r.physics()->gravity() : 9.81f)); break;
+    case ORCHARD_GAME_AI_INTERCEPT: {
+        Vec3 aim;
+        ai::intercept(v3(0), v3(3), v3(6), argf(9, 30.0), aim);
+        put3(aim);
+        break;
+    }
+    case ORCHARD_GAME_VOXEL_PATH: {
+        auto ip = [&](int i) { return static_cast<int>(std::floor(arg(i, 0.0))); };
+        const ai::VoxelPath p = w.voxels().pathfinder().find(ai::BlockPos{ip(0), ip(1), ip(2)}, ai::BlockPos{ip(3), ip(4), ip(5)}, voxel_agent(args, count, 6), false);
+        for (const ai::VoxelStep& st : p.steps) put3(Vec3{static_cast<float>(st.at.x), static_cast<float>(st.at.y), static_cast<float>(st.at.z)});
+        break;
+    }
+    case ORCHARD_GAME_VOXEL_FLEE: {
+        auto ip = [&](int i) { return static_cast<int>(std::floor(arg(i, 0.0))); };
+        ai::VoxelAgent agent;
+        agent.height = static_cast<int>(arg(7, 2.0));
+        const ai::VoxelPath p = w.voxels().pathfinder().flee(ai::BlockPos{ip(0), ip(1), ip(2)}, ai::BlockPos{ip(3), ip(4), ip(5)}, ip(6), agent);
+        for (const ai::VoxelStep& st : p.steps) put3(Vec3{static_cast<float>(st.at.x), static_cast<float>(st.at.y), static_cast<float>(st.at.z)});
+        break;
+    }
+    case ORCHARD_GAME_NN_RUN:
+        if (ai::NeuralNet* net = w.net(part(t, 0))) {
+            std::vector<double> in;
+            for (int i = 0; i < count; ++i) in.push_back(args[i]);
+            for (double v : net->run(in)) put(v);
+        }
+        break;
+    default: break;
+    }
+    return n;
+}
+
 double host_game(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text) {
     if (!g_runtime) return 0.0;
     Gameplay& g = rt().gameplay();
@@ -460,7 +893,7 @@ double host_game(int op, orchard_entity entity, orchard_entity other, const doub
     case ORCHARD_GAME_LOOK_AT: return g.look_at(e, Vec3{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))}) ? 1.0 : 0.0;
     case ORCHARD_GAME_RANDOM: return g.random(arg(0, 0.0), arg(1, 1.0));
     case ORCHARD_GAME_HAS_HEALTH: return s && s->alive(g.holder(e)) ? 1.0 : 0.0;
-    default: return 0.0;
+    default: return op >= 200 ? host_lib(op, e, o, args, count, text) : 0.0;
     }
 }
 
@@ -488,6 +921,8 @@ orchard_entity host_game_entity(int op, orchard_entity entity, orchard_entity ot
         const Vec3 from = s && s->alive(e) ? g.position(e) : Vec3{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))};
         return id_of(g.nearest_tagged(name, from, e));
     }
+    case ORCHARD_GAME_AI_TARGET: return id_of(rt().ai().target(e));
+    case ORCHARD_GAME_AI_MAIN_PLAYER: return id_of(rt().ai().main_player());
     default: return 0;
     }
 }
@@ -529,6 +964,8 @@ const orchard_host_api& host_table() {
         t.animation_event = &host_animation_event;
         t.game = &host_game;
         t.game_entity = &host_game_entity;
+        t.game_text = &host_game_text;
+        t.game_values = &host_game_values;
         return t;
     }();
     return table;
@@ -1456,6 +1893,54 @@ bool ScriptRuntime::start(const Project& project, Scene& scene) {
     }
     m_running = true;
     m_gameplay.start(&scene, m_physics);
+    m_sound_commands.clear();
+    m_sounds_playing.clear();
+    m_source_sounds.clear();
+    m_bags.clear();
+    m_ai.set_log([this](const std::string& msg, bool error) { log(msg, error); });
+    m_ai.set_spawner([this](const std::string& name, Vec3 at) {
+        Transform t;
+        t.position = at;
+        return instantiate(name, t);
+    });
+    m_ai.set_sound_player([this](const std::string& clip, Vec3 at, Entity follow, float volume) { play_sound(clip, at, follow, true, volume); });
+    m_ai.start(&scene, m_physics, &m_gameplay);
+    std::set<std::string> defined;
+    auto define_file = [&](const std::string& b, bool needed, const std::string& who) {
+        if (defined.count(b)) return;
+        defined.insert(b);
+        std::ifstream in(project.path_of(b));
+        if (!in) {
+            if (needed) log(who + ": can't find the behavior file " + b, true);
+            return;
+        }
+        std::stringstream text;
+        text << in.rdbuf();
+        std::string why;
+        std::string tree = text.str();
+        if (graph::is_brain_file(b)) {
+            const std::optional<std::string> made = graph::brain_file_behavior(tree, &why);
+            if (!made) {
+                log(b + ": " + why, true);
+                return;
+            }
+            tree = *made;
+        }
+        if (!m_ai.define_behavior(b, tree, &why)) log(b + ": " + why, true);
+    };
+    auto is_file = [](const std::string& b) {
+        auto ends = [&b](const std::string& x) { return b.size() > x.size() && b.compare(b.size() - x.size(), x.size(), x) == 0; };
+        return ends(".bt") || ends(".behavior") || ends(".brain");
+    };
+    for (Entity e : scene.entities()) {
+        const Agent* a = scene.agent(e);
+        if (!a || a->behavior.empty() || a->behavior.find('\n') != std::string::npos || !is_file(a->behavior)) continue;
+        define_file(a->behavior, true, scene.name(e));
+    }
+    for (const std::string& f : project.behaviors()) define_file(f, false, f);
+    for (Entity e : scene.entities())
+        if (const SoundSource* src = scene.sound(e))
+            if (src->autoplay && !src->clip.empty()) play_sound_source(e);
     set_current_runtime(this);
     const std::size_t starting = m_instances.size();
     for (std::size_t i = 0; i < starting; ++i) call_at(i, ORCHARD_HOOK_START, 0.0);
@@ -1468,6 +1953,7 @@ void ScriptRuntime::tick(double dt) {
     m_time += dt;
     for (std::size_t i = 0; i < m_instances.size(); ++i) call_at(i, ORCHARD_HOOK_TICK, dt);
     if (m_gameplay.running()) m_gameplay.tick(dt, m_time);
+    if (m_ai.running()) m_ai.tick(dt, m_time);
 }
 
 void ScriptRuntime::stop() {
@@ -1477,11 +1963,121 @@ void ScriptRuntime::stop() {
     m_instances.clear();
     m_running = false;
     m_gameplay.stop();
+    m_ai.stop();
+    stop_all_sounds();
+    m_bags.clear();
     unload_all();
     m_scene = nullptr;
     m_project = nullptr;
     m_templates.clear();
     set_current_runtime(nullptr);
+}
+
+int ScriptRuntime::play_sound(const std::string& clip, Vec3 at, Entity follow, bool positional, float volume, float pitch, bool loop, float range, float ai_loudness) {
+    if (clip.empty()) return 0;
+    SoundCommand c;
+    c.op = SoundOp::play;
+    c.id = m_next_sound++;
+    c.clip = clip;
+    c.at = at;
+    c.follow = follow;
+    c.positional = positional;
+    c.volume = std::max(0.0f, volume);
+    c.pitch = std::max(0.01f, pitch);
+    c.loop = loop;
+    c.range = std::max(0.1f, range);
+    if (m_sound_commands.size() < 4096) m_sound_commands.push_back(c);
+    m_sounds_playing.insert(c.id);
+    if (ai_loudness > 0.0f && m_ai.running()) {
+        const Vec3 where = m_scene && m_scene->alive(follow) ? m_gameplay.position(follow) : at;
+        m_ai.make_noise(where, ai_loudness, follow, "sound");
+    }
+    return c.id;
+}
+
+int ScriptRuntime::play_sound_source(Entity e) {
+    if (!m_scene) return 0;
+    const SoundSource* s = m_scene->sound(e);
+    if (!s || s->clip.empty()) return 0;
+    stop_sound_source(e);
+    const int id = play_sound(s->clip, m_gameplay.position(e), e, s->spatial, s->volume, s->pitch, s->loop, s->range, s->ai_hears ? s->loudness : 0.0f);
+    for (SoundCommand& c : m_sound_commands)
+        if (c.id == id) c.min_distance = s->min_distance;
+    m_source_sounds[e.id()] = id;
+    return id;
+}
+
+void ScriptRuntime::stop_sound_source(Entity e) {
+    const auto it = m_source_sounds.find(e.id());
+    if (it == m_source_sounds.end()) return;
+    stop_sound(it->second);
+    m_source_sounds.erase(it);
+}
+
+void ScriptRuntime::stop_sound(int id) {
+    if (!m_sounds_playing.count(id)) return;
+    SoundCommand c;
+    c.op = SoundOp::stop;
+    c.id = id;
+    m_sound_commands.push_back(c);
+    m_sounds_playing.erase(id);
+}
+
+void ScriptRuntime::set_sound_volume(int id, float volume) {
+    SoundCommand c;
+    c.op = SoundOp::volume;
+    c.id = id;
+    c.volume = std::max(0.0f, volume);
+    m_sound_commands.push_back(c);
+}
+
+void ScriptRuntime::set_sound_pitch(int id, float pitch) {
+    SoundCommand c;
+    c.op = SoundOp::pitch;
+    c.id = id;
+    c.pitch = std::max(0.01f, pitch);
+    m_sound_commands.push_back(c);
+}
+
+void ScriptRuntime::pause_sound(int id, bool paused) {
+    SoundCommand c;
+    c.op = paused ? SoundOp::pause : SoundOp::resume;
+    c.id = id;
+    m_sound_commands.push_back(c);
+}
+
+bool ScriptRuntime::sound_playing(int id) const {
+    return m_sounds_playing.count(id) > 0;
+}
+
+void ScriptRuntime::stop_all_sounds() {
+    SoundCommand c;
+    c.op = SoundOp::stop_all;
+    m_sound_commands.push_back(c);
+    m_sounds_playing.clear();
+    m_source_sounds.clear();
+}
+
+std::vector<SoundCommand> ScriptRuntime::take_sound_commands() {
+    std::vector<SoundCommand> out;
+    out.swap(m_sound_commands);
+    return out;
+}
+
+void ScriptRuntime::sound_finished(int id) {
+    m_sounds_playing.erase(id);
+    for (auto it = m_source_sounds.begin(); it != m_source_sounds.end();) {
+        if (it->second == id) it = m_source_sounds.erase(it);
+        else ++it;
+    }
+}
+
+ShuffleBag<std::string>& ScriptRuntime::bag(const std::string& name) {
+    auto it = m_bags.find(name);
+    if (it == m_bags.end()) {
+        it = m_bags.emplace(name, ShuffleBag<std::string>(m_random)).first;
+    }
+    return it->second;
 }
 
 void ScriptRuntime::unload_all() {

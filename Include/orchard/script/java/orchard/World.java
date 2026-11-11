@@ -1,6 +1,6 @@
 package orchard;
 
-public final class World {
+public final class World extends Lib {
     static double dt;
 
     private World() {

@@ -133,6 +133,8 @@ public:
     std::vector<std::string> graphs() const;
     std::vector<std::string> scenes() const;
     std::vector<std::string> images() const;
+    std::vector<std::string> sounds() const;
+    std::vector<std::string> behaviors() const;
     std::vector<std::string> entity_templates() const;
     static std::string entity_template_path(const std::string& name);
     static const std::vector<std::string>& image_extensions();

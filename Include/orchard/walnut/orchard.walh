@@ -99,6 +99,155 @@ extern "C++" from "<orchard/script/script_api.hpp>" {
     } end class NativeWorld
 } end extern
 
+extern "C++" from "<orchard/script/script_lib.hpp>" {
+    class NativeLib as "orchard::script::Lib" {
+    public:
+        static function result(long int: i) -> short float;
+        static function result_count() -> long int;
+        static function random_seed(short float: seed) -> void;
+        static function random_gaussian(short float: mean, short float: deviation) -> short float;
+        static function random_chance(short float: probability) -> bool;
+        static function noise(short float: x, short float: y, short float: z, short float: seed) -> short float;
+        static function fractal_noise(short float: x, short float: y, short float: z, short float: octaves, short float: seed) -> short float;
+        static function random_in_sphere_n(short float: radius) -> long int;
+        static function random_on_sphere_n(short float: radius) -> long int;
+        static function random_in_circle_n(short float: radius) -> long int;
+        static function random_in_cone_n(short float: axis_x, short float: axis_y, short float: axis_z, short float: degrees) -> long int;
+        static function random_text(short float: length, const string&: alphabet) -> string;
+        static function bag_add(const string&: bag, const string&: item, short float: copies) -> void;
+        static function bag_next(const string&: bag) -> string;
+        static function bag_peek(const string&: bag) -> string;
+        static function bag_remaining(const string&: bag) -> long int;
+        static function bag_size(const string&: bag) -> long int;
+        static function bag_reset(const string&: bag) -> void;
+        static function bag_clear(const string&: bag) -> void;
+        static function bag_remove(const string&: bag, const string&: item) -> bool;
+        static function bag_avoid_repeats(const string&: bag, bool: on) -> void;
+        static function play_sound(const string&: clip, short float: volume, short float: pitch) -> long int;
+        static function play_sound_at(const string&: clip, short float: x, short float: y, short float: z, short float: volume, short float: pitch, short float: range) -> long int;
+        static function play_sound_on(const NativeEntity&: entity, const string&: clip, short float: volume, short float: pitch, short float: range) -> long int;
+        static function loop_sound(const string&: clip, short float: volume) -> long int;
+        static function loop_sound_on(const NativeEntity&: entity, const string&: clip, short float: volume, short float: range) -> long int;
+        static function stop_sound(short float: handle) -> void;
+        static function stop_all_sounds() -> void;
+        static function set_sound_volume(short float: handle, short float: volume) -> void;
+        static function set_sound_pitch(short float: handle, short float: pitch) -> void;
+        static function pause_sound(short float: handle, bool: paused) -> void;
+        static function sound_playing(short float: handle) -> bool;
+        static function play_sound_source(const NativeEntity&: entity) -> long int;
+        static function stop_sound_source(const NativeEntity&: entity) -> void;
+        static function ai_add(const NativeEntity&: entity, const string&: brain) -> bool;
+        static function ai_set_brain(const NativeEntity&: entity, const string&: brain) -> bool;
+        static function ai_set_behavior(const NativeEntity&: entity, const string&: behavior) -> bool;
+        static function ai_define_behavior(const string&: name, const string&: behavior) -> bool;
+        static function ai_brain_behavior(const string&: brain) -> string;
+        static function ai_behavior(const NativeEntity&: entity) -> string;
+        static function ai_enable(const NativeEntity&: entity, bool: on) -> bool;
+        static function ai_is_agent(const NativeEntity&: entity) -> bool;
+        static function ai_set_team(const NativeEntity&: entity, const string&: team) -> bool;
+        static function ai_team(const NativeEntity&: entity) -> string;
+        static function ai_set_relation(const string&: team_a, const string&: team_b, short float: relation) -> void;
+        static function ai_relation(const string&: team_a, const string&: team_b) -> long int;
+        static function ai_hostile(const NativeEntity&: entity, const NativeEntity&: other) -> bool;
+        static function ai_move_to(const NativeEntity&: entity, short float: x, short float: y, short float: z, bool: run) -> bool;
+        static function ai_stop(const NativeEntity&: entity) -> void;
+        static function ai_arrived(const NativeEntity&: entity) -> bool;
+        static function ai_is_moving(const NativeEntity&: entity) -> bool;
+        static function ai_set_target(const NativeEntity&: entity, const NativeEntity&: target) -> bool;
+        static function ai_target(const NativeEntity&: entity) -> NativeEntity;
+        static function ai_can_see(const NativeEntity&: entity, const NativeEntity&: other) -> bool;
+        static function ai_awareness(const NativeEntity&: entity, const NativeEntity&: other) -> short float;
+        static function ai_suspicion(const NativeEntity&: entity) -> short float;
+        static function ai_alert_level(const NativeEntity&: entity) -> long int;
+        static function ai_state(const NativeEntity&: entity) -> string;
+        static function ai_action(const NativeEntity&: entity) -> string;
+        static function ai_event(const NativeEntity&: entity) -> string;
+        static function ai_pending_action(const NativeEntity&: entity) -> string;
+        static function ai_pending_argument(const NativeEntity&: entity, short float: index) -> string;
+        static function ai_finish_action(const NativeEntity&: entity, bool: success) -> bool;
+        static function ai_set_visibility(const NativeEntity&: entity, short float: factor) -> void;
+        static function ai_make_noise(short float: x, short float: y, short float: z, short float: loudness, const string&: kind) -> void;
+        static function ai_team_alert(const string&: team) -> string;
+        static function ai_set_team_alert(const string&: team, const string&: phase, short float: x, short float: y, short float: z) -> void;
+        static function ai_find_path_n(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z) -> long int;
+        static function ai_path_length(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z) -> short float;
+        static function ai_path_n(const NativeEntity&: entity) -> long int;
+        static function ai_random_point_n(short float: x, short float: y, short float: z, short float: radius) -> long int;
+        static function ai_snap_to_ground_n(short float: x, short float: y, short float: z) -> long int;
+        static function ai_add_danger(short float: x, short float: y, short float: z, short float: radius, short float: amount, short float: seconds) -> long int;
+        static function ai_clear_danger() -> void;
+        static function ai_bake(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z) -> long int;
+        static function ai_find_cover_n(const NativeEntity&: entity, short float: threat_x, short float: threat_y, short float: threat_z, short float: radius) -> long int;
+        static function ai_line_of_sight(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z) -> bool;
+        static function ai_last_seen_n(const NativeEntity&: entity) -> long int;
+        static function ai_set_number(const NativeEntity&: entity, const string&: key, short float: value) -> void;
+        static function ai_get_number(const NativeEntity&: entity, const string&: key) -> short float;
+        static function ai_set_text(const NativeEntity&: entity, const string&: key, const string&: value) -> void;
+        static function ai_get_text(const NativeEntity&: entity, const string&: key) -> string;
+        static function ai_director_intensity() -> short float;
+        static function ai_director_menace() -> short float;
+        static function ai_director_phase() -> string;
+        static function ai_director_note(const string&: habit, short float: amount) -> void;
+        static function ai_director_habit(const string&: habit) -> short float;
+        static function ai_set_spawns(const string&: entity_template, short float: max_alive, short float: min_distance, short float: max_distance, short float: interval) -> void;
+        static function ai_agent_count() -> long int;
+        static function ai_main_player() -> NativeEntity;
+        static function ai_lob_velocity_n(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z, short float: apex) -> long int;
+        static function ai_intercept_n(short float: shooter_x, short float: shooter_y, short float: shooter_z, short float: target_x, short float: target_y, short float: target_z, short float: target_vx, short float: target_vy, short float: target_vz, short float: speed) -> long int;
+        static function voxel_define(const string&: name, bool: solid, bool: climbable, bool: liquid, short float: cost, short float: danger, bool: door) -> long int;
+        static function voxel_set(short float: x, short float: y, short float: z, const string&: type) -> void;
+        static function voxel_fill(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z, const string&: type) -> void;
+        static function voxel_get(short float: x, short float: y, short float: z) -> string;
+        static function voxel_clear() -> void;
+        static function voxel_solid_below(short float: y) -> void;
+        static function voxel_path_n(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z, short float: height, short float: step, short float: drop, short float: jump, short float: danger_weight) -> long int;
+        static function voxel_flee_n(short float: from_x, short float: from_y, short float: from_z, short float: threat_x, short float: threat_y, short float: threat_z, short float: distance, short float: height) -> long int;
+        static function goap_action(const string&: planner, const string&: name, const string&: needs, const string&: gives, short float: cost) -> void;
+        static function goap_remove(const string&: planner, const string&: name) -> void;
+        static function goap_clear(const string&: planner) -> void;
+        static function goap_plan(const string&: planner, const string&: start, const string&: goal) -> string;
+        static function chess_new(const string&: fen) -> long int;
+        static function chess_free(short float: game) -> void;
+        static function chess_load(short float: game, const string&: fen) -> bool;
+        static function chess_fen(short float: game) -> string;
+        static function chess_move(short float: game, const string&: move) -> bool;
+        static function chess_is_legal(short float: game, const string&: move) -> bool;
+        static function chess_undo(short float: game) -> bool;
+        static function chess_best_move(short float: game, short float: level) -> string;
+        static function chess_status(short float: game) -> string;
+        static function chess_turn(short float: game) -> long int;
+        static function chess_moves(short float: game) -> string;
+        static function chess_piece(short float: game, const string&: square) -> long int;
+        static function chess_board(short float: game) -> string;
+        static function chess_history(short float: game) -> string;
+        static function nn_create(const string&: name, const string&: layers, const string&: hidden_value, const string&: output) -> bool;
+        static function nn_save(const string&: name) -> string;
+        static function nn_load(const string&: name, const string&: data) -> bool;
+        static function q_choose(const string&: name, const string&: state, short float: actions) -> long int;
+        static function q_best(const string&: name, const string&: state) -> long int;
+        static function q_learn(const string&: name, const string&: state, short float: action, short float: reward, const string&: next, bool: terminal) -> void;
+        static function q_settings(const string&: name, short float: epsilon, short float: alpha, short float: gamma) -> void;
+        static function q_save(const string&: name) -> string;
+        static function q_load(const string&: name, const string&: data) -> bool;
+        static function markov_train(const string&: name, const string&: text_value, short float: order, bool: letters) -> void;
+        static function markov_generate(const string&: name, short float: max_length, bool: letters) -> string;
+        static function random_range(short float: low, short float: high) -> short float;
+        static function random_integer(short float: low, short float: high) -> long int;
+        static function random_pick(const string&: choices) -> string;
+        static function random_whole(short float: low, short float: high) -> short float;
+        static function bag_count(const string&: bag) -> short float;
+        static function ai_make_noise_from(const NativeEntity&: entity, short float: loudness, const string&: kind) -> void;
+        static function secure_random(short float: low, short float: high) -> short float;
+        static function secure_random_integer(short float: low, short float: high) -> short float;
+        static function secure_chance(short float: probability) -> bool;
+        static function secure_pick(const string&: choices) -> string;
+        static function secure_random_text(short float: length, const string&: alphabet) -> string;
+        static function secure_token(short float: byte_count) -> string;
+        static function secure_hex(short float: byte_count) -> string;
+        static function secure_uuid() -> string;
+    } end class NativeLib
+} end extern
+
 class Entity {
 public:
     NativeEntity: raw;
@@ -671,4 +820,575 @@ function move_towards(short float: current, short float: target, short float: ma
     return NativeWorld::move_towards(current, target, max_step);
 } end function move_towards
 
+function result(long int: i) -> short float {
+    return NativeLib::result(i);
+} end function result
+
+function random_seed(short float: seed) -> void {
+    NativeLib::random_seed(seed);
+} end function random_seed
+
+function random_gaussian(short float: mean, short float: deviation) -> short float {
+    return NativeLib::random_gaussian(mean, deviation);
+} end function random_gaussian
+
+function random_chance(short float: probability) -> bool {
+    return NativeLib::random_chance(probability);
+} end function random_chance
+
+function noise(short float: x, short float: y, short float: z, short float: seed) -> short float {
+    return NativeLib::noise(x, y, z, seed);
+} end function noise
+
+function fractal_noise(short float: x, short float: y, short float: z, short float: octaves, short float: seed) -> short float {
+    return NativeLib::fractal_noise(x, y, z, octaves, seed);
+} end function fractal_noise
+
+function random_in_sphere(short float: radius) -> long int {
+    return NativeLib::random_in_sphere_n(radius);
+} end function random_in_sphere
+
+function random_on_sphere(short float: radius) -> long int {
+    return NativeLib::random_on_sphere_n(radius);
+} end function random_on_sphere
+
+function random_in_circle(short float: radius) -> long int {
+    return NativeLib::random_in_circle_n(radius);
+} end function random_in_circle
+
+function random_in_cone(short float: axis_x, short float: axis_y, short float: axis_z, short float: degrees) -> long int {
+    return NativeLib::random_in_cone_n(axis_x, axis_y, axis_z, degrees);
+} end function random_in_cone
+
+function random_text(short float: length, const string&: alphabet) -> string {
+    return NativeLib::random_text(length, alphabet);
+} end function random_text
+
+function bag_add(const string&: bag, const string&: item, short float: copies) -> void {
+    NativeLib::bag_add(bag, item, copies);
+} end function bag_add
+
+function bag_next(const string&: bag) -> string {
+    return NativeLib::bag_next(bag);
+} end function bag_next
+
+function bag_peek(const string&: bag) -> string {
+    return NativeLib::bag_peek(bag);
+} end function bag_peek
+
+function bag_remaining(const string&: bag) -> long int {
+    return NativeLib::bag_remaining(bag);
+} end function bag_remaining
+
+function bag_size(const string&: bag) -> long int {
+    return NativeLib::bag_size(bag);
+} end function bag_size
+
+function bag_reset(const string&: bag) -> void {
+    NativeLib::bag_reset(bag);
+} end function bag_reset
+
+function bag_clear(const string&: bag) -> void {
+    NativeLib::bag_clear(bag);
+} end function bag_clear
+
+function bag_remove(const string&: bag, const string&: item) -> bool {
+    return NativeLib::bag_remove(bag, item);
+} end function bag_remove
+
+function bag_avoid_repeats(const string&: bag, bool: on) -> void {
+    NativeLib::bag_avoid_repeats(bag, on);
+} end function bag_avoid_repeats
+
+function play_sound(const string&: clip, short float: volume, short float: pitch) -> long int {
+    return NativeLib::play_sound(clip, volume, pitch);
+} end function play_sound
+
+function play_sound_at(const string&: clip, short float: x, short float: y, short float: z, short float: volume, short float: pitch, short float: range) -> long int {
+    return NativeLib::play_sound_at(clip, x, y, z, volume, pitch, range);
+} end function play_sound_at
+
+function play_sound_on(const Entity&: entity, const string&: clip, short float: volume, short float: pitch, short float: range) -> long int {
+    return NativeLib::play_sound_on(entity.raw, clip, volume, pitch, range);
+} end function play_sound_on
+
+function loop_sound(const string&: clip, short float: volume) -> long int {
+    return NativeLib::loop_sound(clip, volume);
+} end function loop_sound
+
+function loop_sound_on(const Entity&: entity, const string&: clip, short float: volume, short float: range) -> long int {
+    return NativeLib::loop_sound_on(entity.raw, clip, volume, range);
+} end function loop_sound_on
+
+function stop_sound(short float: handle) -> void {
+    NativeLib::stop_sound(handle);
+} end function stop_sound
+
+function stop_all_sounds() -> void {
+    NativeLib::stop_all_sounds();
+} end function stop_all_sounds
+
+function set_sound_volume(short float: handle, short float: volume) -> void {
+    NativeLib::set_sound_volume(handle, volume);
+} end function set_sound_volume
+
+function set_sound_pitch(short float: handle, short float: pitch) -> void {
+    NativeLib::set_sound_pitch(handle, pitch);
+} end function set_sound_pitch
+
+function pause_sound(short float: handle, bool: paused) -> void {
+    NativeLib::pause_sound(handle, paused);
+} end function pause_sound
+
+function sound_playing(short float: handle) -> bool {
+    return NativeLib::sound_playing(handle);
+} end function sound_playing
+
+function play_sound_source(const Entity&: entity) -> long int {
+    return NativeLib::play_sound_source(entity.raw);
+} end function play_sound_source
+
+function stop_sound_source(const Entity&: entity) -> void {
+    NativeLib::stop_sound_source(entity.raw);
+} end function stop_sound_source
+
+function ai_add(const Entity&: entity, const string&: brain) -> bool {
+    return NativeLib::ai_add(entity.raw, brain);
+} end function ai_add
+
+function ai_set_brain(const Entity&: entity, const string&: brain) -> bool {
+    return NativeLib::ai_set_brain(entity.raw, brain);
+} end function ai_set_brain
+
+function ai_set_behavior(const Entity&: entity, const string&: behavior) -> bool {
+    return NativeLib::ai_set_behavior(entity.raw, behavior);
+} end function ai_set_behavior
+
+function ai_define_behavior(const string&: name, const string&: behavior) -> bool {
+    return NativeLib::ai_define_behavior(name, behavior);
+} end function ai_define_behavior
+
+function ai_brain_behavior(const string&: brain) -> string {
+    return NativeLib::ai_brain_behavior(brain);
+} end function ai_brain_behavior
+
+function ai_behavior(const Entity&: entity) -> string {
+    return NativeLib::ai_behavior(entity.raw);
+} end function ai_behavior
+
+function ai_enable(const Entity&: entity, bool: on) -> bool {
+    return NativeLib::ai_enable(entity.raw, on);
+} end function ai_enable
+
+function ai_is_agent(const Entity&: entity) -> bool {
+    return NativeLib::ai_is_agent(entity.raw);
+} end function ai_is_agent
+
+function ai_set_team(const Entity&: entity, const string&: team) -> bool {
+    return NativeLib::ai_set_team(entity.raw, team);
+} end function ai_set_team
+
+function ai_team(const Entity&: entity) -> string {
+    return NativeLib::ai_team(entity.raw);
+} end function ai_team
+
+function ai_set_relation(const string&: team_a, const string&: team_b, short float: relation) -> void {
+    NativeLib::ai_set_relation(team_a, team_b, relation);
+} end function ai_set_relation
+
+function ai_relation(const string&: team_a, const string&: team_b) -> long int {
+    return NativeLib::ai_relation(team_a, team_b);
+} end function ai_relation
+
+function ai_hostile(const Entity&: entity, const Entity&: other) -> bool {
+    return NativeLib::ai_hostile(entity.raw, other.raw);
+} end function ai_hostile
+
+function ai_move_to(const Entity&: entity, short float: x, short float: y, short float: z, bool: run) -> bool {
+    return NativeLib::ai_move_to(entity.raw, x, y, z, run);
+} end function ai_move_to
+
+function ai_stop(const Entity&: entity) -> void {
+    NativeLib::ai_stop(entity.raw);
+} end function ai_stop
+
+function ai_arrived(const Entity&: entity) -> bool {
+    return NativeLib::ai_arrived(entity.raw);
+} end function ai_arrived
+
+function ai_is_moving(const Entity&: entity) -> bool {
+    return NativeLib::ai_is_moving(entity.raw);
+} end function ai_is_moving
+
+function ai_set_target(const Entity&: entity, const Entity&: target) -> bool {
+    return NativeLib::ai_set_target(entity.raw, target.raw);
+} end function ai_set_target
+
+function ai_target(const Entity&: entity) -> Entity {
+    Entity: out;
+    out.raw = NativeLib::ai_target(entity.raw);
+    return out;
+} end function ai_target
+
+function ai_can_see(const Entity&: entity, const Entity&: other) -> bool {
+    return NativeLib::ai_can_see(entity.raw, other.raw);
+} end function ai_can_see
+
+function ai_awareness(const Entity&: entity, const Entity&: other) -> short float {
+    return NativeLib::ai_awareness(entity.raw, other.raw);
+} end function ai_awareness
+
+function ai_suspicion(const Entity&: entity) -> short float {
+    return NativeLib::ai_suspicion(entity.raw);
+} end function ai_suspicion
+
+function ai_alert_level(const Entity&: entity) -> long int {
+    return NativeLib::ai_alert_level(entity.raw);
+} end function ai_alert_level
+
+function ai_state(const Entity&: entity) -> string {
+    return NativeLib::ai_state(entity.raw);
+} end function ai_state
+
+function ai_action(const Entity&: entity) -> string {
+    return NativeLib::ai_action(entity.raw);
+} end function ai_action
+
+function ai_event(const Entity&: entity) -> string {
+    return NativeLib::ai_event(entity.raw);
+} end function ai_event
+
+function ai_pending_action(const Entity&: entity) -> string {
+    return NativeLib::ai_pending_action(entity.raw);
+} end function ai_pending_action
+
+function ai_pending_argument(const Entity&: entity, short float: index) -> string {
+    return NativeLib::ai_pending_argument(entity.raw, index);
+} end function ai_pending_argument
+
+function ai_finish_action(const Entity&: entity, bool: success) -> bool {
+    return NativeLib::ai_finish_action(entity.raw, success);
+} end function ai_finish_action
+
+function ai_set_visibility(const Entity&: entity, short float: factor) -> void {
+    NativeLib::ai_set_visibility(entity.raw, factor);
+} end function ai_set_visibility
+
+function ai_make_noise(short float: x, short float: y, short float: z, short float: loudness, const string&: kind) -> void {
+    NativeLib::ai_make_noise(x, y, z, loudness, kind);
+} end function ai_make_noise
+
+function ai_team_alert(const string&: team) -> string {
+    return NativeLib::ai_team_alert(team);
+} end function ai_team_alert
+
+function ai_set_team_alert(const string&: team, const string&: phase, short float: x, short float: y, short float: z) -> void {
+    NativeLib::ai_set_team_alert(team, phase, x, y, z);
+} end function ai_set_team_alert
+
+function ai_find_path(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z) -> long int {
+    return NativeLib::ai_find_path_n(from_x, from_y, from_z, to_x, to_y, to_z);
+} end function ai_find_path
+
+function ai_path_length(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z) -> short float {
+    return NativeLib::ai_path_length(from_x, from_y, from_z, to_x, to_y, to_z);
+} end function ai_path_length
+
+function ai_path(const Entity&: entity) -> long int {
+    return NativeLib::ai_path_n(entity.raw);
+} end function ai_path
+
+function ai_random_point(short float: x, short float: y, short float: z, short float: radius) -> long int {
+    return NativeLib::ai_random_point_n(x, y, z, radius);
+} end function ai_random_point
+
+function ai_snap_to_ground(short float: x, short float: y, short float: z) -> long int {
+    return NativeLib::ai_snap_to_ground_n(x, y, z);
+} end function ai_snap_to_ground
+
+function ai_add_danger(short float: x, short float: y, short float: z, short float: radius, short float: amount, short float: seconds) -> long int {
+    return NativeLib::ai_add_danger(x, y, z, radius, amount, seconds);
+} end function ai_add_danger
+
+function ai_clear_danger() -> void {
+    NativeLib::ai_clear_danger();
+} end function ai_clear_danger
+
+function ai_bake(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z) -> long int {
+    return NativeLib::ai_bake(from_x, from_y, from_z, to_x, to_y, to_z);
+} end function ai_bake
+
+function ai_find_cover(const Entity&: entity, short float: threat_x, short float: threat_y, short float: threat_z, short float: radius) -> long int {
+    return NativeLib::ai_find_cover_n(entity.raw, threat_x, threat_y, threat_z, radius);
+} end function ai_find_cover
+
+function ai_line_of_sight(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z) -> bool {
+    return NativeLib::ai_line_of_sight(from_x, from_y, from_z, to_x, to_y, to_z);
+} end function ai_line_of_sight
+
+function ai_last_seen(const Entity&: entity) -> long int {
+    return NativeLib::ai_last_seen_n(entity.raw);
+} end function ai_last_seen
+
+function ai_set_number(const Entity&: entity, const string&: key, short float: value) -> void {
+    NativeLib::ai_set_number(entity.raw, key, value);
+} end function ai_set_number
+
+function ai_get_number(const Entity&: entity, const string&: key) -> short float {
+    return NativeLib::ai_get_number(entity.raw, key);
+} end function ai_get_number
+
+function ai_set_text(const Entity&: entity, const string&: key, const string&: value) -> void {
+    NativeLib::ai_set_text(entity.raw, key, value);
+} end function ai_set_text
+
+function ai_get_text(const Entity&: entity, const string&: key) -> string {
+    return NativeLib::ai_get_text(entity.raw, key);
+} end function ai_get_text
+
+function ai_director_intensity() -> short float {
+    return NativeLib::ai_director_intensity();
+} end function ai_director_intensity
+
+function ai_director_menace() -> short float {
+    return NativeLib::ai_director_menace();
+} end function ai_director_menace
+
+function ai_director_phase() -> string {
+    return NativeLib::ai_director_phase();
+} end function ai_director_phase
+
+function ai_director_note(const string&: habit, short float: amount) -> void {
+    NativeLib::ai_director_note(habit, amount);
+} end function ai_director_note
+
+function ai_director_habit(const string&: habit) -> short float {
+    return NativeLib::ai_director_habit(habit);
+} end function ai_director_habit
+
+function ai_set_spawns(const string&: entity_template, short float: max_alive, short float: min_distance, short float: max_distance, short float: interval) -> void {
+    NativeLib::ai_set_spawns(entity_template, max_alive, min_distance, max_distance, interval);
+} end function ai_set_spawns
+
+function ai_agent_count() -> long int {
+    return NativeLib::ai_agent_count();
+} end function ai_agent_count
+
+function ai_main_player() -> Entity {
+    Entity: out;
+    out.raw = NativeLib::ai_main_player();
+    return out;
+} end function ai_main_player
+
+function ai_lob_velocity(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z, short float: apex) -> long int {
+    return NativeLib::ai_lob_velocity_n(from_x, from_y, from_z, to_x, to_y, to_z, apex);
+} end function ai_lob_velocity
+
+function ai_intercept(short float: shooter_x, short float: shooter_y, short float: shooter_z, short float: target_x, short float: target_y, short float: target_z, short float: target_vx, short float: target_vy, short float: target_vz, short float: speed) -> long int {
+    return NativeLib::ai_intercept_n(shooter_x, shooter_y, shooter_z, target_x, target_y, target_z, target_vx, target_vy, target_vz, speed);
+} end function ai_intercept
+
+function voxel_define(const string&: name, bool: solid, bool: climbable, bool: liquid, short float: cost, short float: danger, bool: door) -> long int {
+    return NativeLib::voxel_define(name, solid, climbable, liquid, cost, danger, door);
+} end function voxel_define
+
+function voxel_set(short float: x, short float: y, short float: z, const string&: type) -> void {
+    NativeLib::voxel_set(x, y, z, type);
+} end function voxel_set
+
+function voxel_fill(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z, const string&: type) -> void {
+    NativeLib::voxel_fill(from_x, from_y, from_z, to_x, to_y, to_z, type);
+} end function voxel_fill
+
+function voxel_get(short float: x, short float: y, short float: z) -> string {
+    return NativeLib::voxel_get(x, y, z);
+} end function voxel_get
+
+function voxel_clear() -> void {
+    NativeLib::voxel_clear();
+} end function voxel_clear
+
+function voxel_solid_below(short float: y) -> void {
+    NativeLib::voxel_solid_below(y);
+} end function voxel_solid_below
+
+function voxel_path(short float: from_x, short float: from_y, short float: from_z, short float: to_x, short float: to_y, short float: to_z, short float: height, short float: step, short float: drop, short float: jump, short float: danger_weight) -> long int {
+    return NativeLib::voxel_path_n(from_x, from_y, from_z, to_x, to_y, to_z, height, step, drop, jump, danger_weight);
+} end function voxel_path
+
+function voxel_flee(short float: from_x, short float: from_y, short float: from_z, short float: threat_x, short float: threat_y, short float: threat_z, short float: distance, short float: height) -> long int {
+    return NativeLib::voxel_flee_n(from_x, from_y, from_z, threat_x, threat_y, threat_z, distance, height);
+} end function voxel_flee
+
+function goap_action(const string&: planner, const string&: name, const string&: needs, const string&: gives, short float: cost) -> void {
+    NativeLib::goap_action(planner, name, needs, gives, cost);
+} end function goap_action
+
+function goap_remove(const string&: planner, const string&: name) -> void {
+    NativeLib::goap_remove(planner, name);
+} end function goap_remove
+
+function goap_clear(const string&: planner) -> void {
+    NativeLib::goap_clear(planner);
+} end function goap_clear
+
+function goap_plan(const string&: planner, const string&: start, const string&: goal) -> string {
+    return NativeLib::goap_plan(planner, start, goal);
+} end function goap_plan
+
+function chess_new(const string&: fen) -> long int {
+    return NativeLib::chess_new(fen);
+} end function chess_new
+
+function chess_free(short float: game) -> void {
+    NativeLib::chess_free(game);
+} end function chess_free
+
+function chess_load(short float: game, const string&: fen) -> bool {
+    return NativeLib::chess_load(game, fen);
+} end function chess_load
+
+function chess_fen(short float: game) -> string {
+    return NativeLib::chess_fen(game);
+} end function chess_fen
+
+function chess_move(short float: game, const string&: move) -> bool {
+    return NativeLib::chess_move(game, move);
+} end function chess_move
+
+function chess_is_legal(short float: game, const string&: move) -> bool {
+    return NativeLib::chess_is_legal(game, move);
+} end function chess_is_legal
+
+function chess_undo(short float: game) -> bool {
+    return NativeLib::chess_undo(game);
+} end function chess_undo
+
+function chess_best_move(short float: game, short float: level) -> string {
+    return NativeLib::chess_best_move(game, level);
+} end function chess_best_move
+
+function chess_status(short float: game) -> string {
+    return NativeLib::chess_status(game);
+} end function chess_status
+
+function chess_turn(short float: game) -> long int {
+    return NativeLib::chess_turn(game);
+} end function chess_turn
+
+function chess_moves(short float: game) -> string {
+    return NativeLib::chess_moves(game);
+} end function chess_moves
+
+function chess_piece(short float: game, const string&: square) -> long int {
+    return NativeLib::chess_piece(game, square);
+} end function chess_piece
+
+function chess_board(short float: game) -> string {
+    return NativeLib::chess_board(game);
+} end function chess_board
+
+function chess_history(short float: game) -> string {
+    return NativeLib::chess_history(game);
+} end function chess_history
+
+function nn_create(const string&: name, const string&: layers, const string&: hidden_value, const string&: output) -> bool {
+    return NativeLib::nn_create(name, layers, hidden_value, output);
+} end function nn_create
+
+function nn_save(const string&: name) -> string {
+    return NativeLib::nn_save(name);
+} end function nn_save
+
+function nn_load(const string&: name, const string&: data) -> bool {
+    return NativeLib::nn_load(name, data);
+} end function nn_load
+
+function q_choose(const string&: name, const string&: state, short float: actions) -> long int {
+    return NativeLib::q_choose(name, state, actions);
+} end function q_choose
+
+function q_best(const string&: name, const string&: state) -> long int {
+    return NativeLib::q_best(name, state);
+} end function q_best
+
+function q_learn(const string&: name, const string&: state, short float: action, short float: reward, const string&: next, bool: terminal) -> void {
+    NativeLib::q_learn(name, state, action, reward, next, terminal);
+} end function q_learn
+
+function q_settings(const string&: name, short float: epsilon, short float: alpha, short float: gamma) -> void {
+    NativeLib::q_settings(name, epsilon, alpha, gamma);
+} end function q_settings
+
+function q_save(const string&: name) -> string {
+    return NativeLib::q_save(name);
+} end function q_save
+
+function q_load(const string&: name, const string&: data) -> bool {
+    return NativeLib::q_load(name, data);
+} end function q_load
+
+function markov_train(const string&: name, const string&: text_value, short float: order, bool: letters) -> void {
+    NativeLib::markov_train(name, text_value, order, letters);
+} end function markov_train
+
+function markov_generate(const string&: name, short float: max_length, bool: letters) -> string {
+    return NativeLib::markov_generate(name, max_length, letters);
+} end function markov_generate
+
+function random_range(short float: low, short float: high) -> short float {
+    return NativeLib::random_range(low, high);
+} end function random_range
+
+function random_integer(short float: low, short float: high) -> long int {
+    return NativeLib::random_integer(low, high);
+} end function random_integer
+
+function random_pick(const string&: choices) -> string {
+    return NativeLib::random_pick(choices);
+} end function random_pick
+
+function random_whole(short float: low, short float: high) -> short float {
+    return NativeLib::random_whole(low, high);
+} end function random_whole
+
+function bag_count(const string&: bag) -> short float {
+    return NativeLib::bag_count(bag);
+} end function bag_count
+
+function ai_make_noise_from(const Entity&: entity, short float: loudness, const string&: kind) -> void {
+    NativeLib::ai_make_noise_from(entity.raw, loudness, kind);
+} end function ai_make_noise_from
+
+function secure_random(short float: low, short float: high) -> short float {
+    return NativeLib::secure_random(low, high);
+} end function secure_random
+
+function secure_random_integer(short float: low, short float: high) -> short float {
+    return NativeLib::secure_random_integer(low, high);
+} end function secure_random_integer
+
+function secure_chance(short float: probability) -> bool {
+    return NativeLib::secure_chance(probability);
+} end function secure_chance
+
+function secure_pick(const string&: choices) -> string {
+    return NativeLib::secure_pick(choices);
+} end function secure_pick
+
+function secure_random_text(short float: length, const string&: alphabet) -> string {
+    return NativeLib::secure_random_text(length, alphabet);
+} end function secure_random_text
+
+function secure_token(short float: byte_count) -> string {
+    return NativeLib::secure_token(byte_count);
+} end function secure_token
+
+function secure_hex(short float: byte_count) -> string {
+    return NativeLib::secure_hex(byte_count);
+} end function secure_hex
+
+function secure_uuid() -> string {
+    return NativeLib::secure_uuid();
+} end function secure_uuid
 export this

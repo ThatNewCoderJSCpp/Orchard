@@ -1,6 +1,7 @@
 #include <xylem/xylem.hpp>
 
 #include <fizmo/../physics.hpp>
+#include <orchard/solid.hpp>
 
 #include <algorithm>
 #include <array>
@@ -253,6 +254,7 @@ std::vector<Part> parts_of(const orchard::Scene& scene, orchard::Entity owner) {
         const orchard::Entity e = stack.back();
         stack.pop_back();
         if (e != owner && scene.body(e)) continue;
+        if (orchard::is_negative_part(scene, e)) continue;
         const std::vector<orchard::Collider>* cs = scene.colliders(e);
         if (cs) {
             const orchard::Vec3 pos = world_position(scene, e);
@@ -1919,6 +1921,25 @@ void World::moved(orchard::Entity e) {
     }
     it->second.position = it->second.position + (after.position - before.position);
     it->second.rotation = orchard::normalize(after.rotation * conjugate(before.rotation) * it->second.rotation);
+}
+
+bool World::walk(orchard::Entity e, orchard::Vec3 wish, bool jump, float jump_speed, float dt) {
+    if (!has_body(e)) return false;
+    CharacterMove mv;
+    mv.wish = wish;
+    mv.jump = jump;
+    mv.jump_speed = jump_speed;
+    mv.ride_height = 0.05f;
+    move_character(e, mv, dt);
+    return true;
+}
+
+bool World::flat() const {
+    return m->dimension == orchard::Dimension::two_d;
+}
+
+float World::gravity() const {
+    return orchard::length(m->settings.gravity);
 }
 
 float World::interpolation() const {

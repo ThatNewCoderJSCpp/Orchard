@@ -205,6 +205,116 @@ Each function can also leave out its parameters (`function on_tick() -> void`). 
   - In other languages: `orchard_raycast` / `orchard_overlap_sphere` / `orchard_set_layers` (C), `World::raycast` / `World::overlap_sphere` (C++), and `orchard.raycast(origin, dir, max)` / `orchard.overlap_sphere(center, r)` (Lua).
 - `orchard::current()`, `orchard::find(name)`, `orchard::spawn(name)`, `orchard::spawn_child(name, parent)`, `orchard::instantiate(template, x, y, z)`, `orchard::instantiate_child(template, x, y, z, parent)`, `orchard::burst_particles(e, count)` and friends, `orchard::log`, `orchard::warn`, `orchard::dt()`, `orchard::time()`, `orchard::is_2d()` and `orchard::key_down(key)` (key names as Grove gives them: `A`, `Space`, `UpArrow`...).
 
+### Random numbers and shuffle bags
+
+Every language has the same random helpers (`random`, `random_int` from before still work):
+
+| Group | Functions |
+|---|---|
+| Numbers | `random_seed`, `random_range`, `random_integer` / `random_whole`, `random_chance`, `random_gaussian`, `random_weighted` (index from a list of weights), `random_pick` (one of several choices, separated by commas or `|`), `random_text` |
+| Directions | `random_in_sphere`, `random_on_sphere`, `random_in_circle`, `random_in_cone` |
+| Noise | `noise` (Perlin-style, 1–3D), `fractal_noise` |
+| Secure (for codes, tokens, anything players mustn't guess) | `secure_random`, `secure_random_integer`, `secure_chance`, `secure_pick`, `secure_random_text`, `secure_token` (URL-safe), `secure_hex`, `secure_uuid` (version 4) |
+| Shuffle bags | `bag_add` (bag, item, copies), `bag_next`, `bag_peek`, `bag_remaining`, `bag_size`, `bag_count`, `bag_reset`, `bag_clear`, `bag_remove`, `bag_avoid_repeats` |
+
+A shuffle bag works like Fizmo's: fill it with items (several copies of an item make it come up more often), `bag_next` draws them in a random order, and when the bag runs out it's refilled and shuffled again, so every item comes up once per round. `bag_avoid_repeats` stops the first draw of a new round matching the last one. Bags are named and shared by every script in the scene.
+
+```lua
+orchard.bag_add("loot", "coin", 5)
+orchard.bag_add("loot", "potion", 2)
+orchard.bag_add("loot", "sword")
+local drop = orchard.bag_next("loot")
+```
+
+The secure ones come from Fizmo's cryptographic generator (the operating system's own: `getrandom` on Linux, `BCryptGenRandom` on Windows). They can't be seeded, so use the ordinary ones for anything that should replay the same way.
+
+In C++ there's also `orchard::SecureRandom` (`orchard::secure_random()` gives one per thread), `orchard::Random` (xoshiro, seedable, with everything above), `orchard::ShuffleBag<T>`, `orchard::WeightedTable`, and `ridged_noise`, `cellular_noise`, `value_noise` and `hash32`/`hash64`/`hash_text` in `<orchard/random.hpp>`.
+
+Graphs have **Random number**, **Random whole number**, **Random chance**, **Random gaussian**, **Random pick**, **Noise**, **Random seed**, **Bag add**, **Bag next** and **Bag remaining** nodes, plus **Secure random number**, **Secure random whole number**, **Secure random text**, **Secure token** and **Secure UUID**.
+
+### Sound
+
+| Function | Plays |
+|---|---|
+| `play_sound(clip, volume, pitch)` | flat, not placed anywhere (music, UI) |
+| `play_sound_at(clip, x, y, z, volume, pitch, range)` | at a point in the world |
+| `play_sound_on(entity, clip, volume, pitch, range)` | following an entity |
+| `loop_sound(clip, volume)`, `loop_sound_on(entity, clip, volume, range)` | over and over until stopped |
+| `play_sound_source(entity)`, `stop_sound_source(entity)` | the entity's Sound component |
+
+Each returns a handle for `stop_sound`, `set_sound_volume`, `set_sound_pitch`, `pause_sound` and `sound_playing`; `stop_all_sounds` stops everything. A clip is a file name (`"Sounds/boom.wav"` or just `"boom.wav"`; Assets, Assets/Sounds and Sounds are looked in). wav, ogg, mp3 and flac work. Placed sounds get quieter with distance (out to `range`) and pan with where the camera is facing.
+
+**Add > Sound** (or the Sound group in the inspector) gives an entity a Sound component: a clip, volume, pitch, range, loop, and whether it plays when the scene starts. ▶ in the inspector previews it.
+
+Graphs have **Play sound**, **Play sound here** (on the entity), **Play sound at** (a point), **Loop sound here**, **Play sound source** and **Stop all sounds**.
+
+### AI
+
+Any entity can be given an AI brain from **Add > AI (enemies, animals, helpers)**, which adds a ready-made character, or with **Add AI** in the inspector of something you already have. The inspector's AI group has the brain, team, senses (sight range and angle, hearing), speeds, health, attack numbers, and a behaviour picker.
+
+| Brain | Does |
+|---|---|
+| `zombie`, `runner`, `crawler`, `screamer` | shamble or sprint at you, follow noises, bite; screamers call the horde |
+| `guard`, `soldier`, `stealth-guard` | patrol, get suspicious, investigate, raise the alarm, shoot from cover, flank, suppress, throw grenades, take turns attacking (squad tokens); stealth guards have narrow vision and slow suspicion, like Metal Gear |
+| `brawler` | runs in and fights hand to hand |
+| `hunter` | an Alien-style stalker: follows a director that knows roughly where you are, backs off when it's been too close for too long, checks hiding spots, and learns the ones you use |
+| `prey`, `predator` | animals: graze and flee, or stalk and pounce |
+| `companion`, `civilian` | follow the player and fight with them, or cower and run |
+| `flyer`, `turret` | drones that fly and shoot, turrets that turn and fire |
+| `custom` | only the behaviour you write |
+
+Agents see (vision cone plus line of sight, with suspicion building up before they're sure), hear (gunshots, explosions, footsteps; running players make more noise), remember where they last saw you, and share what they know with their team. Teams have relations (hostile, neutral, friendly) with each other. Pathfinding is a navigation grid baked from the physics world as agents need it (steps, slopes, jumps across gaps, drops), with danger (fire, explosions, anything with `ai_add_danger`) costed in, so agents walk around it. In 2D scenes the same brains work on the 2D plane.
+
+**Behaviour trees.** Each brain is a behaviour tree written as indented text, and you can write your own (a `.bt` file in Behaviors, picked in the inspector; **Copy behaviour** saves a brain's tree there to start from):
+
+```
+selector
+  sequence
+    ? can_see_target
+    ? health_below 30
+    retreat
+  sequence
+    ? target_in_range
+    face_target
+    shoot
+  utility
+    patrol score=2
+    wander 6 score=random*2
+  wait 1 3
+```
+
+- Composites: `selector`, `sequence`, `parallel`, `random` (children `weight=`), `utility` (children `score=` an expression).
+- Decorators: `inverter`, `succeed`, `fail`, `repeat N`, `retry N`, `cooldown S`, `timeout S`, `once`, `if <expression>`, `while <expression>`.
+- `? name args` is a condition. Conditions include `has_target`, `can_see_target`, `target_in_range`, `target_in_reach`, `target_closer`/`target_farther N`, `target_dead`, `just_spotted`, `heard_noise`, `suspicious`, `alerted`, `searching`, `team_alert`, `health_below N`, `ammo_empty`, `low_ammo`, `in_cover`, `at_home`, `has_patrol`, `saw_body`, `has_leader`, `leader_far`/`leader_near`, `is_stuck`, `path_failed`, `in_danger`, `threatened`, `panicked`, `enemies_near N`, `director_backoff`, `director_pressure`, `director_phase`, `fear_fire`, `flying`, `has_squad`, `has_token`, `grenade_ready`, `burning`, `is_moving`, `chance P`, `can_reach_target`, `has_cover`, `blackboard KEY`.
+- Actions include `idle`, `wait A B`, `graze`, `look_around`, `face_target`, `face_noise`, `stop`, `patrol`, `wander R`, `return_home`, `move_to`, `chase [run]`, `approach`, `charge`, `attack`, `shoot`, `melee`, `reload`, `go_to_noise`, `investigate`, `search`, `flee`, `retreat`, `cower`, `escape_danger`, `take_cover`, `peek`, `shoot_from_cover`, `flank`, `suppress`, `throw_grenade`, `strafe`, `keep_distance`, `follow_leader`, `follow`, `scream`, `call_help`, `raise_alarm`, `request_token`, `release_token`, `stalk`, `flock`, `backstage`, `hunt_hint`, `check_hiding_spots`, `fly_wander`, `fly_to_target`, `fly_attack`, `plan` (GOAP), `say`/`bark`, `play_sound`, `make_noise`, `effect`, `forget`, and `event NAME`.
+- Expressions (`score=`, `if`, `while`) can use `health`, `health_fraction`, `distance`, `awareness`, `suspicion`, `alert`, `aggression`, `ammo`, `magazine`, `allies`, `enemies`, `danger`, `intensity`, `menace`, `time`, `random`, and `bb.KEY` for blackboard numbers, with the usual maths and comparisons.
+- `event NAME` hands the decision to your script: `ai_pending_action` and `ai_pending_argument` say what's waiting, and `ai_finish_action(entity, success)` finishes it.
+
+**Brain graphs.** A behaviour tree can also be drawn as a graph: a `.brain` file, opened in the graph tab like a `.graph`. It starts from a **Brain** node; **Selector**, **Sequence**, **Parallel**, **Random** and **Utility** nodes have a `children` pin that you connect to as many nodes as you like, run top to bottom by where they sit; decorators (**Invert**, **Repeat**, **Cooldown**, **Only If**, ...) have one `child`. Conditions are yellow, moving blue, fighting red, and every condition and action above has a node with its settings as editable values. **Weight** and **Score** go between a Random or Utility node and a child. **Edit this behavior as a graph** in an agent's inspector turns its current tree into a `.brain` file in Behaviors and opens it; the agent then uses that file. A brain graph is turned into the same tree text when you press Play, and **Show behavior tree** (or `orchard --graph FILE.brain`) shows it.
+
+**From scripts:** `ai_add`, `ai_set_brain`, `ai_set_behavior`, `ai_define_behavior`, `ai_brain_behavior`, `ai_behavior`, `ai_enable`, `ai_is_agent`, `ai_set_team`, `ai_team`, `ai_set_relation`, `ai_relation`, `ai_hostile`, `ai_move_to`, `ai_stop`, `ai_arrived`, `ai_is_moving`, `ai_set_target`, `ai_target`, `ai_can_see`, `ai_awareness`, `ai_suspicion`, `ai_alert_level`, `ai_state`, `ai_action`, `ai_event`, `ai_pending_action`, `ai_pending_argument`, `ai_finish_action`, `ai_set_visibility` (for stealth: crouching, shadows), `ai_make_noise` / `ai_make_noise_from`, `ai_team_alert`, `ai_set_team_alert`, `ai_find_path`, `ai_path_length`, `ai_path`, `ai_random_point`, `ai_snap_to_ground`, `ai_add_danger`, `ai_clear_danger`, `ai_bake`, `ai_find_cover`, `ai_line_of_sight`, `ai_last_seen`, `ai_set_number`/`ai_get_number`/`ai_set_text`/`ai_get_text` (the blackboard), `ai_director_intensity`, `ai_director_menace`, `ai_director_phase`, `ai_director_note`, `ai_director_habit`, `ai_set_spawns`, `ai_agent_count`, `ai_main_player`, `ai_lob_velocity` (throwing arcs) and `ai_intercept` (leading a moving target).
+
+**Director.** Like Left 4 Dead's: it tracks how intense things have been for the player, cycles through build-up, peak and relax, and spawns copies of the template given to `ai_set_spawns` (how many at once, how near and far from the player, how often) out of the player's sight when it's time.
+
+**Other AI, for any game:**
+
+- **Block-world pathfinding**, like Minecraft mobs: `voxel_define` (block kinds with a danger level, solid, climbable, liquid), `voxel_set`, `voxel_fill`, `voxel_get`, `voxel_clear`, `voxel_solid_below`, `voxel_path` (jumps, drops, ladders, swimming, avoiding danger above a limit; lava is never walked through by default) and `voxel_flee`.
+- **Planning (GOAP)**, like F.E.A.R.: `goap_action` (planner, name, needs, gives, cost), `goap_remove`, `goap_clear`, `goap_plan` (from a state to a goal, gives the list of actions).
+- **Chess**: `chess_new`, `chess_free`, `chess_load` (FEN), `chess_fen`, `chess_move` (`e2e4`, `e7e8q`), `chess_is_legal`, `chess_undo`, `chess_best_move` (game, level 1–10), `chess_status` (playing, check, checkmate, stalemate, draw), `chess_turn`, `chess_moves`, `chess_piece`, `chess_board`, `chess_history`. The engine does alpha-beta search with a transposition table, quiescence and move ordering, and its move generation passes the standard perft tests.
+- **Learning**: small neural networks (`nn_create`, `nn_run`, `nn_train`, `nn_save`, `nn_load`), Q-learning (`q_choose`, `q_best`, `q_learn`, `q_settings`, `q_save`, `q_load`) and Markov text (`markov_train`, `markov_generate`, for names and barks).
+
+In C++, `<orchard/ai/...>` has all of it and more to build your own: A*, Dijkstra, BFS and grid pathfinding (`search.hpp`), multi-threaded breadth-first and depth-first search with loop detection (`parallel_search.hpp`, below), the voxel pathfinder (`voxel.hpp`), the navigation grid with flow fields (`navgrid.hpp`), behaviour trees (`behavior_tree.hpp`), GOAP, a utility reasoner and state machines (`goap.hpp`, `utility.hpp`), steering behaviours (seek, arrive, flee, pursue, evade, wander, separation, cohesion, alignment, obstacle avoidance, `steering.hpp`), ballistics and aim error (`tactics.hpp`), MLP networks, genetic algorithms, Q-learning and Markov chains (`learning.hpp`), negamax and Monte Carlo tree search for any turn-based game with tic-tac-toe and connect four as examples (`game_search.hpp`), the chess engine (`chess.hpp`), and the scene runtime `AiWorld` (`world.hpp`).
+
+**Multi-threaded search.** `parallel_breadth_first` and `parallel_depth_first` (in `<orchard/ai/parallel_search.hpp>`, included by `search.hpp`) take the same start node, goal test and neighbour function as `breadth_first`, plus `ParallelSearchOptions`:
+
+- `threads` (0 = one runner per CPU core), `max_expand`, `max_depth`.
+- `first_found` (depth first stops at the first path; turn it off to keep searching for the shortest one).
+- `share_below` (how short the shared pool of branches gets before a depth-first runner hands one of its branches to an idle runner).
+
+All runners write into one shared claim table that records each node's parent, depth and which runner reached it. When two runners reach the same node, the shorter path keeps it; if both are the same length, the one that got there first keeps it. Claims are atomic (a compare-and-swap per node for numbered nodes, locked shards otherwise), so runners crossing each other can't corrupt a path. Breadth first goes level by level with every runner taking a slice of the level. Depth first gives each runner its own stack plus an on-path set (pointers back up its branch), so walking back into its own branch is caught as a loop and skipped instead of going round forever. The result says how many `loops`, `collisions` (runners meeting) and `revisits` there were, how many `runners` ran, and which one (`winner`) found the path. `parallel_breadth_first_indexed` / `parallel_depth_first_indexed` are faster for nodes that are numbers `0..count-1`, `GridPathfinder` has `find_breadth_first` and `find_depth_first`, `depth_first` is the one-thread version, and `find_cycle` / `has_cycle` find a loop in any graph.
+
+Graphs have **AI brain**, **AI team**, **AI move to**, **AI stop**, **AI make noise**, **AI finish action**, **AI enable**, **AI state**, **AI action**, **AI pending action**, **AI event**, **AI arrived**, **AI has target** and **AI can see** nodes, plus **Equal text**, **And** and **Or**.
+
 ## Physics
 
 Any entity can have a **body** (dynamic, static or kinematic) and any number of **colliders** (box, sphere, capsule, cylinder, cone or rounded box, each with a size, an offset, density, friction and bounce, plus rolling friction, spinning friction and grip along each axis in 3D). A body uses its own colliders plus those of its children that don't have a body of their own, so a few child entities with colliders make one compound body. In the inspector, a body's flags switch gravity, collisions, friction, bouncing, sleeping, continuous collision for fast things, contact events and position and rotation locks on and off, and a collider can be turned off or made a sensor (a trigger that notices things without pushing them).
@@ -290,6 +400,28 @@ Each part is a named child entity, so scripts can tell which part was hit. C++: 
 The **Entities** tab beside Script and Console holds reusable entities: build something once (its colliders, rigid body, materials and textures, lights, particles, scripts and children), then drop copies of it into the scene. **+ New entity** opens an empty one; **From selected** turns what you've selected (and its children) into one, and the selection becomes its first copy. **Edit** opens it on its own in the main view with the usual outliner, inspector, collider editor and Move tool; **Play** there tests it alone. **Save and go back** writes it to `Entities/<name>.entity` and updates every copy in the scene; each copy keeps its own name and place. **Place** drops a copy where the view is looking. The right-click menu has **Make an entity template from this**, **Edit its entity template**, **Unlink from its template** (makes a copy plain again) and **Duplicate** (Ctrl+D).
 
 Scripts are files in `Scripts/`, so any number of entities, templates or not, can use the same script; each copy still gets its own script state. Scripts spawn copies while the game runs with `instantiate("Crate", x, y, z)` (Lua `orchard.instantiate`, Java `World.instantiate`, C# `World.Instantiate`); a bare name means `Entities/<name>.entity`. A spawned copy gets its physics body right away and its scripts start on the same frame.
+
+### Union, intersect and negate
+
+Parts can be combined like Roblox Studio's solid modelling. **Ctrl+click** parts in the view or the outliner to select several (the last one clicked is the main selection; Ctrl+click a selected part to drop it). Then right-click, or use the shortcut:
+
+| Action | Shortcut | Does |
+|---|---|---|
+| **Union** | Ctrl+Shift+G | joins the parts into one |
+| **Intersect** | Ctrl+Shift+I | keeps only the space where all the parts overlap |
+| **Negate** | Ctrl+Shift+N | marks a part as negative: a union or intersection cuts its shape out. Press it again to make the part solid again. |
+| **Separate** | Ctrl+Shift+U | turns a union or intersection back into its parts, where they were |
+
+Union and intersect also work on one selected entity that has children: they combine its children.
+
+- **What's combined.** A part's shape is its colliders: boxes, spheres, capsules, cylinders, cones, triangle prisms, and mesh colliders with a model. A rounded box is treated as a plain box; sphere sections are left out (the console says so).
+- **What you get.** A new entity in the same place, called Union or Intersection, whose shape is written to `Assets/Solids/<name>.obj`. Unions can be unioned again.
+- **Colours.** Parts with different colours keep them (in a `.mtl` beside the `.obj`); if they all share one material, the result gets that material. **One colour** in the inspector's **Solid modelling** group remakes it with the first part's material.
+- **Physics.** A union that never moves (a container, or no body) collides with its exact shape; a moving one collides as its convex hull. The rigid body and collider settings come from the first part.
+- **Getting the parts back.** The original parts are kept in `Assets/Solids/<name>.parts`, so **Separate** works even after saving and reopening.
+- **Negative parts** are drawn as pink outlines in the editor. While playing they're hidden and nothing collides with them.
+
+In C++ it's `<orchard/solid.hpp>`: `combine_solids`, `separate_solid`, `rebuild_solid`, and `solid_union` / `solid_subtract` / `solid_intersect` on `SolidMesh` triangle meshes.
 
 ### Models and animation
 

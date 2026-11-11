@@ -205,6 +205,9 @@ public:
     orchard::Entity raycast(orchard::Vec3 origin, orchard::Vec3 direction, float max_distance, orchard::Vec3* point, orchard::Vec3* normal, float* distance) const override;
     orchard::Entity raycast_ignoring(orchard::Entity ignore, orchard::Vec3 origin, orchard::Vec3 direction, float max_distance, orchard::Vec3* point = nullptr, orchard::Vec3* normal = nullptr, float* distance = nullptr) const;
     CharacterState move_character(orchard::Entity e, const CharacterMove& move, float dt);
+    bool walk(orchard::Entity e, orchard::Vec3 wish, bool jump, float jump_speed, float dt) override;
+    bool flat() const override;
+    float gravity() const override;
     float interpolation() const;
     bool render_pose(orchard::Entity e, orchard::Vec3& position, orchard::Quat& rotation) const;
     void release_character(orchard::Entity e);

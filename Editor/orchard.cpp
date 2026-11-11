@@ -1,6 +1,7 @@
 #include <orchard/orchard.hpp>
 #include <orchard/scripting.hpp>
 #include <orchard/effects.hpp>
+#include <orchard/solid.hpp>
 #include <xylem/xylem.hpp>
 #include <chlorophyll/chlorophyll.hpp>
 
@@ -9,6 +10,7 @@
 #include "graph_view.hpp"
 #include "builtin_models.hpp"
 #include "particle_textures.hpp"
+#include "sound_player.hpp"
 
 #include <grove/app.hpp>
 #include <grove/bundle.hpp>
@@ -480,6 +482,7 @@ private:
             m_session.advance(f.dt);
             if (!m_scene.alive(m_selected)) m_selected = orchard::Entity{};
         }
+        pump_sounds();
         double seconds = 0.0;
         if (m_session.playing()) seconds = m_session.time();
         else if (pref("preview_effects", "0") == "1") seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_preview_start).count();
@@ -573,6 +576,7 @@ private:
         else xylem::preview_fluids(m_scene, m_project ? m_project->info().physics.fluid_level : orchard::FluidLevel::waves, m_fluid_draws);
         m_gpu.set_fluids(&m_fluid_draws);
         m_gpu.set_texture_folder(m_project ? m_project->folder() : std::string());
+        m_gpu.set_also_selected(m_also);
         m_gpu.draw(f, m_scene, m_selected, m_view, m_session.playing(), seconds);
         unsmooth_bodies();
         if (m_gpu.terrain().stats().pending > 0) redraw();
@@ -591,6 +595,28 @@ private:
             else if (seen != look) return "mixed";
         }
         return seen.empty() ? "mixed" : seen;
+    }
+
+    void pump_sounds() {
+        std::vector<orchard::SoundCommand> commands = m_session.scripts().take_sound_commands();
+        if (m_project) m_sounds.set_folder(m_project->folder());
+        if (!commands.empty()) {
+            const std::string before = m_sounds.error();
+            m_sounds.apply(commands, m_scene);
+            if (m_sounds.error() != before && !m_sounds.error().empty()) add_log("Sound: " + m_sounds.error(), true);
+        }
+        if (!m_session.playing()) {
+            if (m_sounds.playing() > 0) m_sounds.stop_all();
+            return;
+        }
+        const orchard::Vec3 eye = m_view.eye();
+        const orchard::Vec3 fwd = camera_forward_axis();
+        const orchard::Vec3 up = camera_up_axis();
+        orchard::Vec3 right = orchard::cross(fwd, up);
+        if (m_view.dimension() != orchard::Dimension::three_d) right = orchard::Vec3{1.0f, 0.0f, 0.0f};
+        std::vector<int> finished;
+        m_sounds.update(m_scene, eye, right, m_view.dimension() != orchard::Dimension::three_d, finished);
+        for (int id : finished) m_session.scripts().sound_finished(id);
     }
 
     void smooth_bodies_for_drawing() {
@@ -942,13 +968,18 @@ private:
         orchard::editor::GraphView* g = active_graph();
         if (!g) return std::string();
         const orchard::editor::GraphCompile c = g->compile();
-        const std::string problems = c.errors.empty() ? std::string("Compiles to Walnut") : std::to_string(c.errors.size()) + (c.errors.size() == 1 ? " problem: " : " problems: ") + clean(c.errors.front());
+        const std::string problems = c.errors.empty() ? std::string(g->is_brain() ? "Compiles to a behavior tree" : "Compiles to Walnut") : std::to_string(c.errors.size()) + (c.errors.size() == 1 ? " problem: " : " problems: ") + clean(c.errors.front());
         return std::string(g->dirty() ? "1" : "0") + "\t" + problems + "\t" + (g->can_undo() ? "1" : "0") + "\t" + (g->can_redo() ? "1" : "0");
+    }
+
+    orchard::graph::GraphKind open_graph_kind() const {
+        const auto it = m_graphs.find(m_graph_open);
+        return it == m_graphs.end() ? orchard::graph::GraphKind::script : it->second.graph().kind();
     }
 
     std::vector<grove::MenuItem> graph_add_items() const {
         std::vector<grove::MenuItem> items;
-        for (const orchard::editor::GraphCategory& cat : orchard::editor::GraphView::catalog()) {
+        for (const orchard::editor::GraphCategory& cat : orchard::editor::GraphView::catalog(open_graph_kind())) {
             if (!items.empty()) items.push_back(grove::menu_separator());
             items.push_back(grove::menu_item("", cat.name, "", true));
             for (const orchard::editor::GraphCatalogEntry& t : cat.types) items.push_back(grove::menu_item("add:" + t.id, "  " + t.title));
@@ -1908,6 +1939,102 @@ private:
             out += field("tags", "Tags (comma separated, scripts find things by tag)", "string", joined);
         }
 
+        group("AI");
+        const orchard::Agent* ag = m_scene.agent(e);
+        out += field("has_agent", "Has an AI brain (moves, sees, hears, fights)", "bool", yesno(ag != nullptr));
+        if (ag) {
+            std::vector<std::pair<std::string, std::string>> brains;
+            for (const std::string& b : orchard::Agent::brains()) brains.emplace_back(b, orchard::Agent::brain_label(b));
+            out += field("agent.brain", "Brain", "select", ag->brain, options_of(brains), "Picking a brain resets the settings below to that brain's.");
+            std::vector<std::pair<std::string, std::string>> behaviors = {{"", "The brain's own behavior"}};
+            for (const std::string& b : orchard::Agent::brains())
+                if (b != ag->brain && b != "custom") behaviors.emplace_back(b, std::string("Another brain's: ") + b);
+            if (m_project)
+                for (const std::string& f : m_project->behaviors()) behaviors.emplace_back(f, f);
+            if (!ag->behavior.empty()) {
+                bool listed = false;
+                for (const auto& b : behaviors) listed = listed || b.first == ag->behavior;
+                if (!listed) behaviors.emplace_back(ag->behavior, ag->behavior);
+            }
+            out += field("agent.behavior", "Behavior tree", "select", ag->behavior, options_of(behaviors), "A .bt file or a .brain graph in Behaviors/ uses your own behavior tree.");
+            out += field("agent_copy_behavior", "Copy this behavior to a file to edit", "button", "1");
+            out += field("agent_brain_graph", orchard::graph::is_brain_file(ag->behavior) ? "Open its brain graph" : "Edit this behavior as a graph", "button", "1");
+            out += field("agent.enabled", "On", "bool", yesno(ag->enabled));
+            out += field("agent.team", "Team", "string", ag->team, std::string(), "Agents on the same team are friends. Players are on the team 'player'.");
+            out += field("agent.targets", "Only hunts (teams or tags, comma separated)", "string", ag->targets);
+            out += field("agent.walk_speed", "Walk speed (m/s)", "float", number(ag->walk_speed), "0.1");
+            out += field("agent.run_speed", "Run speed (m/s)", "float", number(ag->run_speed), "0.1");
+            out += field("agent.turn_speed", "Turn speed (degrees/s)", "float", number(ag->turn_speed), "10");
+            out += field("agent.sight_range", "Sees this far (m)", "float", number(ag->sight_range), "1");
+            out += field("agent.sight_angle", "Field of view (degrees)", "float", number(ag->sight_angle), "5");
+            out += field("agent.eye_height", "Eye height (m)", "float", number(ag->eye_height), "0.1");
+            out += field("agent.hearing", "Hearing (1 = normal)", "float", number(ag->hearing), "0.1");
+            out += field("agent.awareness", "Notices you this fast (1 = normal)", "float", number(ag->awareness), "0.1");
+            out += field("agent.reaction", "Reaction time (s)", "float", number(ag->reaction), "0.05");
+            out += field("agent.ranged", "Shoots (off = melee)", "bool", yesno(ag->ranged));
+            out += field("agent.attack_range", ag->ranged ? "Shooting range (m)" : "Reach (m)", "float", number(ag->attack_range), "0.1");
+            out += field("agent.attack_damage", "Damage per hit", "float", number(ag->attack_damage), "1");
+            out += field("agent.attack_rate", ag->ranged ? "Shots per second" : "Hits per second", "float", number(ag->attack_rate), "0.1");
+            if (ag->ranged) {
+                out += field("agent.accuracy", "Accuracy (0 to 1)", "slider", number(ag->accuracy), "0.05");
+                out += field("agent.magazine", "Magazine (0 = never reloads)", "float", std::to_string(ag->magazine), "1");
+                out += field("agent.reload_time", "Reload time (s)", "float", number(ag->reload_time), "0.1");
+                out += field("agent.shoot_effect", "Muzzle effect", "string", ag->shoot_effect);
+            }
+            out += field("agent.aggression", "Aggression (0 to 1)", "slider", number(ag->aggression), "0.05");
+            out += field("agent.flee_health", "Runs away below this much health (0 to 1)", "slider", number(ag->flee_health), "0.05");
+            out += field("agent.patrol", "Patrol route (an entity whose children are the points, or a tag)", "string", ag->patrol);
+            out += field("agent.squad", "Squad (shares sightings and takes turns attacking)", "string", ag->squad);
+            out += field("agent.leader", "Follows (entity name, empty = the player)", "string", ag->leader);
+            out += field("agent.flying", "Flies", "bool", yesno(ag->flying));
+            if (ag->flying) out += field("agent.fly_height", "Flies this high (m)", "float", number(ag->fly_height), "0.5");
+            out += field("agent.radius", "Body radius (m)", "float", number(ag->radius), "0.05");
+            out += field("agent.height", "Body height (m)", "float", number(ag->height), "0.1");
+            out += field("agent.step", "Steps up (m)", "float", number(ag->step), "0.05");
+            out += field("agent.jump", "Jumps up (m, 0 = never)", "float", number(ag->jump), "0.1");
+            out += field("agent.max_drop", "Drops down at most (m)", "float", number(ag->max_drop), "0.5");
+            std::vector<std::pair<std::string, std::string>> clips = {{"", "None"}};
+            if (m_project)
+                for (const std::string& c : m_project->sounds()) clips.emplace_back(c, c);
+            out += field("agent.attack_sound", "Attack sound", "select", ag->attack_sound, options_of(clips));
+            out += field("agent.alert_sound", "Spotted-you sound", "select", ag->alert_sound, options_of(clips));
+        }
+
+        group("Sound");
+        const orchard::SoundSource* snd = m_scene.sound(e);
+        out += field("has_sound", "Plays a sound", "bool", yesno(snd != nullptr));
+        if (snd) {
+            std::vector<std::pair<std::string, std::string>> clips = {{"", "None (pick one, or put sounds in Assets or Sounds)"}};
+            if (m_project)
+                for (const std::string& c : m_project->sounds()) clips.emplace_back(c, c);
+            bool listed = snd->clip.empty();
+            for (const auto& c : clips) listed = listed || c.first == snd->clip;
+            if (!listed) clips.emplace_back(snd->clip, snd->clip);
+            out += field("sound.clip", "Sound file", "select", snd->clip, options_of(clips), "WAV, OGG, MP3, FLAC and Opus files from Assets or Sounds.");
+            out += field("sound_preview", "Play it now", "button", "1");
+            out += field("sound.volume", "Volume", "slider", number(snd->volume), "0.05");
+            out += field("sound.pitch", "Pitch (speed)", "float", number(snd->pitch), "0.05");
+            out += field("sound.loop", "Loops", "bool", yesno(snd->loop));
+            out += field("sound.autoplay", "Starts when Play starts", "bool", yesno(snd->autoplay));
+            out += field("sound.spatial", "Comes from this entity (quieter far away)", "bool", yesno(snd->spatial));
+            if (snd->spatial) {
+                out += field("sound.range", "Heard up to (m)", "float", number(snd->range), "1");
+                out += field("sound.min_distance", "Full volume within (m)", "float", number(snd->min_distance), "0.5");
+            }
+            out += field("sound.ai_hears", "AI can hear it", "bool", yesno(snd->ai_hears));
+            if (snd->ai_hears) out += field("sound.loudness", "How far AI hears it (m)", "float", number(snd->loudness), "1");
+        }
+
+        if (!flat && m_scene.colliders(e) && !m_scene.colliders(e)->empty()) {
+            group("Solid modelling");
+            const orchard::Solid* sd = m_scene.solid(e);
+            out += field("solid.negative", "Negative (cut out of unions)", "bool", yesno(sd && sd->negative), "", "Ctrl+click parts to pick several, then right-click > Union (Ctrl+Shift+G) or Intersect (Ctrl+Shift+I). Negative parts are cut out of the result. While playing a negative part is hidden and nothing hits it.");
+            if (sd && !sd->parts.empty()) {
+                out += field("solid.one_color", "One colour (use the first part's material)", "bool", yesno(sd->one_color), "", std::string(sd->operation == orchard::SolidOperation::intersect_parts ? "An intersection" : "A union") + " made from " + sd->parts + ".");
+                out += field("solid_separate", "Separate back into parts", "button", "1");
+            }
+        }
+
         if (!flat) {
             orchard::editor::ModelView& models = const_cast<orchard::editor::GpuView&>(m_gpu).models();
             group("Model");
@@ -2610,6 +2737,198 @@ private:
             }
             redraw();
             return "ok";
+        }
+        if (key == "has_agent") {
+            if (on) {
+                if (!m_scene.agent(e)) m_scene.add_agent(e) = orchard::Agent::preset("guard").value_or(orchard::Agent{});
+                if (!m_scene.health(e)) m_scene.add_health(e);
+            } else {
+                m_scene.remove_agent(e);
+            }
+            return "rebuild";
+        }
+        if (key == "solid.negative") {
+            orchard::Solid& sd = m_scene.add_solid(e);
+            sd.negative = on;
+            if (!sd.negative && sd.operation == orchard::SolidOperation::none && sd.parts.empty()) m_scene.remove_solid(e);
+            touched();
+            return "rebuild";
+        }
+        if (key == "solid.one_color") {
+            const orchard::SolidResult r = orchard::rebuild_solid(m_scene, e, solid_options(on));
+            for (const std::string& n : r.notes) add_log(n, false);
+            if (!r.ok()) {
+                add_log("Can't remake " + m_scene.name(e) + ": " + r.error, true);
+                return std::string();
+            }
+            touched();
+            return "rebuild";
+        }
+        if (key == "solid_separate") {
+            const std::string r = solid_action(e, "solid:separate");
+            if (r.rfind("error", 0) == 0) {
+                add_log(r.substr(6), true);
+                return std::string();
+            }
+            return "rebuild";
+        }
+        if (key == "has_sound") {
+            if (on) {
+                if (!m_scene.sound(e)) m_scene.add_sound(e);
+            } else {
+                m_scene.remove_sound(e);
+            }
+            return "rebuild";
+        }
+        if (key == "sound_preview") {
+            if (const orchard::SoundSource* snd = m_scene.sound(e)) {
+                if (m_project) m_sounds.set_folder(m_project->folder());
+                m_sounds.preview(snd->clip, snd->volume);
+                if (!m_sounds.error().empty()) add_log("Sound: " + m_sounds.error(), true);
+            }
+            return std::string("ok");
+        }
+        if (key == "agent_brain_graph") {
+            orchard::Agent* ag = m_scene.agent(e);
+            if (!ag || !m_project) return std::string();
+            if (orchard::graph::is_brain_file(ag->behavior)) return "graph\t" + ag->behavior;
+            std::string text;
+            if (!ag->behavior.empty() && ag->behavior.find('.') != std::string::npos) {
+                std::ifstream in(m_project->path_of(ag->behavior));
+                std::stringstream ss;
+                ss << in.rdbuf();
+                text = ss.str();
+            }
+            if (text.empty()) text = orchard::ai::brain_behavior(ag->behavior.empty() ? ag->brain : ag->behavior);
+            if (text.empty()) text = "selector\n  idle\n";
+            std::string why;
+            const std::optional<orchard::graph::Graph> g = orchard::graph::Graph::from_behavior(text, &why);
+            if (!g) {
+                add_log("Can't turn that behavior into a graph: " + why, true);
+                return std::string();
+            }
+            std::string base = m_scene.name(e);
+            for (char& c : base)
+                if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
+            std::error_code ec;
+            std::filesystem::create_directories(m_project->path_of("Behaviors"), ec);
+            std::string rel = "Behaviors/" + base + ".brain";
+            for (int i = 2; std::filesystem::exists(m_project->path_of(rel), ec); ++i) rel = "Behaviors/" + base + std::to_string(i) + ".brain";
+            std::ofstream(m_project->path_of(rel)) << g->save();
+            ag->behavior = rel;
+            add_log("Wrote " + rel + ": change it in the graph tab and press Play to use it", false);
+            return "graph\t" + rel;
+        }
+        if (key == "agent_copy_behavior") {
+            orchard::Agent* ag = m_scene.agent(e);
+            if (!ag || !m_project) return std::string();
+            std::string text;
+            if (orchard::graph::is_brain_file(ag->behavior)) {
+                std::ifstream in(m_project->path_of(ag->behavior));
+                std::stringstream ss;
+                ss << in.rdbuf();
+                text = orchard::graph::brain_file_behavior(ss.str()).value_or(std::string());
+            } else if (!ag->behavior.empty() && ag->behavior.find('.') != std::string::npos) {
+                std::ifstream in(m_project->path_of(ag->behavior));
+                std::stringstream ss;
+                ss << in.rdbuf();
+                text = ss.str();
+            }
+            if (text.empty()) text = orchard::ai::brain_behavior(ag->behavior.empty() ? ag->brain : ag->behavior);
+            std::string base = m_scene.name(e);
+            for (char& c : base)
+                if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
+            std::error_code ec;
+            std::filesystem::create_directories(m_project->path_of("Behaviors"), ec);
+            std::string rel = "Behaviors/" + base + ".bt";
+            for (int i = 2; std::filesystem::exists(m_project->path_of(rel), ec); ++i) rel = "Behaviors/" + base + std::to_string(i) + ".bt";
+            std::ofstream(m_project->path_of(rel)) << text;
+            ag->behavior = rel;
+            add_log("Wrote " + rel + ": edit it and press Play to use it", false);
+            return "rebuild";
+        }
+        if (key.rfind("agent.", 0) == 0) {
+            orchard::Agent* ag = m_scene.agent(e);
+            if (!ag) return std::string();
+            const std::string k = key.substr(6);
+            if (k == "brain") {
+                const std::optional<orchard::Agent> p = orchard::Agent::preset(value);
+                if (!p) return std::string();
+                const std::string patrol = ag->patrol, squad = ag->squad;
+                *ag = *p;
+                ag->patrol = patrol;
+                if (!squad.empty()) ag->squad = squad;
+                return std::string("rebuild");
+            }
+            auto f = [&](float& target, float lo, float hi) {
+                target = std::clamp(v, lo, hi);
+                return std::string("ok");
+            };
+            if (k == "behavior") {
+                ag->behavior = value;
+                return std::string("ok");
+            }
+            if (k == "enabled") ag->enabled = on;
+            else if (k == "team") ag->team = value;
+            else if (k == "targets") ag->targets = value;
+            else if (k == "walk_speed") return f(ag->walk_speed, 0.0f, 100.0f);
+            else if (k == "run_speed") return f(ag->run_speed, 0.0f, 100.0f);
+            else if (k == "turn_speed") return f(ag->turn_speed, 0.0f, 5000.0f);
+            else if (k == "sight_range") return f(ag->sight_range, 0.0f, 10000.0f);
+            else if (k == "sight_angle") return f(ag->sight_angle, 0.0f, 360.0f);
+            else if (k == "eye_height") return f(ag->eye_height, -100.0f, 100.0f);
+            else if (k == "hearing") return f(ag->hearing, 0.0f, 100.0f);
+            else if (k == "awareness") return f(ag->awareness, 0.0f, 100.0f);
+            else if (k == "reaction") return f(ag->reaction, 0.0f, 10.0f);
+            else if (k == "ranged") {
+                ag->ranged = on;
+                return std::string("rebuild");
+            } else if (k == "attack_range") return f(ag->attack_range, 0.0f, 10000.0f);
+            else if (k == "attack_damage") return f(ag->attack_damage, -100000.0f, 100000.0f);
+            else if (k == "attack_rate") return f(ag->attack_rate, 0.0f, 100.0f);
+            else if (k == "accuracy") return f(ag->accuracy, 0.0f, 1.0f);
+            else if (k == "magazine") ag->magazine = std::max(0, std::atoi(value.c_str()));
+            else if (k == "reload_time") return f(ag->reload_time, 0.0f, 60.0f);
+            else if (k == "shoot_effect") ag->shoot_effect = value;
+            else if (k == "aggression") return f(ag->aggression, 0.0f, 1.0f);
+            else if (k == "flee_health") return f(ag->flee_health, 0.0f, 1.0f);
+            else if (k == "patrol") ag->patrol = value;
+            else if (k == "squad") ag->squad = value;
+            else if (k == "leader") ag->leader = value;
+            else if (k == "flying") {
+                ag->flying = on;
+                return std::string("rebuild");
+            } else if (k == "fly_height") return f(ag->fly_height, -1000.0f, 1000.0f);
+            else if (k == "radius") return f(ag->radius, 0.05f, 20.0f);
+            else if (k == "height") return f(ag->height, 0.1f, 50.0f);
+            else if (k == "step") return f(ag->step, 0.0f, 5.0f);
+            else if (k == "jump") return f(ag->jump, 0.0f, 20.0f);
+            else if (k == "max_drop") return f(ag->max_drop, 0.0f, 100.0f);
+            else if (k == "attack_sound") ag->attack_sound = value;
+            else if (k == "alert_sound") ag->alert_sound = value;
+            else return std::string();
+            return std::string("ok");
+        }
+        if (key.rfind("sound.", 0) == 0) {
+            orchard::SoundSource* snd = m_scene.sound(e);
+            if (!snd) return std::string();
+            const std::string k = key.substr(6);
+            if (k == "clip") snd->clip = value;
+            else if (k == "volume") snd->volume = std::clamp(v, 0.0f, 4.0f);
+            else if (k == "pitch") snd->pitch = std::clamp(v, 0.05f, 8.0f);
+            else if (k == "loop") snd->loop = on;
+            else if (k == "autoplay") snd->autoplay = on;
+            else if (k == "spatial") {
+                snd->spatial = on;
+                return std::string("rebuild");
+            } else if (k == "range") snd->range = std::max(0.1f, v);
+            else if (k == "min_distance") snd->min_distance = std::max(0.0f, v);
+            else if (k == "ai_hears") {
+                snd->ai_hears = on;
+                return std::string("rebuild");
+            } else if (k == "loudness") snd->loudness = std::max(0.0f, v);
+            else return std::string();
+            return std::string("ok");
         }
         if (key == "has_health") {
             if (on) {
@@ -3618,12 +3937,14 @@ private:
             page("physics", "Physics object");
             if (!flat) page("terrain", "Terrain");
             page("characters", "Characters");
+            page("ai", "AI (enemies, animals, helpers)");
             page("particles", "Particles");
             line();
             page("water", "Water");
             page("lights", "Lights");
             page("cameras", "Cameras");
             page("level", "Floors and zones");
+            add("add:sound", "Sound");
             line();
             add("add:", "Empty entity");
             return items;
@@ -3673,6 +3994,16 @@ private:
                 else if (name == "forest") label = "Forest (1 km of hills with trees and rocks)";
                 add("add:terrain:" + name, label);
             }
+        } else if (at == "ai") {
+            header("Characters with a brain");
+            for (const std::string& b : orchard::Agent::brains())
+                if (b != "custom") add("add:agent:" + b, orchard::Agent::brain_label(b));
+            add("add:agent:custom", "Custom (start from a simple brain)");
+            line();
+            header("Helpers for AI");
+            add("add:patrol-route", "Patrol route (move its points)");
+            add("add:hiding-spot", "Hiding spot (lockers, vents)");
+            add("add:cover", "Low wall (cover)");
         } else if (at == "particles") {
             page("effects", "Effects (explosions, fire, steam...)");
             line();
@@ -3746,10 +4077,112 @@ private:
         if (!m_scene.emitter(e)) items.push_back(grove::menu_item("particles:on", "Give it particles"));
         else items.push_back(grove::menu_item("particles:off", "Remove its particles"));
         items.push_back(grove::menu_item("duplicate", "Duplicate", "Ctrl+D", busy));
+        if (m_scene.dimension() == orchard::Dimension::three_d) {
+            items.push_back(grove::menu_separator());
+            const std::size_t count = selection_with(e).size();
+            if (solid_group_possible(e)) {
+                items.push_back(grove::menu_item("solid:union", count > 1 ? "Union the " + std::to_string(count) + " selected parts" : "Union its parts into one", "Ctrl+Shift+G", busy));
+                items.push_back(grove::menu_item("solid:intersect", count > 1 ? "Intersect the " + std::to_string(count) + " selected parts" : "Intersect its parts", "Ctrl+Shift+I", busy));
+            }
+            const orchard::Solid* sd = m_scene.solid(e);
+            items.push_back(grove::menu_item("solid:negate", sd && sd->negative ? "Un-negate (make it solid again)" : "Negate (cut it out when unioned)", "Ctrl+Shift+N", busy));
+            if (sd && !sd->parts.empty()) items.push_back(grove::menu_item("solid:separate", "Separate back into its parts", "Ctrl+Shift+U", busy));
+        }
         items.push_back(grove::menu_separator());
         items.push_back(grove::menu_item("child", "Add a child"));
         items.push_back(grove::menu_item("delete", "Delete", "Delete", busy));
         return items;
+    }
+
+    std::vector<orchard::Entity> selection_with(orchard::Entity e) const {
+        std::vector<orchard::Entity> out;
+        auto add = [&](orchard::Entity x) {
+            if (m_scene.alive(x) && std::find(out.begin(), out.end(), x) == out.end()) out.push_back(x);
+        };
+        const bool in_selection = e == m_selected || std::find(m_also.begin(), m_also.end(), e) != m_also.end();
+        if (m_scene.alive(e) && !in_selection) {
+            add(e);
+            return out;
+        }
+        for (orchard::Entity x : m_also) add(x);
+        add(m_selected);
+        return out;
+    }
+
+    void prune_selection() {
+        m_also.erase(std::remove_if(m_also.begin(), m_also.end(), [&](orchard::Entity x) { return !m_scene.alive(x) || x == m_selected; }), m_also.end());
+    }
+
+    orchard::SolidOptions solid_options(bool one_color) const {
+        orchard::SolidOptions o;
+        if (m_project) o.project_root = m_project->folder();
+        const bool z_up = m_project && m_project->info().axis_system().up().z > 0.5f;
+        o.z_up = z_up;
+        o.one_color = one_color;
+        const std::string root = o.project_root;
+        o.loader = [root, z_up](const std::string& source, std::vector<orchard::Vec3>& vertices, std::vector<std::uint32_t>& indices) {
+            const std::string path = root.empty() || std::filesystem::path(source).is_absolute() ? source : (std::filesystem::path(root) / source).string();
+            const std::shared_ptr<const xylem::ModelGeometry> g = xylem::load_model_geometry(path, z_up);
+            if (!g || g->empty()) return false;
+            vertices = g->vertices;
+            indices = g->indices;
+            return true;
+        };
+        return o;
+    }
+
+    bool solid_group_possible(orchard::Entity e) const {
+        const std::vector<orchard::Entity> sel = selection_with(e);
+        if (sel.size() >= 2) return true;
+        for (orchard::Entity x : m_scene.subtree(e))
+            if (x != e && m_scene.colliders(x) && !m_scene.colliders(x)->empty()) return true;
+        return false;
+    }
+
+    std::string solid_action(orchard::Entity e, const std::string& action) {
+        if (m_session.playing() || m_session.building()) return "error\tstop playing first";
+        if (!m_project) return "error\topen a project first";
+        if (m_scene.dimension() == orchard::Dimension::two_d) return "error\tunion, intersect and negate work in 3D scenes";
+        const std::vector<orchard::Entity> sel = selection_with(e);
+        if (sel.empty()) return "error\tpick some parts first";
+        if (action == "solid:negate") {
+            const orchard::Solid* first = m_scene.solid(sel.front());
+            const bool make = !(first && first->negative);
+            for (orchard::Entity x : sel) {
+                orchard::Solid& sd = m_scene.add_solid(x);
+                sd.negative = make;
+                if (!sd.negative && sd.operation == orchard::SolidOperation::none && sd.parts.empty()) m_scene.remove_solid(x);
+            }
+            touched();
+            add_log(std::string(make ? "Negated " : "Un-negated ") + (sel.size() == 1 ? m_scene.name(sel.front()) : std::to_string(sel.size()) + " parts") + (make ? ": it's cut out of whatever you union it with, and it's hidden and goes through things while playing" : ""), false);
+            return std::string("ok");
+        }
+        if (action == "solid:separate") {
+            std::vector<orchard::Entity> made;
+            std::string errors;
+            for (orchard::Entity x : sel) {
+                if (!m_scene.solid(x) || m_scene.solid(x)->parts.empty()) continue;
+                const orchard::SolidResult r = orchard::separate_solid(m_scene, x, solid_options(false));
+                if (!r.ok()) errors = r.error;
+                for (orchard::Entity p : r.entities) made.push_back(p);
+            }
+            if (made.empty()) return "error\t" + (errors.empty() ? std::string("only a union or intersection can be separated") : errors);
+            m_selected = made.front();
+            m_also.assign(made.begin() + 1, made.end());
+            touched();
+            return "keep\t" + std::to_string(m_selected.id());
+        }
+        std::vector<orchard::Entity> parts = sel;
+        if (parts.size() == 1) parts = m_scene.children(parts.front()).empty() ? parts : m_scene.children(parts.front());
+        const orchard::SolidOperation op = action == "solid:intersect" ? orchard::SolidOperation::intersect_parts : orchard::SolidOperation::union_parts;
+        const orchard::SolidResult r = orchard::combine_solids(m_scene, parts, op, solid_options(false));
+        for (const std::string& n : r.notes) add_log(n, false);
+        if (!r.ok()) return "error\t" + r.error;
+        m_selected = r.entity;
+        m_also.clear();
+        touched();
+        add_log("Made " + m_scene.name(r.entity) + " (" + r.mesh_file + "). Separate gets the parts back.", false);
+        return "select\t" + std::to_string(r.entity.id());
     }
 
     std::string menu_action(orchard::Entity e, const std::string& action) {
@@ -3761,6 +4194,7 @@ private:
             return "menu";
         }
         m_menu_page.clear();
+        if (action.rfind("solid:", 0) == 0) return solid_action(e, action);
         if (action.rfind("add:", 0) == 0) {
             const std::string kind = action.substr(4);
             orchard::Entity made;
@@ -4351,6 +4785,76 @@ private:
         }
     }
 
+    orchard::Entity add_agent_entity(const std::string& brain, orchard::Entity parent) {
+        const std::optional<orchard::Agent> preset = orchard::Agent::preset(brain);
+        if (!preset) return orchard::Entity{};
+        const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
+        const orchard::Vec3 at = flat ? orchard::Vec3{m_view.pan_camera().center.x, m_view.pan_camera().center.y, 0.0f} : m_view.orbit_camera().target;
+        std::string name = brain;
+        if (!name.empty()) name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+        for (char& c : name)
+            if (c == '-') c = ' ';
+        orchard::Entity e;
+        orchard::Vec3 color{0.6f, 0.6f, 0.6f};
+        if (brain == "zombie" || brain == "runner" || brain == "crawler" || brain == "screamer") color = {0.35f, 0.55f, 0.3f};
+        else if (brain == "guard" || brain == "stealth-guard") color = {0.25f, 0.35f, 0.7f};
+        else if (brain == "soldier") color = {0.3f, 0.4f, 0.25f};
+        else if (brain == "hunter") color = {0.08f, 0.08f, 0.1f};
+        else if (brain == "prey") color = {0.6f, 0.45f, 0.3f};
+        else if (brain == "predator") color = {0.85f, 0.5f, 0.15f};
+        else if (brain == "companion") color = {0.2f, 0.7f, 0.75f};
+        else if (brain == "civilian") color = {0.85f, 0.75f, 0.35f};
+        else if (brain == "brawler") color = {0.6f, 0.25f, 0.2f};
+        else if (brain == "turret" || brain == "flyer") color = {0.55f, 0.15f, 0.15f};
+        if (brain == "turret") {
+            e = m_scene.create("Turret", parent);
+            m_scene.add_body(e).type = orchard::BodyType::fixed;
+            m_scene.add_collider(e)->size = {0.8f, 0.8f, 0.8f};
+            m_scene.transform(e)->position = at + orchard::Vec3{0.0f, 0.4f, 0.0f};
+        } else if (brain == "flyer") {
+            e = m_scene.create("Drone", parent);
+            orchard::Body& b = m_scene.add_body(e);
+            b.gravity_scale = 0.0f;
+            b.set(orchard::body_lock_rotation_x, true);
+            b.set(orchard::body_lock_rotation_y, true);
+            b.set(orchard::body_lock_rotation_z, true);
+            b.set(orchard::body_sleep, false);
+            orchard::Collider* c = m_scene.add_collider(e, orchard::ColliderShape::sphere);
+            c->size = {0.6f, 0.6f, 0.6f};
+            m_scene.transform(e)->position = at + orchard::Vec3{0.0f, preset->fly_height, 0.0f};
+        } else {
+            const bool person = brain != "prey" && brain != "predator";
+            if (person) {
+                e = orchard::add_humanoid(m_scene, orchard::HumanoidKind::basic, parent, name);
+            } else {
+                e = m_scene.create(name, parent);
+                m_scene.add_body(e);
+                orchard::Collider* c = m_scene.add_collider(e, orchard::ColliderShape::capsule);
+                c->size = {preset->radius * 2.0f, preset->height, preset->radius * 2.0f};
+                c->offset = {0.0f, preset->height * 0.5f, 0.0f};
+            }
+            orchard::Body& b = *m_scene.body(e);
+            b.type = orchard::BodyType::dynamic;
+            b.set(orchard::body_lock_rotation_x, true);
+            b.set(orchard::body_lock_rotation_y, true);
+            b.set(orchard::body_lock_rotation_z, true);
+            b.set(orchard::body_sleep, false);
+            b.continuous = orchard::BodyContinuous::on;
+            make_player_colliders(e);
+            if (person && brain != "hunter" && brain != "crawler") {
+                if (orchard::set_character_style(m_scene, e, brain == "guard" || brain == "soldier" || brain == "stealth-guard" || brain == "turret" ? "robot" : "mannequin")) ensure_character_models();
+            }
+            m_scene.transform(e)->position = at;
+        }
+        m_scene.add_material(e).color = color;
+        m_scene.add_agent(e) = *preset;
+        orchard::Health& h = m_scene.add_health(e);
+        h.on_death = orchard::DeathAction::nothing;
+        if (brain == "hunter") h.value = h.max = 400.0f;
+        if (brain == "prey") h.value = h.max = 40.0f;
+        return e;
+    }
+
     orchard::Entity add_physical_player(orchard::HumanoidKind hk, orchard::Entity parent, const std::string& style) {
         const orchard::Entity e = add_physical_player(hk, parent);
         if (!style.empty() && orchard::set_character_style(m_scene, e, style)) ensure_character_models();
@@ -4521,6 +5025,37 @@ private:
                 t->position = m_view.orbit_camera().target;
             }
             return e;
+        }
+        if (kind.rfind("agent:", 0) == 0) return add_agent_entity(kind.substr(6), parent);
+        if (kind == "patrol-route" || kind == "hiding-spot" || kind == "cover" || kind == "sound") {
+            const orchard::Vec3 at = flat ? orchard::Vec3{m_view.pan_camera().center.x, m_view.pan_camera().center.y, 0.0f} : m_view.orbit_camera().target;
+            if (kind == "sound") {
+                const orchard::Entity e = m_scene.create("Sound", parent);
+                m_scene.transform(e)->position = at;
+                m_scene.add_sound(e);
+                return e;
+            }
+            if (kind == "hiding-spot") {
+                const orchard::Entity e = m_scene.create("Hiding spot", parent);
+                m_scene.transform(e)->position = at;
+                m_scene.add_tag(e, "hiding-spot");
+                return e;
+            }
+            if (kind == "cover") {
+                const orchard::Entity e = m_scene.create("Low wall", parent);
+                m_scene.transform(e)->position = at + (flat ? orchard::Vec3{0.0f, 0.5f, 0.0f} : camera_up_axis() * 0.5f);
+                m_scene.add_body(e).type = orchard::BodyType::fixed;
+                m_scene.add_collider(e)->size = flat ? orchard::Vec3{0.4f, 1.0f, 1.0f} : orchard::Vec3{3.0f, 1.0f, 0.4f};
+                return e;
+            }
+            const orchard::Entity route = m_scene.create("Patrol", parent);
+            m_scene.transform(route)->position = at;
+            const orchard::Vec3 offsets[4] = {{-4.0f, 0.0f, -4.0f}, {4.0f, 0.0f, -4.0f}, {4.0f, 0.0f, 4.0f}, {-4.0f, 0.0f, 4.0f}};
+            for (int i = 0; i < (flat ? 2 : 4); ++i) {
+                const orchard::Entity pt = m_scene.create("Point " + std::to_string(i + 1), route);
+                m_scene.transform(pt)->position = flat ? orchard::Vec3{i == 0 ? -4.0f : 4.0f, 0.0f, 0.0f} : offsets[i];
+            }
+            return route;
         }
         if (kind == "barrel" || kind == "crate") {
             const bool barrel = kind == "barrel";
@@ -4873,13 +5408,13 @@ private:
             if (!g) return std::string();
             const orchard::editor::GraphCompile c = g->compile();
             std::string code;
-            for (const std::string& e : c.errors) code += "// error: " + e + "\n";
+            for (const std::string& e : c.errors) code += (g->is_brain() ? "# error: " : "// error: ") + e + "\n";
             return code + c.code;
         });
 
-        native("graph_catalog", [](const std::vector<std::string>&) {
+        native("graph_catalog", [this](const std::vector<std::string>&) {
             std::string out;
-            for (const orchard::editor::GraphCategory& cat : orchard::editor::GraphView::catalog()) {
+            for (const orchard::editor::GraphCategory& cat : orchard::editor::GraphView::catalog(open_graph_kind())) {
                 for (const orchard::editor::GraphCatalogEntry& t : cat.types) out += cat.name + "\t" + t.id + "\t" + t.title + "\n";
             }
             return out;
@@ -4950,7 +5485,28 @@ private:
         });
 
         native("select", [this](const std::vector<std::string>& f) {
-            m_selected = entity(arg(f, 0));
+            const orchard::Entity e = entity(arg(f, 0));
+            if (arg(f, 1) == "add") {
+                if (!m_scene.alive(e)) {
+                } else if (e == m_selected) {
+                    m_selected = orchard::Entity{};
+                    if (!m_also.empty()) {
+                        m_selected = m_also.back();
+                        m_also.pop_back();
+                    }
+                } else if (std::find(m_also.begin(), m_also.end(), e) != m_also.end()) {
+                    m_also.erase(std::find(m_also.begin(), m_also.end(), e));
+                } else {
+                    if (m_scene.alive(m_selected)) m_also.push_back(m_selected);
+                    m_selected = e;
+                }
+            } else if (arg(f, 1) != "keep") {
+                m_selected = e;
+                m_also.clear();
+            } else {
+                m_selected = e;
+            }
+            prune_selection();
             redraw();
             return m_scene.alive(m_selected) ? std::to_string(m_selected.id()) : std::string();
         });
@@ -5143,12 +5699,20 @@ private:
             const float moved = std::fabs(x - m_start_x) + std::fabs(y - m_start_y);
             if (moved <= 4.0f && m_drag_button == 2) {
                 const orchard::Entity hit = pick_entity(x, y);
-                if (m_scene.alive(hit)) m_selected = hit;
+                if (m_scene.alive(hit) && hit != m_selected && std::find(m_also.begin(), m_also.end(), hit) == m_also.end()) {
+                    m_selected = hit;
+                    m_also.clear();
+                }
                 redraw();
                 return "menu	" + (m_scene.alive(hit) ? std::to_string(hit.id()) : std::string());
             }
             if (moved > 4.0f || m_drag_pan || m_tool == "orbit") return std::string("drag");
+            if (arg(f, 2) == "1") {
+                const orchard::Entity hit = pick_entity(x, y);
+                return "pick\t" + (m_scene.alive(hit) ? std::to_string(hit.id()) : std::string()) + "\tadd";
+            }
             m_selected = pick_entity(x, y);
+            m_also.clear();
             redraw();
             return "pick\t" + (m_scene.alive(m_selected) ? std::to_string(m_selected.id()) : std::string());
         });
@@ -5558,6 +6122,7 @@ private:
             for (const std::string& s : m_project->scenes()) all.emplace_back(s, "scene");
             for (const std::string& s : m_project->scripts()) all.emplace_back(s, "script");
             for (const std::string& s : m_project->graphs()) all.emplace_back(s, "graph");
+            for (const std::string& s : m_project->behaviors()) all.emplace_back(s, orchard::graph::is_brain_file(s) ? "graph" : "script");
             for (const std::string& s : m_project->entity_templates()) all.emplace_back(s, "entity");
             for (const std::string& s : m_project->models()) all.emplace_back(s, "model");
             for (const std::string& s : m_project->images()) all.emplace_back(s, "image");
@@ -5704,7 +6269,7 @@ private:
             grove::Node* owner = m_doc.find_by_id("files");
             if (!owner) return std::string();
             const std::string rel = arg(f, 0);
-            const bool graph = fs::path(rel).extension() == ".graph";
+            const bool graph = fs::path(rel).extension() == ".graph" || orchard::graph::is_brain_file(rel);
             const bool scene_file = fs::path(rel).extension() == ".scene" || fs::path(rel).extension() == ".entity";
             std::vector<grove::MenuItem> items;
             if (orchard::is_model_file(rel)) {
@@ -5716,7 +6281,7 @@ private:
             if (graph) items.push_back(grove::menu_item("graph", "Open the graph"));
             else if (!scene_file) items.push_back(grove::menu_item("here", "Edit in Orchard"));
             items.push_back(grove::menu_item("external", "Open in my editor (" + (pref("editor.command", "").empty() ? default_editor_command() : pref("editor.command", "")) + ")"));
-            items.push_back(grove::menu_item("preview", graph ? "Show the Walnut it makes" : "Show it below"));
+            items.push_back(grove::menu_item("preview", orchard::graph::is_brain_file(rel) ? "Show the behavior tree it makes" : graph ? "Show the Walnut it makes" : "Show it below"));
             const bool ok = grove::open_menu(m_doc, *owner, items, std::atof(arg(f, 1).c_str()), std::atof(arg(f, 2).c_str()));
             return ok ? std::string("ok") : std::string();
         });
@@ -5726,13 +6291,14 @@ private:
             const std::string rel = arg(f, 0);
             if (rel.find("..") != std::string::npos) return std::string();
             const std::string text = read_file(m_project->path_of(rel));
-            if (fs::path(rel).extension() != ".graph") return text;
+            const bool brain = orchard::graph::is_brain_file(rel);
+            if (fs::path(rel).extension() != ".graph" && !brain) return text;
             std::string error;
             const std::optional<orchard::graph::Graph> g = orchard::graph::Graph::load(text, &error);
-            if (!g) return "// " + error + "\n";
+            if (!g) return (brain ? "# " : "// ") + error + "\n";
             std::vector<std::string> errors;
-            std::string code = g->to_walnut(&errors);
-            for (const std::string& e : errors) code = "// error: " + e + "\n" + code;
+            std::string code = g->compile(&errors);
+            for (const std::string& e : errors) code = (brain ? "# error: " : "// error: ") + e + "\n" + code;
             return code;
         });
 
@@ -5841,12 +6407,20 @@ private:
             return r;
         });
 
+        native("selection_more", [this](const std::vector<std::string>&) {
+            prune_selection();
+            std::string out;
+            for (orchard::Entity x : m_also) out += (out.empty() ? "" : ",") + std::to_string(x.id());
+            return out;
+        });
+
         native("context_menu", [this](const std::vector<std::string>& f) {
             grove::Node* owner = m_doc.find_by_id(arg(f, 0));
             if (!owner) return std::string();
             const orchard::Entity e = entity(arg(f, 1));
-            if (m_scene.alive(e)) {
+            if (m_scene.alive(e) && e != m_selected && std::find(m_also.begin(), m_also.end(), e) == m_also.end()) {
                 m_selected = e;
+                m_also.clear();
                 redraw();
             }
             m_menu_page.clear();
@@ -5854,7 +6428,7 @@ private:
             m_menu_x = std::atof(arg(f, 2).c_str());
             m_menu_y = std::atof(arg(f, 3).c_str());
             const bool ok = grove::open_menu(m_doc, *owner, menu_items(e), m_menu_x, m_menu_y);
-            return ok ? (m_scene.alive(e) ? std::to_string(e.id()) : std::string("none")) : std::string();
+            return ok ? (m_scene.alive(e) && m_scene.alive(m_selected) ? std::to_string(m_selected.id()) : std::string("none")) : std::string();
         });
 
         native("trace_status", [this](const std::vector<std::string>&) {
@@ -5881,6 +6455,7 @@ private:
     std::optional<orchard::Project> m_project;
     orchard::Scene m_scene;
     orchard::Entity m_selected;
+    std::vector<orchard::Entity> m_also;
     orchard::Viewport m_view;
     orchard::editor::GpuView m_gpu;
     orchard::editor::AxesPreview m_axes_preview;
@@ -5925,6 +6500,7 @@ private:
     std::optional<orchard::Viewport> m_view_before_play;
     bool m_player_ready = false;
     std::vector<std::pair<orchard::Entity, orchard::Transform>> m_smoothed;
+    orchard::editor::SoundPlayer m_sounds;
     std::string m_component_error;
     int m_trace_spp = 1;
     std::string m_menu_page;
@@ -6044,7 +6620,7 @@ int compile_graph(const std::string& path) {
         return 1;
     }
     std::vector<std::string> errors;
-    const std::string code = g->to_walnut(&errors);
+    const std::string code = g->compile(&errors);
     for (const std::string& e : errors) std::cerr << path << ": " << e << "\n";
     std::cout << code;
     return errors.empty() ? 0 : 1;
@@ -6053,13 +6629,13 @@ int compile_graph(const std::string& path) {
 const char* usage =
     "usage: orchard [PROJECT]\n"
     "       orchard --new FOLDER [--2d | --3d] [--name NAME] [--axes \"STYLE [flip-x] [flip-y] [flip-z]\"]\n"
-    "       orchard --graph FILE.graph\n"
+    "       orchard --graph FILE.graph | FILE.brain\n"
     "       orchard --simulate PROJECT [SECONDS]\n"
     "       orchard [--check] [--bundle OUTPUT] [--version]\n\n"
     "  PROJECT          a project folder or its project.orchard to open\n"
     "  --new FOLDER     make a new project (3d unless --2d) and exit\n"
     "  --axes AXES      which way is up in a new 3d project (default y-up; unity, unreal, blender and source work too), plus any of flip-x flip-y flip-z\n"
-    "  --graph FILE     print the Walnut a script graph turns into\n"
+    "  --graph FILE     print the Walnut a script graph turns into, or the behavior tree a brain graph turns into\n"
     "  --simulate       run a project's physics and scripts without a window and print where everything ends up\n"
     "  --check          load the editor window and its script without opening it, then exit\n"
     "  --bundle OUTPUT  write a copy of orchard with the editor window and its compiled script built in\n\n"

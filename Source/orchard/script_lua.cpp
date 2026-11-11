@@ -8,6 +8,7 @@ extern "C" {
 
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace orchard {
 namespace script_detail {
@@ -431,9 +432,9 @@ int o_game_call(lua_State* L, bool entity_result) {
     const orchard_entity e = opt_entity(L, 2);
     const orchard_entity other = opt_entity(L, 3);
     const char* text = luaL_optstring(L, 4, "");
-    double args[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    double args[64] = {};
     int count = 0;
-    for (int i = 5; i <= lua_gettop(L) && count < 8; ++i) args[count++] = luaL_optnumber(L, i, 0.0);
+    for (int i = 5; i <= lua_gettop(L) && count < 64; ++i) args[count++] = luaL_optnumber(L, i, 0.0);
     if (entity_result) {
         if (!ORCHARD_HOST_HAS(&h, game_entity)) return 0;
         push_entity(L, h.game_entity(op, e, other, args, count, text));
@@ -454,6 +455,43 @@ int o_game(lua_State* L) {
 int o_game_entity(lua_State* L) {
     return o_game_call(L, true);
 }
+
+int o_game_text(lua_State* L) {
+    const orchard_host_api& h = host();
+    const int op = static_cast<int>(luaL_checkinteger(L, 1));
+    const orchard_entity e = opt_entity(L, 2);
+    const orchard_entity other = opt_entity(L, 3);
+    const char* text = luaL_optstring(L, 4, "");
+    double args[64] = {};
+    int count = 0;
+    for (int i = 5; i <= lua_gettop(L) && count < 64; ++i) args[count++] = luaL_optnumber(L, i, 0.0);
+    const char* r = ORCHARD_HOST_HAS(&h, game_text) ? h.game_text(op, e, other, args, count, text) : "";
+    lua_pushstring(L, r ? r : "");
+    return 1;
+}
+
+int o_game_values(lua_State* L) {
+    const orchard_host_api& h = host();
+    const int op = static_cast<int>(luaL_checkinteger(L, 1));
+    const orchard_entity e = opt_entity(L, 2);
+    const orchard_entity other = opt_entity(L, 3);
+    const char* text = luaL_optstring(L, 4, "");
+    double args[64] = {};
+    int count = 0;
+    for (int i = 5; i <= lua_gettop(L) && count < 64; ++i) args[count++] = luaL_optnumber(L, i, 0.0);
+    std::vector<double> out(4096);
+    const int n = ORCHARD_HOST_HAS(&h, game_values) ? h.game_values(op, e, other, args, count, text, out.data(), static_cast<int>(out.size())) : 0;
+    lua_createtable(L, n > 0 ? n : 0, 0);
+    for (int i = 0; i < n; ++i) {
+        lua_pushnumber(L, out[static_cast<std::size_t>(i)]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
+const char* const k_lib_prelude =
+#include "script_lua_lib.inc"
+    ;
 
 const char* const k_game_prelude = R"LUA(
 local o = orchard
@@ -545,13 +583,14 @@ void open_orchard(lua_State* L) {
     static const luaL_Reg api[] = {
         {"vec", o_vec}, {"log", o_log}, {"warn", o_warn}, {"time", o_time}, {"dt", o_dt}, {"is_2d", o_is_2d},
         {"key_down", o_key_down}, {"find", o_find}, {"spawn", o_spawn}, {"self", o_self},
-        {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {"instantiate", o_instantiate}, {"particles", o_particles}, {"animation", o_animation}, {"fluid", o_fluid}, {"_game", o_game}, {"_game_entity", o_game_entity}, {nullptr, nullptr}};
+        {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {"instantiate", o_instantiate}, {"particles", o_particles}, {"animation", o_animation}, {"fluid", o_fluid}, {"_game", o_game}, {"_game_entity", o_game_entity}, {"_game_text", o_game_text}, {"_game_values", o_game_values}, {nullptr, nullptr}};
     luaL_newlib(L, api);
     luaL_getmetatable(L, k_entity_meta);
     lua_getfield(L, -1, "methods");
     lua_setfield(L, -3, "_entity_methods");
     lua_pop(L, 1);
     lua_setglobal(L, "orchard");
+    if (luaL_dostring(L, k_lib_prelude) != LUA_OK) lua_pop(L, 1);
     if (luaL_dostring(L, k_game_prelude) != LUA_OK) lua_pop(L, 1);
     lua_pushcfunction(L, o_log);
     lua_setglobal(L, "print");

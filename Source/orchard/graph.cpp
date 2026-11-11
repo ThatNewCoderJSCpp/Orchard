@@ -1,7 +1,11 @@
 #include <orchard/graph.hpp>
 
+#include <orchard/ai/behavior_tree.hpp>
+#include <orchard/ai/expression.hpp>
+
 #include <algorithm>
 #include <cstdlib>
+#include <functional>
 #include <sstream>
 
 namespace orchard {
@@ -17,6 +21,249 @@ PinDef in(const std::string& name, PinKind kind, const std::string& fallback = s
 
 PinDef out(const std::string& name, PinKind kind) {
     return {name, kind, true, std::string()};
+}
+
+
+enum class Shape {
+    root,
+    composite,
+    decorator,
+    leaf,
+    wrapper
+};
+
+enum class Role {
+    pos,
+    flag,
+    param,
+    rest,
+    expr,
+    key,
+    value,
+    head
+};
+
+struct BrainArg {
+    std::string pin;
+    PinKind kind;
+    std::string fallback;
+    Role role;
+};
+
+struct BrainSpec {
+    std::string id;
+    std::string head;
+    std::string title;
+    std::string category;
+    Shape shape;
+    std::vector<BrainArg> args;
+};
+
+BrainArg bnum(const std::string& pin, const std::string& fallback) {
+    return {pin, PinKind::number, fallback, Role::pos};
+}
+
+BrainArg btxt(const std::string& pin, const std::string& fallback) {
+    return {pin, PinKind::text, fallback, Role::pos};
+}
+
+BrainArg bflag(const std::string& pin) {
+    return {pin, PinKind::boolean, "false", Role::flag};
+}
+
+BrainArg bparam(const std::string& pin, PinKind kind, const std::string& fallback) {
+    return {pin, kind, fallback, Role::param};
+}
+
+std::vector<BrainSpec> make_brain_specs() {
+    std::vector<BrainSpec> v;
+    const PinKind T = PinKind::text;
+    auto cond = [&v](const std::string& name, const std::string& title, std::vector<BrainArg> args = {}) {
+        v.push_back({"bt_if_" + name, "? " + name, title, "Conditions", Shape::leaf, std::move(args)});
+    };
+    auto act = [&v](const std::string& name, const std::string& title, const std::string& category, std::vector<BrainArg> args = {}) {
+        v.push_back({"bt_do_" + name, name, title, category, Shape::leaf, std::move(args)});
+    };
+    v.push_back({"bt_root", "", "Brain", "Brain", Shape::root, {}});
+    v.push_back({"bt_selector", "selector", "Selector (first that works)", "Tree", Shape::composite, {}});
+    v.push_back({"bt_sequence", "sequence", "Sequence (all, in order)", "Tree", Shape::composite, {}});
+    v.push_back({"bt_parallel", "parallel", "Parallel (all at once)", "Tree", Shape::composite, {bparam("succeed", T, "all"), bparam("fail", T, "one")}});
+    v.push_back({"bt_random", "random", "Random (pick one)", "Tree", Shape::composite, {}});
+    v.push_back({"bt_utility", "utility", "Utility (best score)", "Tree", Shape::composite, {bparam("stick", PinKind::number, "0.05")}});
+    v.push_back({"bt_weight", "weight", "Weight (for Random)", "Tree", Shape::wrapper, {bparam("weight", PinKind::number, "1")}});
+    v.push_back({"bt_score", "score", "Score (for Utility)", "Tree", Shape::wrapper, {{"score", T, "1", Role::expr}}});
+    v.push_back({"bt_inverter", "inverter", "Invert", "Decorators", Shape::decorator, {}});
+    v.push_back({"bt_succeed", "succeed", "Always Succeed", "Decorators", Shape::decorator, {}});
+    v.push_back({"bt_fail", "fail", "Always Fail", "Decorators", Shape::decorator, {}});
+    v.push_back({"bt_repeat", "repeat", "Repeat", "Decorators", Shape::decorator, {bnum("times", "3")}});
+    v.push_back({"bt_retry", "retry", "Retry", "Decorators", Shape::decorator, {bnum("times", "3")}});
+    v.push_back({"bt_until_fail", "until_fail", "Until It Fails", "Decorators", Shape::decorator, {}});
+    v.push_back({"bt_until_success", "until_success", "Until It Works", "Decorators", Shape::decorator, {}});
+    v.push_back({"bt_cooldown", "cooldown", "Cooldown", "Decorators", Shape::decorator, {bnum("seconds", "2")}});
+    v.push_back({"bt_timeout", "timeout", "Time Limit", "Decorators", Shape::decorator, {bnum("seconds", "5")}});
+    v.push_back({"bt_chance", "chance", "Sometimes", "Decorators", Shape::decorator, {bnum("probability", "0.5")}});
+    v.push_back({"bt_once", "once", "Only Once", "Decorators", Shape::decorator, {}});
+    v.push_back({"bt_if", "if", "Only If", "Decorators", Shape::decorator, {{"expression", T, "health_fraction > 0.5", Role::expr}}});
+    v.push_back({"bt_while", "while", "While", "Decorators", Shape::decorator, {{"expression", T, "distance < 20", Role::expr}}});
+    v.push_back({"bt_expression", "if", "Check Expression", "Conditions", Shape::leaf, {{"expression", T, "health_fraction < 0.3", Role::expr}}});
+    v.push_back({"bt_condition", "?", "Any Condition", "Conditions", Shape::leaf, {{"name", T, "has_target", Role::head}, {"arguments", T, "", Role::rest}}});
+    cond("has_target", "Has Target");
+    cond("can_see_target", "Can See Target");
+    cond("target_in_range", "Target In Range", {bnum("distance", "")});
+    cond("target_in_reach", "Target In Reach");
+    cond("target_closer", "Target Closer Than", {bnum("distance", "5")});
+    cond("target_farther", "Target Farther Than", {bnum("distance", "10")});
+    cond("target_dead", "Target Is Dead");
+    cond("just_spotted", "Just Spotted Someone");
+    cond("heard_noise", "Heard A Noise");
+    cond("suspicious", "Suspicious");
+    cond("alerted", "Alerted");
+    cond("searching", "Searching");
+    cond("team_alert", "Team Alert Is", {btxt("level", "alert")});
+    cond("health_below", "Health Below", {bnum("fraction", "")});
+    cond("ammo_empty", "Out Of Ammo");
+    cond("low_ammo", "Low On Ammo");
+    cond("in_cover", "In Cover");
+    cond("has_cover", "Cover Nearby");
+    cond("at_home", "At Home");
+    cond("has_patrol", "Has A Patrol Route");
+    cond("saw_body", "Saw A Body");
+    cond("has_leader", "Has A Leader");
+    cond("leader_far", "Leader Far Away", {bnum("distance", "6")});
+    cond("leader_near", "Leader Close", {bnum("distance", "6")});
+    cond("is_stuck", "Stuck");
+    cond("path_failed", "Can't Find A Way");
+    cond("can_reach_target", "Can Reach Target");
+    cond("in_danger", "Standing In Danger");
+    cond("threatened", "Threatened", {bnum("radius", "10")});
+    cond("panicked", "Panicked");
+    cond("enemies_near", "Enemies Near", {bnum("count", "2"), bnum("radius", "10")});
+    cond("fear_fire", "Afraid Of Fire");
+    cond("burning", "On Fire");
+    cond("is_moving", "Moving");
+    cond("flying", "Flying");
+    cond("has_squad", "In A Squad");
+    cond("has_token", "Has Attack Turn");
+    cond("grenade_ready", "Grenade Ready");
+    cond("chance", "Random Chance", {bnum("probability", "0.5")});
+    cond("director_backoff", "Director Says Back Off");
+    cond("director_pressure", "Director Says Push");
+    cond("director_unlocked", "Director Unlocked", {btxt("habit", "hiding"), bnum("amount", "3")});
+    cond("director_phase", "Director Phase Is", {btxt("phase", "peak")});
+    v.push_back({"bt_if_blackboard", "? blackboard", "Note Equals", "Notes & Scripts", Shape::leaf, {{"note", T, "mode", Role::key}, {"value", T, "angry", Role::value}}});
+    act("idle", "Idle", "Moving", {bnum("min", "2"), bnum("max", "4")});
+    act("graze", "Graze", "Moving", {bnum("min", "3"), bnum("max", "6")});
+    act("look_around", "Look Around", "Moving", {bnum("seconds", "2")});
+    act("face_target", "Face Target", "Moving");
+    act("face_noise", "Face The Noise", "Moving");
+    act("stop", "Stop", "Moving");
+    act("patrol", "Patrol", "Moving", {bflag("run")});
+    act("wander", "Wander", "Moving", {bnum("radius", "8"), bflag("run")});
+    act("return_home", "Go Home", "Moving", {bflag("run")});
+    act("move_to", "Move To", "Moving", {btxt("to", "Player"), bflag("run"), bparam("reach", PinKind::number, "0.6")});
+    act("chase", "Chase Target", "Moving", {bflag("run")});
+    act("approach", "Approach Target", "Moving");
+    act("go_to_noise", "Go To The Noise", "Moving", {bflag("run")});
+    act("investigate", "Investigate", "Moving", {bnum("look_seconds", "4")});
+    act("search", "Search The Area", "Moving", {bnum("radius", "12"), bnum("seconds", "20")});
+    act("follow_leader", "Follow Leader", "Moving", {bnum("distance", "3"), bflag("run")});
+    act("follow", "Follow", "Moving", {bnum("distance", "3"), bflag("run")});
+    act("keep_distance", "Keep Distance", "Moving", {bnum("near", "4"), bnum("far", "10")});
+    act("flock", "Flock", "Moving");
+    act("flee", "Flee", "Moving", {bnum("distance", "20")});
+    act("retreat", "Retreat", "Moving", {bnum("distance", "20")});
+    act("cower", "Cower", "Moving", {bnum("distance", "8")});
+    act("escape_danger", "Get Out Of Danger", "Moving");
+    act("attack", "Attack", "Fighting");
+    act("shoot", "Shoot", "Fighting");
+    act("melee", "Melee", "Fighting");
+    act("charge", "Charge", "Fighting");
+    act("reload", "Reload", "Fighting");
+    act("take_cover", "Take Cover", "Fighting");
+    act("peek", "Peek From Cover", "Fighting");
+    act("shoot_from_cover", "Shoot From Cover", "Fighting");
+    act("flank", "Flank", "Fighting");
+    act("suppress", "Suppress", "Fighting", {bnum("seconds", "2.5")});
+    act("throw_grenade", "Throw Grenade", "Fighting");
+    act("strafe", "Strafe", "Fighting", {bnum("seconds", "1.5")});
+    act("request_token", "Ask For Attack Turn", "Fighting");
+    act("release_token", "Give Up Attack Turn", "Fighting");
+    act("scream", "Scream", "Alarms", {bnum("loudness", "30")});
+    act("call_help", "Call For Help", "Alarms", {bnum("loudness", "30")});
+    act("raise_alarm", "Raise The Alarm", "Alarms", {bnum("loudness", "40")});
+    act("make_noise", "Make Noise", "Alarms", {bnum("loudness", "15"), btxt("kind", "noise")});
+    act("play_sound", "Play Sound", "Alarms", {btxt("clip", "Sounds/growl.wav"), bnum("volume", "1")});
+    act("effect", "Effect", "Alarms", {btxt("name", "impact"), bnum("scale", "1")});
+    act("say", "Say", "Alarms", {btxt("line", "hey")});
+    act("stalk", "Stalk", "Hunter");
+    act("backstage", "Back Off (out of sight)", "Hunter");
+    act("hunt_hint", "Head For The Player's Area", "Hunter");
+    act("check_hiding_spots", "Check Hiding Spots", "Hunter");
+    act("fly_wander", "Fly Around", "Flying");
+    act("fly_to_target", "Fly To Target", "Flying");
+    act("fly_attack", "Fly And Attack", "Flying");
+    act("plan", "Plan (GOAP)", "Notes & Scripts", {btxt("goal", "")});
+    act("forget", "Forget Plan", "Notes & Scripts");
+    act("event", "Send Event To Script", "Notes & Scripts", {btxt("name", "door_opened")});
+    v.push_back({"bt_ask", "", "Ask My Script To Do", "Notes & Scripts", Shape::leaf, {{"action", T, "open_door", Role::head}, {"arguments", T, "", Role::rest}}});
+    v.push_back({"bt_wait", "wait", "Wait", "Moving", Shape::leaf, {bnum("min", "1"), bnum("max", "")}});
+    v.push_back({"bt_set", "set", "Set Note", "Notes & Scripts", Shape::leaf, {{"note", T, "mode", Role::key}, {"value", T, "angry", Role::value}}});
+    v.push_back({"bt_check", "check", "Check Note", "Notes & Scripts", Shape::leaf, {{"note", T, "mode", Role::key}, {"value", T, "angry", Role::value}}});
+    v.push_back({"bt_log", "log", "Log", "Notes & Scripts", Shape::leaf, {{"message", T, "here", Role::rest}}});
+    v.push_back({"bt_subtree", "subtree", "Run Behavior", "Notes & Scripts", Shape::leaf, {btxt("name", "Behaviors/combat.bt")}});
+    v.push_back({"bt_action", "", "Any Action", "Notes & Scripts", Shape::leaf, {{"name", T, "idle", Role::head}, {"arguments", T, "", Role::rest}}});
+    return v;
+}
+
+const std::vector<BrainSpec>& brain_specs() {
+    static const std::vector<BrainSpec> specs = make_brain_specs();
+    return specs;
+}
+
+const BrainSpec* brain_spec(const std::string& id) {
+    for (const BrainSpec& b : brain_specs())
+        if (b.id == id) return &b;
+    return nullptr;
+}
+
+void add_brain_types(std::vector<NodeType>& t) {
+    for (const BrainSpec& b : brain_specs()) {
+        NodeType n;
+        n.id = b.id;
+        n.title = b.title;
+        n.category = b.category;
+        n.kind = GraphKind::brain;
+        n.event = b.shape == Shape::root;
+        if (b.shape == Shape::root) {
+            n.pins.push_back(out("start", PinKind::exec));
+        } else {
+            n.pins.push_back(in("in", PinKind::exec));
+            for (const BrainArg& a : b.args) n.pins.push_back(in(a.pin, a.kind, a.fallback));
+            if (b.shape == Shape::composite) n.pins.push_back(out("children", PinKind::exec));
+            if (b.shape == Shape::decorator || b.shape == Shape::wrapper) n.pins.push_back(out("child", PinKind::exec));
+        }
+        t.push_back(std::move(n));
+    }
+}
+
+std::string bt_word(std::string s) {
+    std::replace(s.begin(), s.end(), '"', '\'');
+    std::replace(s.begin(), s.end(), '\n', ' ');
+    if (s.find_first_of(" \t#") != std::string::npos) return "\"" + s + "\"";
+    return s;
+}
+
+std::string trimmed(const std::string& s) {
+    const std::size_t a = s.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return std::string();
+    const std::size_t b = s.find_last_not_of(" \t\r\n");
+    return s.substr(a, b - a + 1);
+}
+
+bool is_number_text(const std::string& value) {
+    char* end = nullptr;
+    std::strtod(value.c_str(), &end);
+    return !value.empty() && end && *end == '\0';
 }
 
 std::vector<NodeType> make_types() {
@@ -45,6 +292,46 @@ std::vector<NodeType> make_types() {
     t.push_back({"not", "Not", "Logic", {in("value", B, "false"), out("result", B)}, false});
     t.push_back({"to_text", "To Text", "Text", {in("value", N, "0"), out("text", T)}, false});
     t.push_back({"join", "Join", "Text", {in("a", T, ""), in("b", T, ""), out("text", T)}, false});
+    t.push_back({"random_number", "Random Number", "Random", {in("min", N, "0"), in("max", N, "1"), out("value", N)}, false});
+    t.push_back({"random_whole", "Random Whole Number", "Random", {in("min", N, "1"), in("max", N, "6"), out("value", N)}, false});
+    t.push_back({"random_chance", "Random Chance", "Random", {in("probability", N, "0.5"), out("result", B)}, false});
+    t.push_back({"random_gaussian", "Random Bell Curve", "Random", {in("mean", N, "0"), in("deviation", N, "1"), out("value", N)}, false});
+    t.push_back({"random_pick", "Random Pick", "Random", {in("choices", T, "red, green, blue"), out("text", T)}, false});
+    t.push_back({"noise", "Noise", "Random", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("value", N)}, false});
+    t.push_back({"random_seed", "Set Random Seed", "Random", {in("in", X), in("seed", N, "1"), out("then", X)}, false});
+    t.push_back({"bag_add", "Add To Bag", "Random", {in("in", X), in("bag", T, "loot"), in("item", T, "coin"), in("copies", N, "1"), out("then", X)}, false});
+    t.push_back({"bag_next", "Draw From Bag", "Random", {in("bag", T, "loot"), out("item", T)}, false});
+    t.push_back({"bag_remaining", "Left In Bag", "Random", {in("bag", T, "loot"), out("count", N)}, false});
+    t.push_back({"play_sound", "Play Sound", "Sound", {in("in", X), in("clip", T, "Sounds/click.wav"), in("volume", N, "1"), in("pitch", N, "1"), out("then", X)}, false});
+    t.push_back({"play_sound_here", "Play Sound Here", "Sound", {in("in", X), in("clip", T, "Sounds/hit.wav"), in("volume", N, "1"), in("pitch", N, "1"), in("range", N, "25"), out("then", X)}, false});
+    t.push_back({"play_sound_at", "Play Sound At", "Sound", {in("in", X), in("clip", T, "Sounds/boom.wav"), in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), in("volume", N, "1"), out("then", X)}, false});
+    t.push_back({"loop_sound_here", "Loop Sound Here", "Sound", {in("in", X), in("clip", T, "Sounds/engine.ogg"), in("volume", N, "1"), in("range", N, "25"), out("then", X)}, false});
+    t.push_back({"play_sound_source", "Play My Sound", "Sound", {in("in", X), out("then", X)}, false});
+    t.push_back({"stop_all_sounds", "Stop All Sounds", "Sound", {in("in", X), out("then", X)}, false});
+    t.push_back({"ai_brain", "AI: Set Brain", "AI", {in("in", X), in("brain", T, "guard"), out("then", X)}, false});
+    t.push_back({"ai_team", "AI: Set Team", "AI", {in("in", X), in("team", T, "enemies"), out("then", X)}, false});
+    t.push_back({"ai_move_to", "AI: Move To", "AI", {in("in", X), in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), in("run", B, "false"), out("then", X)}, false});
+    t.push_back({"ai_stop", "AI: Stop Moving", "AI", {in("in", X), out("then", X)}, false});
+    t.push_back({"ai_noise", "AI: Make Noise", "AI", {in("in", X), in("loudness", N, "15"), in("kind", T, "noise"), out("then", X)}, false});
+    t.push_back({"ai_finish", "AI: Finish Action", "AI", {in("in", X), in("success", B, "true"), out("then", X)}, false});
+    t.push_back({"ai_enable", "AI: Turn On/Off", "AI", {in("in", X), in("on", B, "true"), out("then", X)}, false});
+    t.push_back({"ai_state", "AI: State", "AI", {out("state", T)}, false});
+    t.push_back({"ai_action", "AI: Current Action", "AI", {out("action", T)}, false});
+    t.push_back({"ai_pending", "AI: Action For Script", "AI", {out("action", T)}, false});
+    t.push_back({"ai_event", "AI: Next Event", "AI", {out("event", T)}, false});
+    t.push_back({"ai_arrived", "AI: Arrived", "AI", {out("result", B)}, false});
+    t.push_back({"ai_has_target", "AI: Has Target", "AI", {out("result", B)}, false});
+    t.push_back({"ai_can_see", "AI: Can See", "AI", {in("name", T, "Player"), out("result", B)}, false});
+    t.push_back({"ai_suspicion", "AI: Suspicion", "AI", {out("value", N)}, false});
+    t.push_back({"equal_text", "Text Equals", "Logic", {in("a", T, ""), in("b", T, ""), out("result", B)}, false});
+    t.push_back({"and", "And", "Logic", {in("a", B, "true"), in("b", B, "true"), out("result", B)}, false});
+    t.push_back({"or", "Or", "Logic", {in("a", B, "false"), in("b", B, "false"), out("result", B)}, false});
+    t.push_back({"secure_random", "Secure Random Number", "Random", {in("min", N, "0"), in("max", N, "1"), out("value", N)}, false});
+    t.push_back({"secure_whole", "Secure Random Whole Number", "Random", {in("min", N, "1"), in("max", N, "100"), out("value", N)}, false});
+    t.push_back({"secure_text", "Secure Random Text", "Random", {in("length", N, "16"), out("text", T)}, false});
+    t.push_back({"secure_token", "Secure Token", "Random", {in("bytes", N, "32"), out("text", T)}, false});
+    t.push_back({"secure_uuid", "Secure UUID", "Random", {out("text", T)}, false});
+    add_brain_types(t);
     return t;
 }
 
@@ -93,6 +380,10 @@ const char* to_string(PinKind kind) {
     return "exec";
 }
 
+const char* to_string(GraphKind kind) {
+    return kind == GraphKind::brain ? "brain" : "script";
+}
+
 const PinDef* NodeType::pin(const std::string& name, bool output) const {
     for (const PinDef& p : pins) {
         if (p.name == name && p.output == output) return &p;
@@ -105,6 +396,13 @@ const std::vector<NodeType>& node_types() {
     return types;
 }
 
+std::vector<const NodeType*> node_types(GraphKind kind) {
+    std::vector<const NodeType*> out;
+    for (const NodeType& t : node_types())
+        if (t.kind == kind) out.push_back(&t);
+    return out;
+}
+
 const NodeType* find_type(const std::string& id) {
     for (const NodeType& t : node_types()) {
         if (t.id == id) return &t;
@@ -113,7 +411,8 @@ const NodeType* find_type(const std::string& id) {
 }
 
 int Graph::add_node(const std::string& type, float x, float y) {
-    if (!find_type(type)) return 0;
+    const NodeType* t = find_type(type);
+    if (!t || t->kind != m_kind) return 0;
     Node n;
     n.id = m_next++;
     n.type = type;
@@ -169,6 +468,14 @@ bool Graph::connect(int from_node, const std::string& from_pin, int to_node, con
     if (!in_pin) return fail(where(*b) + " has no input '" + to_pin + "'");
     if (out_pin->kind != in_pin->kind) {
         return fail(std::string("can't connect ") + to_string(out_pin->kind) + " to " + to_string(in_pin->kind));
+    }
+    if (m_kind == GraphKind::brain) {
+        for (int up = from_node, guard = 0; up != 0 && guard <= static_cast<int>(m_nodes.size()); up = parent(up), ++guard)
+            if (up == to_node) return fail("that would loop the tree back on itself");
+        if (from_pin != "children") m_links.erase(std::remove_if(m_links.begin(), m_links.end(), [&](const Link& l) { return l.from_node == from_node && l.from_pin == from_pin; }), m_links.end());
+        disconnect(to_node, to_pin);
+        m_links.push_back({from_node, from_pin, to_node, to_pin});
+        return true;
     }
     if (out_pin->kind == PinKind::exec) {
         m_links.erase(std::remove_if(m_links.begin(), m_links.end(), [&](const Link& l) { return l.from_node == from_node && l.from_pin == from_pin; }), m_links.end());
@@ -242,6 +549,30 @@ std::string Graph::expression(int id, const std::string& pin, int depth, std::ve
     if (n->type == "not") return "!(" + arg("value") + ")";
     if (n->type == "to_text") return "(" + arg("value") + ").to_string()";
     if (n->type == "join") return "(" + arg("a") + " + " + arg("b") + ")";
+    if (n->type == "random_number") return "orchard::random_range(" + arg("min") + ", " + arg("max") + ")";
+    if (n->type == "random_whole") return "orchard::random_whole(" + arg("min") + ", " + arg("max") + ")";
+    if (n->type == "random_chance") return "orchard::random_chance(" + arg("probability") + ")";
+    if (n->type == "random_gaussian") return "orchard::random_gaussian(" + arg("mean") + ", " + arg("deviation") + ")";
+    if (n->type == "random_pick") return "orchard::random_pick(" + arg("choices") + ")";
+    if (n->type == "noise") return "orchard::noise(" + arg("x") + ", " + arg("y") + ", " + arg("z") + ", 0.0)";
+    if (n->type == "bag_next") return "orchard::bag_next(" + arg("bag") + ")";
+    if (n->type == "bag_remaining") return "orchard::bag_count(" + arg("bag") + ")";
+    if (n->type == "ai_state") return "orchard::ai_state(entity)";
+    if (n->type == "ai_action") return "orchard::ai_action(entity)";
+    if (n->type == "ai_pending") return "orchard::ai_pending_action(entity)";
+    if (n->type == "ai_event") return "orchard::ai_event(entity)";
+    if (n->type == "ai_arrived") return "orchard::ai_arrived(entity)";
+    if (n->type == "ai_has_target") return "orchard::ai_target(entity).exists()";
+    if (n->type == "ai_can_see") return "orchard::ai_can_see(entity, orchard::find(" + arg("name") + "))";
+    if (n->type == "ai_suspicion") return "orchard::ai_suspicion(entity)";
+    if (n->type == "equal_text") return "(" + arg("a") + " == " + arg("b") + ")";
+    if (n->type == "and") return "(" + arg("a") + " && " + arg("b") + ")";
+    if (n->type == "or") return "(" + arg("a") + " || " + arg("b") + ")";
+    if (n->type == "secure_random") return "orchard::secure_random(" + arg("min") + ", " + arg("max") + ")";
+    if (n->type == "secure_whole") return "orchard::secure_random_integer(" + arg("min") + ", " + arg("max") + ")";
+    if (n->type == "secure_text") return "orchard::secure_random_text(" + arg("length") + ", \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789\")";
+    if (n->type == "secure_token") return "orchard::secure_token(" + arg("bytes") + ")";
+    if (n->type == "secure_uuid") return "orchard::secure_uuid()";
     errors.push_back(where(*n) + " has no value output '" + pin + "'");
     return "0.0";
 }
@@ -269,6 +600,36 @@ void Graph::statements(int id, const std::string& out_pin, int indent, int depth
             code += pad(indent) + "entity.push(" + arg("x") + ", " + arg("y") + ", " + arg("z") + ");\n";
         } else if (n->type == "set_velocity") {
             code += pad(indent) + "entity.set_velocity(" + arg("x") + ", " + arg("y") + ", " + arg("z") + ");\n";
+        } else if (n->type == "random_seed") {
+            code += pad(indent) + "orchard::random_seed(" + arg("seed") + ");\n";
+        } else if (n->type == "bag_add") {
+            code += pad(indent) + "orchard::bag_add(" + arg("bag") + ", " + arg("item") + ", " + arg("copies") + ");\n";
+        } else if (n->type == "play_sound") {
+            code += pad(indent) + "orchard::play_sound(" + arg("clip") + ", " + arg("volume") + ", " + arg("pitch") + ");\n";
+        } else if (n->type == "play_sound_here") {
+            code += pad(indent) + "orchard::play_sound_on(entity, " + arg("clip") + ", " + arg("volume") + ", " + arg("pitch") + ", " + arg("range") + ");\n";
+        } else if (n->type == "play_sound_at") {
+            code += pad(indent) + "orchard::play_sound_at(" + arg("clip") + ", " + arg("x") + ", " + arg("y") + ", " + arg("z") + ", " + arg("volume") + ", 1.0, 25.0);\n";
+        } else if (n->type == "loop_sound_here") {
+            code += pad(indent) + "orchard::loop_sound_on(entity, " + arg("clip") + ", " + arg("volume") + ", " + arg("range") + ");\n";
+        } else if (n->type == "play_sound_source") {
+            code += pad(indent) + "orchard::play_sound_source(entity);\n";
+        } else if (n->type == "stop_all_sounds") {
+            code += pad(indent) + "orchard::stop_all_sounds();\n";
+        } else if (n->type == "ai_brain") {
+            code += pad(indent) + "orchard::ai_set_brain(entity, " + arg("brain") + ");\n";
+        } else if (n->type == "ai_team") {
+            code += pad(indent) + "orchard::ai_set_team(entity, " + arg("team") + ");\n";
+        } else if (n->type == "ai_move_to") {
+            code += pad(indent) + "orchard::ai_move_to(entity, " + arg("x") + ", " + arg("y") + ", " + arg("z") + ", " + arg("run") + ");\n";
+        } else if (n->type == "ai_stop") {
+            code += pad(indent) + "orchard::ai_stop(entity);\n";
+        } else if (n->type == "ai_noise") {
+            code += pad(indent) + "orchard::ai_make_noise_from(entity, " + arg("loudness") + ", " + arg("kind") + ");\n";
+        } else if (n->type == "ai_finish") {
+            code += pad(indent) + "orchard::ai_finish_action(entity, " + arg("success") + ");\n";
+        } else if (n->type == "ai_enable") {
+            code += pad(indent) + "orchard::ai_enable(entity, " + arg("on") + ");\n";
         } else if (n->type == "branch") {
             code += pad(indent) + "if (" + arg("condition") + ") then {\n";
             statements(n->id, "true", indent + 1, depth + 1, code, errors);
@@ -310,7 +671,7 @@ std::string Graph::to_walnut(std::vector<std::string>* errors_out) const {
 
 std::string Graph::save() const {
     std::ostringstream out;
-    out << "orchard-graph 1\n";
+    out << (m_kind == GraphKind::brain ? "orchard-brain 1\n" : "orchard-graph 1\n");
     for (const Node& n : m_nodes) {
         out << "node " << n.id << " " << n.type << " " << n.x << " " << n.y << "\n";
         for (const auto& [pin, value] : n.values) out << "value " << n.id << " " << pin << " " << quoted(value) << "\n";
@@ -327,12 +688,12 @@ std::optional<Graph> Graph::load(const std::string& text, std::string* error) {
         if (error) *error = "line " + std::to_string(line_no) + ": " + msg;
         return std::nullopt;
     };
-    if (!std::getline(in, line) || line != "orchard-graph 1") {
+    if (!std::getline(in, line) || (line != "orchard-graph 1" && line != "orchard-brain 1")) {
         line_no = 1;
         return fail("not an Orchard graph (version 1)");
     }
     line_no = 1;
-    Graph g;
+    Graph g(line == "orchard-brain 1" ? GraphKind::brain : GraphKind::script);
     while (std::getline(in, line)) {
         ++line_no;
         if (line.empty()) continue;
@@ -342,7 +703,7 @@ std::optional<Graph> Graph::load(const std::string& text, std::string* error) {
         if (kind == "node") {
             Node n;
             row >> n.id >> n.type >> n.x >> n.y;
-            if (!row || n.id <= 0 || !find_type(n.type) || g.node(n.id)) return fail("bad node");
+            if (!row || n.id <= 0 || !find_type(n.type) || find_type(n.type)->kind != g.m_kind || g.node(n.id)) return fail("bad node");
             g.m_nodes.push_back(n);
             g.m_next = std::max(g.m_next, n.id + 1);
         } else if (kind == "value") {
@@ -371,6 +732,332 @@ std::optional<Graph> Graph::load(const std::string& text, std::string* error) {
         }
     }
     return g;
+}
+
+std::vector<int> Graph::children(int id) const {
+    std::vector<int> out;
+    for (const Link& l : m_links)
+        if (l.from_node == id && node(l.to_node)) out.push_back(l.to_node);
+    std::stable_sort(out.begin(), out.end(), [this](int a, int b) {
+        const Node* na = node(a);
+        const Node* nb = node(b);
+        if (na->y != nb->y) return na->y < nb->y;
+        return na->x < nb->x;
+    });
+    return out;
+}
+
+int Graph::parent(int id) const {
+    for (const Link& l : m_links)
+        if (l.to_node == id && l.to_pin == "in") return l.from_node;
+    return 0;
+}
+
+void Graph::behavior_lines(int id, int depth, const std::string& extra, std::string& out, std::vector<int>& line_nodes, std::vector<std::string>& errors) const {
+    const Node* n = node(id);
+    if (!n) return;
+    if (depth > max_depth) {
+        errors.push_back(where(*n) + ": the tree loops back on itself");
+        return;
+    }
+    const BrainSpec* spec = brain_spec(n->type);
+    if (!spec || spec->shape == Shape::root) {
+        errors.push_back(where(*n) + " can't go inside a behavior tree");
+        return;
+    }
+    auto value = [&](const BrainArg& a) {
+        const auto it = n->values.find(a.pin);
+        return trimmed(it != n->values.end() ? it->second : a.fallback);
+    };
+    if (spec->shape == Shape::wrapper) {
+        const std::vector<int> kids = children(id);
+        if (kids.empty()) {
+            errors.push_back(where(*n) + ": connect the node it applies to");
+            return;
+        }
+        const BrainArg& a = spec->args.front();
+        const std::string v = value(a);
+        if (a.role == Role::expr) {
+            std::string why;
+            if (!ai::Expression::parse(v, &why)) errors.push_back(where(*n) + ": " + why);
+        } else if (!is_number_text(v)) {
+            errors.push_back(where(*n) + ": '" + v + "' isn't a number for " + a.pin);
+        }
+        behavior_lines(kids.front(), depth, extra + " " + a.pin + "=" + bt_word(v), out, line_nodes, errors);
+        return;
+    }
+    std::string line = std::string(static_cast<std::size_t>(depth) * 2, ' ') + spec->head;
+    bool positional = true;
+    std::string key;
+    for (const BrainArg& a : spec->args) {
+        const std::string v = value(a);
+        switch (a.role) {
+        case Role::head: {
+            if (v.empty() || v.find_first_of(" \t\"") != std::string::npos) {
+                errors.push_back(where(*n) + ": " + a.pin + " must be one word");
+                break;
+            }
+            line += (spec->head.empty() ? "" : " ") + v;
+            break;
+        }
+        case Role::pos:
+            if (v.empty()) {
+                positional = false;
+                break;
+            }
+            if (!positional) break;
+            if (a.kind == PinKind::number && !is_number_text(v)) errors.push_back(where(*n) + ": '" + v + "' isn't a number for " + a.pin);
+            line += " " + bt_word(v);
+            break;
+        case Role::flag:
+            if (v == "true") line += " " + a.pin;
+            break;
+        case Role::param:
+            if (v.empty()) break;
+            if (a.kind == PinKind::number && !is_number_text(v)) errors.push_back(where(*n) + ": '" + v + "' isn't a number for " + a.pin);
+            line += " " + a.pin + "=" + bt_word(v);
+            break;
+        case Role::rest:
+            if (!v.empty()) line += " " + v;
+            break;
+        case Role::expr: {
+            std::string why;
+            if (v.empty()) errors.push_back(where(*n) + ": write an expression in " + a.pin);
+            else if (!ai::Expression::parse(v, &why)) errors.push_back(where(*n) + ": " + why);
+            line += " " + v;
+            break;
+        }
+        case Role::key:
+            key = v;
+            if (key.empty() || key.find_first_of(" \t\"=") != std::string::npos) errors.push_back(where(*n) + ": " + a.pin + " must be one word");
+            break;
+        case Role::value:
+            line += " " + key + (v.empty() ? std::string() : "=" + bt_word(v));
+            break;
+        }
+    }
+    out += line + extra + "\n";
+    line_nodes.push_back(id);
+    if (spec->shape == Shape::composite || spec->shape == Shape::decorator) {
+        const std::vector<int> kids = children(id);
+        if (kids.empty()) errors.push_back(where(*n) + (spec->shape == Shape::composite ? ": connect what it chooses between" : ": connect the node it applies to"));
+        for (int k : kids) behavior_lines(k, depth + 1, std::string(), out, line_nodes, errors);
+    }
+}
+
+std::string Graph::to_behavior(std::vector<std::string>* errors_out) const {
+    std::vector<std::string> errors;
+    std::string text;
+    std::vector<int> line_nodes;
+    int root = 0;
+    for (const Node& n : m_nodes) {
+        if (n.type != "bt_root") continue;
+        if (root) errors.push_back(where(n) + ": a brain graph can only have one Brain node");
+        else root = n.id;
+    }
+    if (!root) {
+        errors.push_back("add a Brain node and connect the first thing to do to it");
+    } else {
+        const std::vector<int> kids = children(root);
+        if (kids.empty()) errors.push_back(where(*node(root)) + ": connect the first thing to do to it");
+        else behavior_lines(kids.front(), 0, std::string(), text, line_nodes, errors);
+    }
+    if (errors.empty()) {
+        std::string why;
+        if (!ai::BehaviorTree::parse(text, &why)) {
+            int line = 0;
+            const std::size_t at = why.find("line ");
+            if (at != std::string::npos) line = std::atoi(why.c_str() + at + 5);
+            if (line >= 1 && line <= static_cast<int>(line_nodes.size())) errors.push_back(where(*node(line_nodes[static_cast<std::size_t>(line - 1)])) + ": " + why);
+            else errors.push_back(why);
+        }
+    }
+    if (errors_out) *errors_out = errors;
+    return text;
+}
+
+std::string Graph::compile(std::vector<std::string>* errors) const {
+    return m_kind == GraphKind::brain ? to_behavior(errors) : to_walnut(errors);
+}
+
+std::optional<Graph> Graph::from_behavior(const std::string& text, std::string* error) {
+    const std::optional<ai::BehaviorTree> tree = ai::BehaviorTree::parse(text, error);
+    if (!tree) return std::nullopt;
+    Graph g(GraphKind::brain);
+    float cursor = 0.0f;
+    auto height = [](const std::string& type) {
+        const NodeType* t = find_type(type);
+        std::size_t ins = 0, outs = 0;
+        for (const PinDef& p : t->pins) (p.output ? outs : ins) += 1;
+        return 26.0f + static_cast<float>(std::max(ins, outs)) * 22.0f + 8.0f;
+    };
+    auto join = [](const std::vector<std::string>& args, const std::map<std::string, std::string>& params) {
+        std::string out;
+        for (const std::string& a : args) out += (out.empty() ? "" : " ") + bt_word(a);
+        for (const auto& [k, v] : params) out += (out.empty() ? "" : " ") + k + "=" + bt_word(v);
+        return out;
+    };
+    auto fill = [](const BrainSpec& spec, const ai::BtNode& n, std::map<std::string, std::string>& values, std::map<std::string, std::string> params) {
+        std::vector<std::string> args = n.args;
+        for (const BrainArg& a : spec.args) {
+            if (a.role != Role::flag) continue;
+            const auto it = std::find(args.begin(), args.end(), a.pin);
+            if (it != args.end()) {
+                values[a.pin] = "true";
+                args.erase(it);
+            } else if (params.count(a.pin)) {
+                values[a.pin] = params[a.pin] == "1" || params[a.pin] == "true" ? "true" : "false";
+                params.erase(a.pin);
+            }
+        }
+        std::size_t next = 0;
+        bool keyed = false;
+        for (const BrainArg& a : spec.args) {
+            if (a.role == Role::pos) {
+                if (next < args.size()) values[a.pin] = args[next++];
+                else values[a.pin] = std::string();
+            } else if (a.role == Role::param && params.count(a.pin)) {
+                values[a.pin] = params[a.pin];
+                params.erase(a.pin);
+            } else if (a.role == Role::key) {
+                if (params.size() == 1 && args.size() == next) {
+                    values[a.pin] = params.begin()->first;
+                    keyed = true;
+                } else if (params.empty() && args.size() == next + 1) {
+                    values[a.pin] = args[next++];
+                } else {
+                    return false;
+                }
+            } else if (a.role == Role::value) {
+                if (keyed) {
+                    values[a.pin] = params.begin()->second;
+                    params.clear();
+                } else {
+                    values[a.pin] = std::string();
+                }
+            }
+        }
+        return next == args.size() && params.empty();
+    };
+    std::function<int(const ai::BtNode&, int)> place = [&](const ai::BtNode& n, int column) -> int {
+        std::map<std::string, std::string> params = n.params;
+        std::vector<std::pair<std::string, std::string>> wraps;
+        for (const char* w : {"weight", "score"}) {
+            const auto it = params.find(w);
+            if (it != params.end()) {
+                wraps.emplace_back(w, it->second);
+                params.erase(it);
+            }
+        }
+        std::string type;
+        std::map<std::string, std::string> values;
+        auto first = [&](const std::string& key, const std::string& fallback) { return n.arg(0, n.param(key, fallback)); };
+        const std::string& k = n.kind;
+        if (ai::BehaviorTree::is_composite(k)) {
+            type = "bt_" + k;
+            const BrainSpec* spec = brain_spec(type);
+            for (const BrainArg& a : spec->args)
+                if (params.count(a.pin)) values[a.pin] = params[a.pin];
+        } else if (k == "inverter" || k == "not") {
+            type = "bt_inverter";
+        } else if (k == "repeat" || k == "retry") {
+            type = "bt_" + k;
+            values["times"] = first("count", "0");
+        } else if (k == "cooldown" || k == "timeout") {
+            type = "bt_" + k;
+            values["seconds"] = first("time", k == "cooldown" ? "1" : "5");
+        } else if (k == "chance" && !n.children.empty()) {
+            type = "bt_chance";
+            values["probability"] = first("p", "0.5");
+        } else if (k == "while" || (k == "if" && !n.children.empty())) {
+            type = "bt_" + k;
+            values["expression"] = n.expression ? n.expression->text() : std::string();
+        } else if (k == "if") {
+            type = "bt_expression";
+            values["expression"] = n.expression ? n.expression->text() : std::string();
+        } else if (ai::BehaviorTree::is_decorator(k)) {
+            type = "bt_" + k;
+        } else if (k == "wait") {
+            type = "bt_wait";
+            values["min"] = first("time", "1");
+            values["max"] = n.arg(1);
+        } else if (k == "log") {
+            type = "bt_log";
+            values["message"] = join(n.args, {});
+        } else if (k == "subtree") {
+            type = "bt_subtree";
+            values["name"] = first("name", "");
+        } else if (k == "set" || k == "check") {
+            type = "bt_" + k;
+            if (!fill(*brain_spec(type), n, values, params)) {
+                type = "bt_action";
+                values = {{"name", k}, {"arguments", join(n.args, params)}};
+            }
+        } else {
+            const bool condition = k == "condition";
+            const BrainSpec* spec = brain_spec((condition ? "bt_if_" : "bt_do_") + n.name);
+            if (spec && fill(*spec, n, values, params)) {
+                type = spec->id;
+            } else {
+                values.clear();
+                type = condition ? "bt_condition" : "bt_action";
+                values["name"] = n.name;
+                values["arguments"] = join(n.args, params);
+            }
+        }
+        if (!brain_spec(type)) {
+            type = "bt_action";
+            values = {{"name", k}, {"arguments", join(n.args, params)}};
+        }
+        const float top = cursor;
+        std::vector<int> wrap_ids;
+        int col = column;
+        for (const auto& [w, v] : wraps) {
+            const int id = g.add_node(w == "weight" ? "bt_weight" : "bt_score", static_cast<float>(col) * 300.0f, top);
+            g.node(id)->values[w] = v;
+            wrap_ids.push_back(id);
+            ++col;
+        }
+        const int id = g.add_node(type, static_cast<float>(col) * 300.0f, top);
+        for (const auto& [pin, v] : values) g.node(id)->values[pin] = v;
+        float bottom = top + height(type);
+        for (int w : wrap_ids) bottom = std::max(bottom, top + height(g.node(w)->type));
+        if (n.children.empty()) {
+            cursor = bottom + 18.0f;
+        } else {
+            for (const ai::BtNode& c : n.children) {
+                const int child = place(c, col + 1);
+                g.connect(id, ai::BehaviorTree::is_composite(k) ? "children" : "child", child, "in");
+            }
+            cursor = std::max(cursor, bottom + 18.0f);
+        }
+        for (std::size_t i = wrap_ids.size(); i-- > 0;) g.connect(wrap_ids[i], "child", i + 1 < wrap_ids.size() ? wrap_ids[i + 1] : id, "in");
+        return wrap_ids.empty() ? id : wrap_ids.front();
+    };
+    const int root = g.add_node("bt_root", -300.0f, 0.0f);
+    const int first = place(tree->root(), 0);
+    g.connect(root, "start", first, "in");
+    return g;
+}
+
+bool is_brain_file(const std::string& path) {
+    return path.size() > 6 && path.compare(path.size() - 6, 6, ".brain") == 0;
+}
+
+std::optional<std::string> brain_file_behavior(const std::string& text, std::string* error) {
+    const std::optional<Graph> g = Graph::load(text, error);
+    if (!g) return std::nullopt;
+    if (!g->is_brain()) {
+        if (error) *error = "this is a script graph, not a brain graph";
+        return std::nullopt;
+    }
+    std::vector<std::string> errors;
+    std::string out = g->to_behavior(&errors);
+    if (!errors.empty()) {
+        if (error) *error = errors.front();
+        return std::nullopt;
+    }
+    return out;
 }
 
 } // namespace graph

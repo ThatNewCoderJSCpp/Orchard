@@ -1,5 +1,9 @@
 #include <orchard/orchard.hpp>
 #include <orchard/scripting.hpp>
+#include <orchard/ai/behavior_tree.hpp>
+#include <orchard/ai/search.hpp>
+#include <orchard/random.hpp>
+#include <orchard/solid.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -7,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -245,6 +250,59 @@ void test_script_runtime() {
         greeted = greeted || l == "Hello from Spinner";
     }
     check(started && greeted, "scripts can log");
+    {
+        orchard::graph::Graph g;
+        const int start = g.add_node("on_start");
+        const int tick = g.add_node("on_tick");
+        const int seed = g.add_node("random_seed");
+        const int add = g.add_node("bag_add");
+        const int brain = g.add_node("ai_brain");
+        const int sound = g.add_node("play_sound_here");
+        const int noise = g.add_node("ai_noise");
+        const int branch = g.add_node("branch");
+        const int chance = g.add_node("random_chance");
+        const int move = g.add_node("ai_move_to");
+        const int rnd = g.add_node("random_number");
+        const int logn = g.add_node("log");
+        const int draw = g.add_node("bag_next");
+        const int stop = g.add_node("stop_all_sounds");
+        const int see = g.add_node("ai_can_see");
+        const int both = g.add_node("and");
+        g.connect(start, "then", seed, "in");
+        g.connect(seed, "then", add, "in");
+        g.connect(add, "then", brain, "in");
+        g.connect(brain, "then", sound, "in");
+        g.connect(tick, "then", branch, "in");
+        g.connect(chance, "result", both, "a");
+        g.connect(see, "result", both, "b");
+        g.connect(both, "result", branch, "condition");
+        g.connect(branch, "true", move, "in");
+        g.connect(rnd, "value", move, "x");
+        g.connect(move, "then", noise, "in");
+        g.connect(branch, "false", logn, "in");
+        g.connect(draw, "item", logn, "message");
+        g.connect(logn, "then", stop, "in");
+        const int log2 = g.add_node("log");
+        const int place = g.add_node("set_position");
+        const int j1 = g.add_node("join");
+        const int j2 = g.add_node("join");
+        const int as_text = g.add_node("to_text");
+        g.connect(stop, "then", log2, "in");
+        g.connect(log2, "then", place, "in");
+        g.connect(g.add_node("secure_uuid"), "text", j1, "a");
+        g.connect(g.add_node("secure_token"), "text", j1, "b");
+        g.connect(j1, "text", j2, "a");
+        g.connect(g.add_node("secure_text"), "text", j2, "b");
+        g.connect(g.add_node("secure_whole"), "value", as_text, "value");
+        g.connect(j2, "text", log2, "message");
+        g.connect(g.add_node("secure_random"), "value", place, "x");
+        std::vector<std::string> errors;
+        const std::string code = g.to_walnut(&errors);
+        check(errors.empty(), "a graph with random, bag, sound and AI nodes makes Walnut");
+        std::ofstream(project->path_of("Graphs/lib.graph")) << g.save();
+        const orchard::ScriptBuildResult built = runtime.build(*project, "Graphs/lib.graph");
+        check(built.ok, "the random, bag, sound and AI graph builds: " + built.log + "\n" + code);
+    }
     const orchard::ScriptBuildResult cached = runtime.build(*project, "Scripts/mover.wal");
     check(cached.ok && cached.cached, "unchanged scripts come from the cache");
     {
@@ -953,7 +1011,7 @@ void test_graph_view() {
     const std::vector<orchard::editor::GraphCategory> cats = orchard::editor::GraphView::catalog();
     std::size_t total = 0;
     for (const auto& cat : cats) total += cat.types.size();
-    check(!cats.empty() && cats.front().name == "Events" && total == orchard::graph::node_types().size(), "catalog groups every node type");
+    check(!cats.empty() && cats.front().name == "Events" && total == orchard::graph::node_types(orchard::graph::GraphKind::script).size(), "catalog groups every script node type");
 
     const std::string saved = v.save_text();
     orchard::editor::GraphView w;
@@ -1512,7 +1570,401 @@ void test_character_looks() {
     check(orchard::character_styles().size() == 3, "there are three character looks");
 }
 
+#include "../Source/orchard/script_detail.hpp"
+#include <orchard/script/orchard_api.h>
+#include <set>
+
+namespace {
+
+void test_script_library() {
+    const fs::path dir = fs::temp_directory_path() / "orchard-test-library";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    std::string error;
+    std::optional<orchard::Project> project = orchard::Project::create(dir.string(), "Library", orchard::Dimension::three_d, &error);
+    check(project.has_value(), "library test project: " + error);
+    if (!project) return;
+    orchard::Scene scene(orchard::Dimension::three_d);
+    const orchard::Entity speaker = scene.create("Speaker");
+    orchard::SoundSource& src = scene.add_sound(speaker);
+    src.clip = "Sounds/hum.ogg";
+    src.loop = true;
+    orchard::ScriptRuntime runtime;
+    check(runtime.start(*project, scene), "a runtime with no scripts starts");
+    const orchard_host_api& h = orchard::script_detail::host_table();
+    check(ORCHARD_HOST_HAS(&h, game_text) && ORCHARD_HOST_HAS(&h, game_values), "the host table has text and list results");
+    auto game = [&](int op, std::vector<double> a, const std::string& t, orchard_entity e = 0) { return h.game(op, e, 0, a.data(), static_cast<int>(a.size()), t.c_str()); };
+    auto text = [&](int op, std::vector<double> a, const std::string& t, orchard_entity e = 0) { return std::string(h.game_text(op, e, 0, a.data(), static_cast<int>(a.size()), t.c_str())); };
+    auto values = [&](int op, std::vector<double> a, const std::string& t) {
+        std::vector<double> out(512);
+        const int n = h.game_values(op, 0, 0, a.data(), static_cast<int>(a.size()), t.c_str(), out.data(), static_cast<int>(out.size()));
+        out.resize(static_cast<std::size_t>(std::max(0, n)));
+        return out;
+    };
+    const std::string sep(1, static_cast<char>(31));
+    game(ORCHARD_GAME_RANDOM_SEED, {42}, "");
+    const double r1 = game(ORCHARD_GAME_RANDOM_RANGE, {0, 100}, "");
+    game(ORCHARD_GAME_RANDOM_SEED, {42}, "");
+    const double r2 = game(ORCHARD_GAME_RANDOM_RANGE, {0, 100}, "");
+    check(r1 == r2 && r1 >= 0.0 && r1 <= 100.0, "seeding the random numbers makes them repeat");
+    const double die = game(ORCHARD_GAME_RANDOM_INTEGER, {1, 6}, "");
+    check(die >= 1.0 && die <= 6.0 && std::floor(die) == die, "random whole numbers stay in range");
+    const std::string pick = text(ORCHARD_GAME_RANDOM_PICK, {}, "red, green, blue");
+    check(pick == "red" || pick == "green" || pick == "blue", "random pick chooses one of the choices (" + pick + ")");
+    game(ORCHARD_GAME_BAG_ADD, {2}, "loot" + sep + "sword");
+    game(ORCHARD_GAME_BAG_ADD, {1}, "loot" + sep + "shield");
+    std::multiset<std::string> drawn;
+    for (int i = 0; i < 3; ++i) drawn.insert(text(ORCHARD_GAME_BAG_NEXT, {}, "loot"));
+    check(drawn.count("sword") == 2 && drawn.count("shield") == 1, "a shuffle bag hands out everything once before refilling");
+    check(game(ORCHARD_GAME_BAG_REMAINING, {}, "loot") == 0.0 && game(ORCHARD_GAME_BAG_SIZE, {}, "loot") == 3.0, "and counts what's left");
+    const std::vector<double> sphere = values(ORCHARD_GAME_RANDOM_IN_SPHERE, {2}, "");
+    check(sphere.size() == 3 && std::sqrt(sphere[0] * sphere[0] + sphere[1] * sphere[1] + sphere[2] * sphere[2]) <= 2.0001, "random points land inside a sphere");
+    const std::vector<orchard::SoundCommand> autoplay = runtime.take_sound_commands();
+    check(autoplay.size() == 1 && autoplay[0].clip == "Sounds/hum.ogg" && autoplay[0].loop && autoplay[0].follow == speaker, "a sound component starts playing when Play starts");
+    const double id = game(ORCHARD_GAME_SOUND_PLAY_AT, {1, 2, 3, 0.5}, "Sounds/boom.wav");
+    const std::vector<orchard::SoundCommand> played = runtime.take_sound_commands();
+    check(id > 0 && played.size() == 1 && played[0].positional && played[0].at.y == 2.0f && played[0].volume == 0.5f, "play_sound_at queues a sound at a point");
+    check(game(ORCHARD_GAME_SOUND_PLAYING, {id}, "") == 1.0, "and says it's playing");
+    runtime.sound_finished(static_cast<int>(id));
+    check(game(ORCHARD_GAME_SOUND_PLAYING, {id}, "") == 0.0, "until it finishes");
+    const double game_id = game(ORCHARD_GAME_CHESS_NEW, {}, "");
+    check(game(ORCHARD_GAME_CHESS_MOVE, {game_id}, "e4") == 1.0 && game(ORCHARD_GAME_CHESS_MOVE, {game_id}, "e2e4") == 0.0, "chess moves are checked");
+    check(text(ORCHARD_GAME_CHESS_FEN, {game_id}, "").rfind("rnbqkbnr/pppppppp/8/8/4P3", 0) == 0, "and show up in the position");
+    const std::string reply = text(ORCHARD_GAME_CHESS_BEST, {game_id, 2}, "");
+    check(reply.size() >= 4 && game(ORCHARD_GAME_CHESS_IS_LEGAL, {game_id}, reply) == 1.0, "the chess AI answers with a legal move (" + reply + ")");
+    game(ORCHARD_GAME_GOAP_ACTION, {1}, "p" + sep + "open_door" + sep + "has_key" + sep + "door_open");
+    game(ORCHARD_GAME_GOAP_ACTION, {1}, "p" + sep + "get_key" + sep + "" + sep + "has_key");
+    check(text(ORCHARD_GAME_GOAP_PLAN, {}, "p" + sep + "" + sep + "door_open") == "get_key,open_door", "GOAP plans from a script");
+    game(ORCHARD_GAME_VOXEL_FILL, {-5, -1, -5, 10, -1, 5}, "solid");
+    const std::vector<double> path = values(ORCHARD_GAME_VOXEL_PATH, {0, 0, 0, 6, 0, 0}, "");
+    check(path.size() >= 21 && path[path.size() - 3] == 6.0, "voxel paths come back as points");
+    check(game(ORCHARD_GAME_NN_CREATE, {}, "xor" + sep + "2,6,1") == 1.0, "a neural net is made from a script");
+    double loss = 1.0;
+    for (int i = 0; i < 4000; ++i) {
+        const double a = i % 2, b = (i / 2) % 2;
+        loss = game(ORCHARD_GAME_NN_TRAIN, {0.5, a, b, a != b ? 1.0 : 0.0}, "xor");
+    }
+    const std::vector<double> yes = values(ORCHARD_GAME_NN_RUN, {1, 0}, "xor");
+    const std::vector<double> no = values(ORCHARD_GAME_NN_RUN, {1, 1}, "xor");
+    check(yes.size() == 1 && no.size() == 1 && yes[0] > 0.7 && no[0] < 0.3, "and learns XOR (" + std::to_string(yes.empty() ? 0.0 : yes[0]) + ", " + std::to_string(no.empty() ? 0.0 : no[0]) + ", loss " + std::to_string(loss) + ")");
+    game(ORCHARD_GAME_Q_SETTINGS, {0.0}, "q");
+    for (int i = 0; i < 200; ++i) {
+        game(ORCHARD_GAME_Q_LEARN, {0, 0.0, 1}, "q" + sep + "start" + sep + "end");
+        game(ORCHARD_GAME_Q_LEARN, {1, 1.0, 1}, "q" + sep + "start" + sep + "end");
+    }
+    check(game(ORCHARD_GAME_Q_BEST, {}, "q" + sep + "start") == 1.0, "Q-learning picks the rewarded action");
+    game(ORCHARD_GAME_MARKOV_TRAIN, {1, 0}, "m" + sep + "the cat sat on the mat\nthe dog sat on the log");
+    const std::string said = text(ORCHARD_GAME_MARKOV_GENERATE, {10, 0}, "m");
+    check(said.rfind("the ", 0) == 0, "a Markov chain makes sentences (" + said + ")");
+    check(text(ORCHARD_GAME_AI_BRAIN_BEHAVIOR, {}, "zombie").find("chase") != std::string::npos, "scripts can read a brain's behavior tree");
+    runtime.stop();
+    fs::remove_all(dir, ec);
+}
+
+void test_ai_presets() {
+    for (const std::string& b : orchard::Agent::brains()) {
+        check(orchard::Agent::preset(b).has_value(), "brain " + b + " has settings");
+        std::string why;
+        const std::string& text = orchard::ai::brain_behavior(b);
+        check(!text.empty() && orchard::ai::BehaviorTree::parse(text, &why).has_value(), "brain " + b + " has a behavior tree that parses: " + why);
+    }
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity e = s.create("Guard");
+    orchard::Agent& a = s.add_agent(e);
+    a = *orchard::Agent::preset("soldier");
+    a.squad = "alpha";
+    a.patrol = "Route";
+    a.walk_speed = 1.5f;
+    const orchard::Entity sp = s.create("Speaker");
+    orchard::SoundSource& snd = s.add_sound(sp);
+    snd.clip = "Sounds/a b.wav";
+    snd.range = 40.0f;
+    snd.ai_hears = true;
+    std::string error;
+    const std::optional<orchard::Scene> back = orchard::Scene::load(s.save(), &error);
+    const orchard::Agent* ba = back ? back->agent(back->find("Guard")) : nullptr;
+    check(ba && ba->brain == "soldier" && ba->squad == "alpha" && ba->patrol == "Route" && ba->walk_speed == 1.5f && ba->ranged, "AI agents save and load: " + error);
+    const orchard::SoundSource* bs = back ? back->sound(back->find("Speaker")) : nullptr;
+    check(bs && bs->clip == "Sounds/a b.wav" && bs->range == 40.0f && bs->ai_hears, "sound sources save and load");
+    orchard::ai::BtNode dummy;
+    std::string why;
+    check(!orchard::ai::BehaviorTree::parse("selector\n  repeat\n", &why).has_value(), "a decorator without a child is refused (" + why + ")");
+    const auto tree = orchard::ai::BehaviorTree::parse("utility\n  attack score=\"health() * 2\"\n  flee score=0.5\n", &why);
+    check(tree && tree->root().children.size() == 2, "utility selectors parse scores: " + why);
+    check(orchard::ai::evaluate_expression("clamp(3 * 2 - 1, 0, 4) + (2 > 1 && !false)", {}) == 5.0, "AI expressions evaluate");
+}
+
+void test_brain_graphs() {
+    using orchard::graph::Graph;
+    using orchard::graph::GraphKind;
+    for (const std::string& b : orchard::Agent::brains()) {
+        const std::string& text = orchard::ai::brain_behavior(b);
+        if (text.empty()) continue;
+        std::string why;
+        const std::optional<Graph> g = Graph::from_behavior(text, &why);
+        check(g.has_value() && g->is_brain(), "brain " + b + " turns into a graph: " + why);
+        if (!g) continue;
+        std::vector<std::string> errors;
+        const std::string back = g->to_behavior(&errors);
+        check(errors.empty(), "brain " + b + "'s graph compiles: " + (errors.empty() ? std::string() : errors.front()));
+        const auto a = orchard::ai::BehaviorTree::parse(text);
+        const auto c = orchard::ai::BehaviorTree::parse(back);
+        check(a && c && a->to_text() == c->to_text(), "brain " + b + " survives the trip through a graph");
+        const std::optional<Graph> loaded = Graph::load(g->save(), &why);
+        check(loaded && loaded->is_brain() && loaded->to_behavior() == back, "brain " + b + "'s graph saves and loads: " + why);
+    }
+    Graph g(GraphKind::brain);
+    const int root = g.add_node("bt_root", 0, 0);
+    const int sel = g.add_node("bt_selector", 300, 0);
+    const int seq = g.add_node("bt_sequence", 600, 0);
+    const int see = g.add_node("bt_if_can_see_target", 900, 0);
+    const int shoot = g.add_node("bt_do_shoot", 900, 100);
+    const int score = g.add_node("bt_weight", 600, 300);
+    const int wander = g.add_node("bt_do_wander", 900, 300);
+    check(g.add_node("log", 0, 0) == 0 && Graph().add_node("bt_root", 0, 0) == 0, "script nodes and brain nodes stay in their own kind of graph");
+    std::string error;
+    check(g.connect(root, "start", sel, "in") && g.connect(sel, "children", seq, "in") && g.connect(sel, "children", score, "in"), "a selector takes several children");
+    check(g.connect(seq, "children", shoot, "in") && g.connect(seq, "children", see, "in") && g.connect(score, "child", wander, "in"), "brain links connect");
+    check(!g.connect(wander, "x", sel, "in", &error), "wires need real pins");
+    const int loop = g.add_node("bt_inverter", 1200, 0);
+    check(g.connect(shoot, "x", loop, "in") == false, "leaves have no children");
+    check(g.connect(seq, "children", loop, "in") && !g.connect(loop, "child", sel, "in", &error), "a wire can't loop the tree back on itself (" + error + ")");
+    g.remove_node(loop);
+    g.set_value(wander, "radius", "6");
+    g.set_value(wander, "run", "true");
+    g.set_value(score, "weight", "3");
+    std::vector<std::string> errors;
+    const std::string text = g.to_behavior(&errors);
+    check(errors.empty() && text == "selector\n  sequence\n    ? can_see_target\n    shoot\n  wander 6 run weight=3\n", "a brain graph makes the behavior tree, children ordered top to bottom: " + text + (errors.empty() ? "" : errors.front()));
+    const int other = g.add_node("bt_sequence", 300, 500);
+    check(g.connect(other, "children", shoot, "in") && g.parent(shoot) == other, "connecting a node to a new parent moves it");
+    check(g.to_behavior(&errors).find("shoot") == std::string::npos, "a moved node leaves its old parent");
+    const int empty_sel = g.add_node("bt_selector", 0, 900);
+    g.connect(seq, "children", empty_sel, "in");
+    g.to_behavior(&errors);
+    bool named = false;
+    for (const std::string& e : errors) named = named || e.find("(node " + std::to_string(empty_sel) + ")") != std::string::npos;
+    check(named, "problems name the node they're on");
+    Graph expr(GraphKind::brain);
+    const int r2 = expr.add_node("bt_root", 0, 0);
+    const int cond = expr.add_node("bt_if", 300, 0);
+    const int act = expr.add_node("bt_action", 600, 0);
+    expr.connect(r2, "start", cond, "in");
+    expr.connect(cond, "child", act, "in");
+    expr.set_value(cond, "expression", "health_fraction < ");
+    expr.to_behavior(&errors);
+    check(!errors.empty(), "a broken expression is caught in the graph");
+    expr.set_value(cond, "expression", "health_fraction < 0.5 && distance > 3");
+    expr.set_value(act, "name", "custom_thing");
+    expr.set_value(act, "arguments", "1 2 speed=3");
+    check(expr.to_behavior(&errors) == "if health_fraction < 0.5 && distance > 3\n  custom_thing 1 2 speed=3\n" && errors.empty(), "Only If and Any Action write what they hold");
+    std::string why;
+    const auto made = orchard::graph::brain_file_behavior(expr.save(), &why);
+    check(made && *made == "if health_fraction < 0.5 && distance > 3\n  custom_thing 1 2 speed=3\n", "a .brain file turns into its behavior tree: " + why);
+    check(orchard::graph::is_brain_file("Behaviors/x.brain") && !orchard::graph::is_brain_file("Graphs/x.graph"), "brain files are told apart by name");
+    orchard::editor::GraphView v;
+    v.load(g);
+    bool script_nodes = false, brain_nodes = false;
+    for (const auto& cat : orchard::editor::GraphView::catalog(GraphKind::brain))
+        for (const auto& t : cat.types) script_nodes = script_nodes || t.id == "log";
+    for (const auto& cat : orchard::editor::GraphView::catalog())
+        for (const auto& t : cat.types) brain_nodes = brain_nodes || t.id.rfind("bt_", 0) == 0;
+    check(!script_nodes && !brain_nodes && v.is_brain(), "the node menu only shows nodes for the kind of graph that's open");
+    const auto set = Graph::from_behavior("sequence\n  set mode=angry\n  check seen\n  ? blackboard mode=angry\n  wait 1 3\n  move_to Player run reach=2\n  wander run\n");
+    check(set && set->to_behavior() == "sequence\n  set mode=angry\n  check seen\n  ? blackboard mode=angry\n  wait 1 3\n  move_to Player run reach=2\n  wander run\n", "notes, waits, flags and named settings come back the same");
+}
+
+void test_secure_random() {
+    std::uint8_t a[32] = {};
+    std::uint8_t b[32] = {};
+    check(orchard::os_entropy(a, sizeof(a)) && orchard::os_entropy(b, sizeof(b)) && !std::equal(a, a + 32, b), "the system's own secure random source works");
+    orchard::SecureRandom& r = orchard::secure_random();
+    check(r.ok(), "the system gives secure random bytes");
+    const std::string id = r.uuid();
+    check(id.size() == 36 && id[14] == '4' && id[8] == '-' && std::string("89ab").find(id[19]) != std::string::npos, "secure UUIDs are version 4: " + id);
+    check(r.hex(16).size() == 32 && r.token(32).size() == 43 && r.uuid() != id, "secure tokens and hex have the right length and differ");
+    bool in_range = true;
+    int seen[6] = {};
+    for (int i = 0; i < 6000; ++i) {
+        const long long v = r.integer(1, 6);
+        in_range = in_range && v >= 1 && v <= 6;
+        if (v >= 1 && v <= 6) ++seen[v - 1];
+    }
+    check(in_range && *std::min_element(seen, seen + 6) > 800, "secure whole numbers stay in range and spread out");
+    const double u = r.unit();
+    check(u >= 0.0 && u < 1.0 && r.text(10, "ab").find_first_not_of("ab") == std::string::npos, "secure numbers and text");
+}
+
+void test_solids() {
+    using namespace orchard;
+    const fs::path dir = fs::temp_directory_path() / "orchard-test-solids";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    SolidOptions o;
+    o.project_root = dir.string();
+    o.loader = [&](const std::string& source, std::vector<Vec3>& v, std::vector<std::uint32_t>& idx) {
+        std::ifstream in(dir / source);
+        std::string line;
+        while (std::getline(in, line)) {
+            std::istringstream ls(line);
+            std::string key;
+            ls >> key;
+            if (key == "v") {
+                Vec3 p;
+                ls >> p.x >> p.y >> p.z;
+                v.push_back(p);
+            } else if (key == "f") {
+                std::vector<std::uint32_t> face;
+                for (std::string tok; ls >> tok;) face.push_back(static_cast<std::uint32_t>(std::atoi(tok.c_str()) - 1));
+                for (std::size_t k = 2; k < face.size(); ++k) {
+                    idx.push_back(face[0]);
+                    idx.push_back(face[k - 1]);
+                    idx.push_back(face[k]);
+                }
+            }
+        }
+        return !idx.empty();
+    };
+    auto world_position_of = [](const Scene& sc, Entity e) { return mul_point(sc.world_matrix(e), Vec3{}); };
+    auto volume_of = [&](const Scene& sc, Entity e) {
+        std::optional<SolidMesh> m = entity_solid(sc, e, Mat4{}, o.loader);
+        return m ? m->volume() : 0.0f;
+    };
+
+    Scene scene;
+    const Entity holder = scene.create("Holder");
+    scene.transform(holder)->position = Vec3{5.0f, 0.0f, 0.0f};
+    const Entity a = scene.create("A", holder);
+    scene.add_collider(a, ColliderShape::box)->size = Vec3{2.0f, 2.0f, 2.0f};
+    scene.add_material(a).color = Vec3{1.0f, 0.0f, 0.0f};
+    scene.add_body(a).type = BodyType::fixed;
+    const Entity b = scene.create("B", holder);
+    scene.add_collider(b, ColliderShape::box)->size = Vec3{2.0f, 2.0f, 2.0f};
+    scene.transform(b)->position = Vec3{1.0f, 0.0f, 0.0f};
+    scene.transform(b)->rotation = from_euler(Vec3{0.0f, 90.0f, 0.0f});
+    scene.add_material(b).color = Vec3{0.0f, 0.0f, 1.0f};
+
+    SolidResult u = combine_solids(scene, {a, b}, SolidOperation::union_parts, o);
+    check(u.ok() && scene.alive(u.entity), "two boxes union into one part: " + u.error);
+    check(!scene.alive(a) && !scene.alive(b) && scene.parent(u.entity) == holder, "the union replaces its parts under the same parent");
+    const std::vector<Collider>* uc = scene.colliders(u.entity);
+    check(uc && uc->size() == 1 && uc->front().shape == ColliderShape::mesh && fs::exists(dir / uc->front().source), "a fixed union gets a mesh collider from its .obj");
+    check(fs::exists(dir / "Assets/Solids/Union.mtl") && !scene.material(u.entity), "parts with different colours keep them in the union");
+    check(std::fabs(volume_of(scene, u.entity) - 12.0f) < 0.01f, "the union's volume is right: " + std::to_string(volume_of(scene, u.entity)));
+    check(std::fabs(world_position_of(scene, u.entity).x - 5.5f) < 1e-4f, "the union sits in the middle of its parts");
+    const std::string saved = scene.save();
+    const std::optional<Scene> again = Scene::load(saved);
+    const Entity loaded = again ? again->find("Union") : Entity{};
+    check(again && again->solid(loaded) && again->solid(loaded)->parts == "Assets/Solids/Union.parts" && again->solid(loaded)->operation == SolidOperation::union_parts, "a union's parts are saved with the scene");
+
+    SolidResult s = separate_solid(scene, u.entity, o);
+    check(s.ok() && s.entities.size() == 2 && !scene.alive(u.entity), "separate gives the two parts back: " + s.error);
+    if (s.entities.size() == 2) {
+        const Entity a2 = scene.find("A");
+        const Entity b2 = scene.find("B");
+        check(scene.alive(a2) && scene.alive(b2) && scene.parent(b2) == holder, "separated parts go back under the same parent");
+        const Vec3 pb = world_position_of(scene, b2);
+        check(std::fabs(pb.x - 6.0f) < 1e-4f && std::fabs(pb.y) < 1e-4f, "separated parts go back where they were");
+        check(std::fabs(to_euler(scene.transform(b2)->rotation).y - 90.0f) < 0.05f, "separated parts keep their rotation");
+
+        scene.add_solid(b2).negative = true;
+        check(is_negative_part(scene, b2), "negate marks a part");
+        SolidResult cut = combine_solids(scene, {a2, b2}, SolidOperation::union_parts, o);
+        check(cut.ok() && std::fabs(volume_of(scene, cut.entity) - 4.0f) < 0.01f, "a negative part is cut out of the union");
+        check(cut.ok() && scene.material(cut.entity) && scene.material(cut.entity)->color.x == 1.0f, "with one colour left, the union takes that part's material");
+        SolidResult back = separate_solid(scene, cut.entity, o);
+        const Entity b3 = scene.find("B");
+        check(back.ok() && scene.alive(b3) && is_negative_part(scene, b3), "separating keeps the negative part negative");
+        scene.solid(b3)->negative = false;
+        SolidResult both = combine_solids(scene, {scene.find("A"), b3}, SolidOperation::intersect_parts, o);
+        check(both.ok() && std::fabs(volume_of(scene, both.entity) - 4.0f) < 0.01f, "intersect keeps only where the parts overlap");
+        SolidResult re = rebuild_solid(scene, both.entity, [&] { SolidOptions one = o; one.one_color = true; return one; }());
+        check(re.ok() && scene.material(both.entity) && scene.solid(both.entity)->one_color, "one colour remakes it with a single material");
+    }
+
+    Scene apart;
+    const Entity x = apart.create("X");
+    apart.add_collider(x, ColliderShape::sphere);
+    const Entity y = apart.create("Y");
+    apart.add_collider(y, ColliderShape::sphere);
+    apart.transform(y)->position = Vec3{5.0f, 0.0f, 0.0f};
+    SolidResult none = combine_solids(apart, {x, y}, SolidOperation::intersect_parts, o);
+    check(!none.ok() && apart.alive(x) && apart.alive(y), "intersecting parts that don't touch says so and changes nothing");
+    apart.add_solid(x).negative = true;
+    apart.add_solid(y).negative = true;
+    check(!combine_solids(apart, {x, y}, SolidOperation::union_parts, o).ok(), "all-negative unions are refused");
+    Scene flat(Dimension::two_d);
+    const Entity f1 = flat.create("F1");
+    flat.add_collider(f1, ColliderShape::box);
+    const Entity f2 = flat.create("F2");
+    flat.add_collider(f2, ColliderShape::box);
+    check(!combine_solids(flat, {f1, f2}, SolidOperation::union_parts, o).ok(), "2D scenes say union is for 3D");
+    const Transform t = transform_from_matrix(trs(Vec3{1.0f, 2.0f, 3.0f}, from_euler(Vec3{10.0f, 20.0f, 30.0f}), Vec3{2.0f, 3.0f, 4.0f}));
+    const Vec3 e = to_euler(t.rotation);
+    check(std::fabs(t.position.z - 3.0f) < 1e-4f && std::fabs(t.scale.y - 3.0f) < 1e-4f && std::fabs(e.x - 10.0f) < 0.05f && std::fabs(e.z - 30.0f) < 0.05f, "matrices turn back into transforms");
+    fs::remove_all(dir, ec);
+}
+
+void test_parallel_search() {
+    using namespace orchard::ai;
+    GridPathfinder grid(60, 60);
+    std::uint64_t h = 7;
+    for (int i = 0; i < 700; ++i) {
+        h = orchard::hash64(h + static_cast<std::uint64_t>(i));
+        grid.set_blocked(static_cast<int>(h % 60), static_cast<int>((h >> 20) % 60));
+    }
+    grid.set_blocked(0, 0, false);
+    grid.set_blocked(59, 59, false);
+    ParallelSearchOptions one;
+    one.threads = 1;
+    ParallelSearchOptions many;
+    many.threads = 6;
+    const SearchResult<Cell> a = grid.find_breadth_first({0, 0}, {59, 59}, one);
+    const SearchResult<Cell> b = grid.find_breadth_first({0, 0}, {59, 59}, many);
+    check(a.found && b.found && a.path.size() == b.path.size() && b.runners == 6, "breadth-first with 6 runners finds the same shortest path length as 1");
+    auto valid = [&](const SearchResult<Cell>& r) {
+        if (r.path.empty() || r.path.front() != Cell{0, 0} || r.path.back() != Cell{59, 59}) return false;
+        for (std::size_t i = 1; i < r.path.size(); ++i)
+            if (std::abs(r.path[i].x - r.path[i - 1].x) > 1 || std::abs(r.path[i].y - r.path[i - 1].y) > 1 || !grid.walkable(r.path[i].x, r.path[i].y)) return false;
+        return true;
+    };
+    const SearchResult<Cell> c = grid.find_depth_first({0, 0}, {59, 59}, many);
+    check(c.found && valid(b) && valid(c), "multithreaded depth-first finds a real path");
+    ParallelSearchOptions shortest = many;
+    shortest.first_found = false;
+    shortest.max_expand = 50000000;
+    GridPathfinder small(14, 14);
+    for (int y = 0; y < 12; ++y) small.set_blocked(7, y);
+    const SearchResult<Cell> s1 = small.find_breadth_first({0, 0}, {13, 0}, one);
+    const SearchResult<Cell> s2 = small.find_depth_first({0, 0}, {13, 0}, shortest);
+    check(s1.found && s2.found && s1.path.size() == s2.path.size(), "depth-first runners that keep going end on the shortest path (shorter runners win)");
+    auto ring = [](int n, auto&& emit) {
+        emit((n + 1) % 12, 1.0);
+        if (n == 2) emit(6, 1.0);
+    };
+    const std::vector<int> cycle = find_cycle<int>(0, ring);
+    check(!cycle.empty() && cycle.front() == cycle.back(), "the on-path pointers spot a loop");
+    const SearchResult<int> d = depth_first<int>(0, [](int n) { return n == 11; }, ring);
+    const SearchResult<int> d2 = depth_first<int>(0, [](int n) { return n < 0; }, ring);
+    check(d.found && d.path.size() == 12 && !d2.found && d2.loops > 0, "depth-first counts the loops it runs into");
+    auto line = [](int n, auto&& emit) {
+        if (n < 9) emit(n + 1, 1.0);
+    };
+    check(!has_cycle<int>(0, line), "a line has no loop");
+    const SearchResult<int> e = parallel_breadth_first<int>(0, [](int n) { return n == 7; }, ring, many);
+    check(e.found && e.path.size() == 5, "generic breadth-first runners take the shortcut");
+}
+
+} // namespace
+
 int main() {
+    test_brain_graphs();
+    test_secure_random();
+    test_parallel_search();
+    test_solids();
+    test_script_library();
+    test_ai_presets();
     test_character_looks();
     test_triangles();
     test_terrain();

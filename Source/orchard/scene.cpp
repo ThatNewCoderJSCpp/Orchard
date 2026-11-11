@@ -1122,6 +1122,9 @@ Entity Scene::create(const std::string& name, Entity parent) {
     s.animator.reset();
     s.terrain.reset();
     s.health.reset();
+    s.agent.reset();
+    s.sound.reset();
+    s.solid.reset();
     s.tags.clear();
     s.bone.clear();
     s.instance_of.clear();
@@ -1475,6 +1478,106 @@ Health& Scene::add_health(Entity e) {
     return *s->health;
 }
 
+Agent* Scene::agent(Entity e) {
+    Slot* s = slot(e);
+    return s && s->agent ? &*s->agent : nullptr;
+}
+
+const Agent* Scene::agent(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->agent ? &*s->agent : nullptr;
+}
+
+Agent& Scene::add_agent(Entity e) {
+    static Agent none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Agent{};
+        return none;
+    }
+    if (!s->agent) s->agent = Agent{};
+    return *s->agent;
+}
+
+bool Scene::remove_agent(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->agent) return false;
+    s->agent.reset();
+    return true;
+}
+
+Solid* Scene::solid(Entity e) {
+    Slot* s = slot(e);
+    return s && s->solid ? &*s->solid : nullptr;
+}
+
+const Solid* Scene::solid(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->solid ? &*s->solid : nullptr;
+}
+
+Solid& Scene::add_solid(Entity e) {
+    static Solid none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Solid{};
+        return none;
+    }
+    if (!s->solid) s->solid = Solid{};
+    return *s->solid;
+}
+
+bool Scene::remove_solid(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->solid) return false;
+    s->solid.reset();
+    return true;
+}
+
+const char* to_string(SolidOperation v) {
+    switch (v) {
+    case SolidOperation::union_parts: return "union";
+    case SolidOperation::intersect_parts: return "intersect";
+    case SolidOperation::none: break;
+    }
+    return "none";
+}
+
+std::optional<SolidOperation> parse_solid_operation(const std::string& text) {
+    if (text == "union") return SolidOperation::union_parts;
+    if (text == "intersect") return SolidOperation::intersect_parts;
+    if (text == "none" || text.empty()) return SolidOperation::none;
+    return std::nullopt;
+}
+
+SoundSource* Scene::sound(Entity e) {
+    Slot* s = slot(e);
+    return s && s->sound ? &*s->sound : nullptr;
+}
+
+const SoundSource* Scene::sound(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->sound ? &*s->sound : nullptr;
+}
+
+SoundSource& Scene::add_sound(Entity e) {
+    static SoundSource none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = SoundSource{};
+        return none;
+    }
+    if (!s->sound) s->sound = SoundSource{};
+    return *s->sound;
+}
+
+bool Scene::remove_sound(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->sound) return false;
+    s->sound.reset();
+    return true;
+}
+
 bool Scene::remove_health(Entity e) {
     Slot* s = slot(e);
     if (!s || !s->health) return false;
@@ -1693,6 +1796,9 @@ Entity Scene::copy_from(const Scene& other, Entity source, Entity parent) {
     dst->animator = copy.animator;
     dst->terrain = copy.terrain;
     dst->health = copy.health;
+    dst->agent = copy.agent;
+    dst->sound = copy.sound;
+    dst->solid = copy.solid;
     dst->tags = copy.tags;
     dst->bone = copy.bone;
     dst->instance_of = copy.instance_of;
@@ -3006,6 +3112,80 @@ std::string Scene::save() const {
             if (h.respawn_delay != d.respawn_delay) out << " respawn:" << number(h.respawn_delay);
             out << "\n";
         }
+        if (s.agent) {
+            const Agent d = Agent::preset(s.agent->brain).value_or(Agent{});
+            const Agent& a = *s.agent;
+            out << "agent " << n << " brain:" << escape_token(a.brain);
+            auto f = [&](const char* key, float v, float dv) {
+                if (v != dv) out << " " << key << ":" << number(v);
+            };
+            auto t = [&](const char* key, const std::string& v, const std::string& dv) {
+                if (v != dv) out << " " << key << ":" << escape_token(v);
+            };
+            auto b = [&](const char* key, bool v, bool dv) {
+                if (v != dv) out << " " << key << ":" << (v ? 1 : 0);
+            };
+            t("behavior", a.behavior, d.behavior);
+            t("team", a.team, d.team);
+            t("targets", a.targets, d.targets);
+            f("walk", a.walk_speed, d.walk_speed);
+            f("run", a.run_speed, d.run_speed);
+            f("turn", a.turn_speed, d.turn_speed);
+            f("sight", a.sight_range, d.sight_range);
+            f("angle", a.sight_angle, d.sight_angle);
+            f("hearing", a.hearing, d.hearing);
+            f("eye", a.eye_height, d.eye_height);
+            f("awareness", a.awareness, d.awareness);
+            f("reaction", a.reaction, d.reaction);
+            f("reach", a.attack_range, d.attack_range);
+            f("damage", a.attack_damage, d.attack_damage);
+            f("rate", a.attack_rate, d.attack_rate);
+            b("ranged", a.ranged, d.ranged);
+            f("accuracy", a.accuracy, d.accuracy);
+            f("magazine", static_cast<float>(a.magazine), static_cast<float>(d.magazine));
+            f("reload", a.reload_time, d.reload_time);
+            f("aggression", a.aggression, d.aggression);
+            f("flee", a.flee_health, d.flee_health);
+            t("patrol", a.patrol, d.patrol);
+            t("squad", a.squad, d.squad);
+            t("leader", a.leader, d.leader);
+            f("radius", a.radius, d.radius);
+            f("height", a.height, d.height);
+            f("step", a.step, d.step);
+            f("jump", a.jump, d.jump);
+            f("drop", a.max_drop, d.max_drop);
+            b("flying", a.flying, d.flying);
+            f("fly-height", a.fly_height, d.fly_height);
+            b("enabled", a.enabled, d.enabled);
+            b("show-path", a.show_path, d.show_path);
+            t("attack-sound", a.attack_sound, d.attack_sound);
+            t("alert-sound", a.alert_sound, d.alert_sound);
+            t("shoot-effect", a.shoot_effect, d.shoot_effect);
+            out << "\n";
+        }
+        if (s.sound) {
+            const SoundSource d;
+            const SoundSource& a = *s.sound;
+            out << "sound " << n << " clip:" << escape_token(a.clip);
+            if (a.volume != d.volume) out << " volume:" << number(a.volume);
+            if (a.pitch != d.pitch) out << " pitch:" << number(a.pitch);
+            if (a.loop != d.loop) out << " loop:" << (a.loop ? 1 : 0);
+            if (a.autoplay != d.autoplay) out << " autoplay:" << (a.autoplay ? 1 : 0);
+            if (a.spatial != d.spatial) out << " spatial:" << (a.spatial ? 1 : 0);
+            if (a.range != d.range) out << " range:" << number(a.range);
+            if (a.min_distance != d.min_distance) out << " near:" << number(a.min_distance);
+            if (a.ai_hears != d.ai_hears) out << " ai:" << (a.ai_hears ? 1 : 0);
+            if (a.loudness != d.loudness) out << " loudness:" << number(a.loudness);
+            out << "\n";
+        }
+        if (s.solid) {
+            const Solid& a = *s.solid;
+            out << "solid " << n << " operation:" << to_string(a.operation);
+            if (a.negative) out << " negative:1";
+            if (!a.parts.empty()) out << " parts:" << escape_token(a.parts);
+            if (a.one_color) out << " one-color:1";
+            out << "\n";
+        }
         if (!s.tags.empty()) {
             out << "tags " << n << " ";
             for (std::size_t t = 0; t < s.tags.size(); ++t) out << (t ? "," : "") << escape_token(s.tags[t]);
@@ -3057,7 +3237,7 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
         std::string kind;
         std::size_t num = 0, parent = 0;
         row >> kind >> num;
-        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material" || kind == "fluid" || kind == "emitter" || kind == "instance" || kind == "camera" || kind == "model" || kind == "animator" || kind == "anim-event" || kind == "bone" || kind == "health" || kind == "tags" || is_terrain_line(kind)) {
+        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material" || kind == "fluid" || kind == "emitter" || kind == "instance" || kind == "camera" || kind == "model" || kind == "animator" || kind == "anim-event" || kind == "bone" || kind == "health" || kind == "agent" || kind == "sound" || kind == "solid" || kind == "tags" || is_terrain_line(kind)) {
             const auto owner = by_number.find(num);
             if (!row || owner == by_number.end()) {
                 if (error) *error = "line " + std::to_string(line_no) + ": " + kind + " for an entity that isn't there";
@@ -3107,6 +3287,88 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     else if (key == "blast-force") h.explode_force = x;
                     else if (key == "blast-damage") h.explode_damage = x;
                     else if (key == "respawn") h.respawn_delay = std::max(0.0f, x);
+                }
+                continue;
+            }
+            if (kind == "agent" || kind == "sound" || kind == "solid") {
+                std::vector<std::pair<std::string, std::string>> kv;
+                for (std::string token; row >> token;) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    kv.emplace_back(token.substr(0, colon), unescape_token(token.substr(colon + 1)));
+                }
+                if (kind == "solid") {
+                    Solid& a = scene.add_solid(owner->second);
+                    for (const auto& [key, v] : kv) {
+                        if (key == "operation") a.operation = parse_solid_operation(v).value_or(SolidOperation::none);
+                        else if (key == "negative") a.negative = v != "0";
+                        else if (key == "parts") a.parts = v;
+                        else if (key == "one-color") a.one_color = v != "0";
+                    }
+                    continue;
+                }
+                if (kind == "sound") {
+                    SoundSource& a = scene.add_sound(owner->second);
+                    for (const auto& [key, v] : kv) {
+                        const float x = static_cast<float>(std::atof(v.c_str()));
+                        if (key == "clip") a.clip = v;
+                        else if (key == "volume") a.volume = std::max(0.0f, x);
+                        else if (key == "pitch") a.pitch = std::max(0.01f, x);
+                        else if (key == "loop") a.loop = v != "0";
+                        else if (key == "autoplay") a.autoplay = v != "0";
+                        else if (key == "spatial") a.spatial = v != "0";
+                        else if (key == "range") a.range = std::max(0.01f, x);
+                        else if (key == "near") a.min_distance = std::max(0.0f, x);
+                        else if (key == "ai") a.ai_hears = v != "0";
+                        else if (key == "loudness") a.loudness = std::max(0.0f, x);
+                    }
+                    continue;
+                }
+                std::string brain = "guard";
+                for (const auto& [key, v] : kv)
+                    if (key == "brain") brain = v;
+                Agent& a = scene.add_agent(owner->second);
+                a = Agent::preset(brain).value_or(Agent{});
+                a.brain = brain;
+                for (const auto& [key, v] : kv) {
+                    const float x = static_cast<float>(std::atof(v.c_str()));
+                    const bool on = v != "0";
+                    if (key == "behavior") a.behavior = v;
+                    else if (key == "team") a.team = v;
+                    else if (key == "targets") a.targets = v;
+                    else if (key == "walk") a.walk_speed = std::max(0.0f, x);
+                    else if (key == "run") a.run_speed = std::max(0.0f, x);
+                    else if (key == "turn") a.turn_speed = std::max(0.0f, x);
+                    else if (key == "sight") a.sight_range = std::max(0.0f, x);
+                    else if (key == "angle") a.sight_angle = std::clamp(x, 0.0f, 360.0f);
+                    else if (key == "hearing") a.hearing = std::max(0.0f, x);
+                    else if (key == "eye") a.eye_height = x;
+                    else if (key == "awareness") a.awareness = std::max(0.0f, x);
+                    else if (key == "reaction") a.reaction = std::max(0.0f, x);
+                    else if (key == "reach") a.attack_range = std::max(0.0f, x);
+                    else if (key == "damage") a.attack_damage = x;
+                    else if (key == "rate") a.attack_rate = std::max(0.0f, x);
+                    else if (key == "ranged") a.ranged = on;
+                    else if (key == "accuracy") a.accuracy = std::clamp(x, 0.0f, 1.0f);
+                    else if (key == "magazine") a.magazine = std::max(0, static_cast<int>(x));
+                    else if (key == "reload") a.reload_time = std::max(0.0f, x);
+                    else if (key == "aggression") a.aggression = std::clamp(x, 0.0f, 1.0f);
+                    else if (key == "flee") a.flee_health = std::clamp(x, 0.0f, 1.0f);
+                    else if (key == "patrol") a.patrol = v;
+                    else if (key == "squad") a.squad = v;
+                    else if (key == "leader") a.leader = v;
+                    else if (key == "radius") a.radius = std::max(0.05f, x);
+                    else if (key == "height") a.height = std::max(0.1f, x);
+                    else if (key == "step") a.step = std::max(0.0f, x);
+                    else if (key == "jump") a.jump = std::max(0.0f, x);
+                    else if (key == "drop") a.max_drop = std::max(0.0f, x);
+                    else if (key == "flying") a.flying = on;
+                    else if (key == "fly-height") a.fly_height = x;
+                    else if (key == "enabled") a.enabled = on;
+                    else if (key == "show-path") a.show_path = on;
+                    else if (key == "attack-sound") a.attack_sound = v;
+                    else if (key == "alert-sound") a.alert_sound = v;
+                    else if (key == "shoot-effect") a.shoot_effect = v;
                 }
                 continue;
             }

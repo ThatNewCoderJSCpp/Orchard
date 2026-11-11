@@ -3,6 +3,7 @@ import module.strings
 import module.io
 
 string: selected = "";
+string: more_selected = ",";
 string: mode = "edit";
 string: log_seq = "0";
 bool: filling = false;
@@ -54,6 +55,9 @@ function fill_inspector() -> void;
 function fill_transform() -> void;
 function fill_components() -> void;
 function select(const string&: id) -> void;
+function select_more(const string&: id) -> void;
+function keep_selection(const string&: id) -> void;
+function is_selected(const string&: id) -> bool;
 function set_field(const string&: field) -> void;
 function set_component(const string&: field, const string&: value) -> void;
 function open_file(const string&: path) -> void;
@@ -402,11 +406,15 @@ function outliner_row(const string&: line) -> grove::Element {
         row.append_child(el("text", "node-count", f[8]));
     }
     row.set_attribute("entity", id);
-    if (id == selected) then {
+    if (is_selected(id)) then {
         row.add_class("selected");
     }
     row.on("click", [id](grove::Event&: e) -> void {
-        select(id);
+        if (e.ctrl() || e.meta()) then {
+            select_more(id);
+        } else then {
+            select(id);
+        }
     });
     row.on("double_click", [id](grove::Event&: e) -> void {
         open_inspect(id, false);
@@ -543,6 +551,17 @@ function inspect_set(const string&: key, const string&: value) -> void {
     }
     if (r == "rebuild") then {
         fill_inspect();
+    }
+    if (r.starts_with("graph\t")) then {
+        auto: g = r.split("\t");
+        inspecting = "";
+        grove::get_by_id("inspect-dialog").close_modal();
+        build_tree();
+        if (g.size() > 1l) then {
+            open_graph(g[1]);
+        }
+        refresh();
+        return;
     }
     if (key == "name") then {
         grove::get_by_id("inspect-title").set_inner_text(value);
@@ -731,6 +750,7 @@ function open_context_menu(const string&: owner, const string&: id, short float:
         return;
     }
     menu_target = id;
+    more_selected = "," + call("selection_more", "") + ",";
     if (r != "none" && r != selected) then {
         selected = r;
         build_outliner();
@@ -771,6 +791,10 @@ function handle_menu(const string&: key) -> void {
         select(f[1]);
         return;
     }
+    if (f[0] == "keep" && f.size() > 1l) then {
+        keep_selection(f[1]);
+        return;
+    }
     if (f[0] == "template") then {
         after_scene_swap();
         if (f.size() > 1l && !f[1].empty()) then {
@@ -797,6 +821,24 @@ function edit_key(grove::Event&: e) -> void {
         return;
     }
     string: k = e.key();
+    if ((e.ctrl() || e.meta()) && e.shift()) then {
+        string: solid_key = "";
+        if (k == "G" || k == "g") then {
+            solid_key = "solid:union";
+        } else if (k == "I" || k == "i") then {
+            solid_key = "solid:intersect";
+        } else if (k == "N" || k == "n") then {
+            solid_key = "solid:negate";
+        } else if (k == "U" || k == "u") then {
+            solid_key = "solid:separate";
+        }
+        if (!solid_key.empty()) then {
+            e.prevent_default();
+            menu_target = selected;
+            handle_menu(solid_key);
+            return;
+        }
+    }
     if (k == "Enter") then {
         e.prevent_default();
         open_inspect(selected, false);
@@ -1686,10 +1728,34 @@ function fill_components() -> void {
 
 function select(const string&: id) -> void {
     selected = call("select", id);
+    more_selected = "," + call("selection_more", "") + ",";
     build_tree();
     fill_inspector();
     fill_details();
 } end function select
+
+function select_more(const string&: id) -> void {
+    selected = call("select", id + "\tadd");
+    more_selected = "," + call("selection_more", "") + ",";
+    build_tree();
+    fill_inspector();
+    fill_details();
+} end function select_more
+
+function keep_selection(const string&: id) -> void {
+    selected = call("select", id + "\tkeep");
+    more_selected = "," + call("selection_more", "") + ",";
+    build_tree();
+    fill_inspector();
+    fill_details();
+} end function keep_selection
+
+function is_selected(const string&: id) -> bool {
+    if (id.empty()) then {
+        return false;
+    }
+    return id == selected || more_selected.contains("," + id + ",");
+} end function is_selected
 
 function set_field(const string&: field) -> void {
     if (filling || selected.empty()) then {
@@ -1799,6 +1865,14 @@ function open_graph(const string&: path) -> void {
     show("tab-graph", true);
     show("tab-graph-close", true);
     grove::get_by_id("tab-graph").set_attribute("title", path);
+    grove::Element: walnut_button = grove::get_by_id("graph-walnut");
+    if (path.ends_with(".brain")) then {
+        walnut_button.set_inner_text("Show behavior tree");
+        walnut_button.set_attribute("title", "Show the behavior tree this brain graph turns into");
+    } else then {
+        walnut_button.set_inner_text("Show Walnut");
+        walnut_button.set_attribute("title", "Show the Walnut this graph turns into");
+    }
     center_tab("graph");
     graph_status();
     grove::get_by_id("graph-canvas").focus();
@@ -2587,8 +2661,17 @@ viewport.on("mouse_up", [](grove::Event&: e) -> void {
         refresh();
         return;
     }
-    string: r = call("viewport_release", e.x().to_string() + "\t" + e.y().to_string());
-    if (r.starts_with("pick")) then {
+    string: add = "0";
+    if (e.ctrl() || e.meta()) then {
+        add = "1";
+    }
+    string: r = call("viewport_release", e.x().to_string() + "\t" + e.y().to_string() + "\t" + add);
+    if (r.starts_with("pick") && r.ends_with("\tadd")) then {
+        auto: pf = r.split("\t");
+        if (pf.size() > 1l && !pf[1].empty()) then {
+            select_more(pf[1]);
+        }
+    } else if (r.starts_with("pick")) then {
         select(reason(r));
     } else if (r.starts_with("moved")) then {
         select(reason(r));
@@ -2599,7 +2682,7 @@ viewport.on("mouse_up", [](grove::Event&: e) -> void {
         if (f.size() > 1l) then {
             id = f[1];
         }
-        if (!id.empty()) then {
+        if (!id.empty() && !is_selected(id)) then {
             select(id);
         }
         open_context_menu("viewport", id, e.x(), e.y());

@@ -753,6 +753,22 @@ std::vector<std::string> Project::models() const {
     return out;
 }
 
+std::vector<std::string> Project::sounds() const {
+    static const std::vector<std::string> ext = {".wav", ".ogg", ".mp3", ".flac", ".opus", ".aac", ".m4a"};
+    std::vector<std::string> out = files_with("Assets", ext);
+    for (const std::string& f : files_with("Sounds", ext)) out.push_back(f);
+    return out;
+}
+
+std::vector<std::string> Project::behaviors() const {
+    static const std::vector<std::string> ext = {".bt", ".behavior", ".brain"};
+    std::vector<std::string> out = files_with("Behaviors", ext);
+    for (const std::string& f : files_with("Assets", ext)) out.push_back(f);
+    for (const std::string& f : files_with("Scripts", ext)) out.push_back(f);
+    for (const std::string& f : files_with("Graphs", ".brain")) out.push_back(f);
+    return out;
+}
+
 std::vector<std::string> Project::images() const {
     std::vector<std::string> out = files_with("Assets", image_extensions());
     for (const std::string& f : files_with("Textures", image_extensions())) out.push_back(f);

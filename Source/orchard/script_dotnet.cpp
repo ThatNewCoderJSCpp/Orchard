@@ -284,6 +284,7 @@ public:
         const std::string source = read_text(script_path);
         std::uint64_t h = fnv(fnv_start(), std::to_string(ORCHARD_SCRIPT_API_VERSION));
         h = fnv(h, read_text(api / "Orchard.cs"));
+        h = fnv(h, read_text(api / "OrchardLib.cs"));
         h = fnv(h, read_text(api / "OrchardHost.cs"));
         h = fnv(fnv(fnv(h, source), script_path.string()), framework);
         const std::string stem = safe_stem(script) + "-cs-" + hex(h);
@@ -317,6 +318,7 @@ public:
         proj += "  </PropertyGroup>\n";
         proj += "  <ItemGroup>\n";
         proj += "    <Compile Include=\"" + xml((api / "Orchard.cs").string()) + "\" />\n";
+        if (fs::is_regular_file(api / "OrchardLib.cs")) proj += "    <Compile Include=\"" + xml((api / "OrchardLib.cs").string()) + "\" />\n";
         proj += "    <Compile Include=\"" + xml((api / "OrchardHost.cs").string()) + "\" />\n";
         proj += "    <Compile Include=\"OrchardScriptInfo.cs\" />\n";
         proj += "    <Compile Include=\"" + xml(script_path.string()) + "\" />\n";

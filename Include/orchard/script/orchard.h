@@ -144,6 +144,8 @@ static inline void orchard_impulse(orchard_entity e, double x, double y, double 
 static inline void orchard_force(orchard_entity e, double x, double y, double z) { orchard_host()->push(e, ORCHARD_PUSH_FORCE, x, y, z); }
 static inline void orchard_torque(orchard_entity e, double x, double y, double z) { orchard_host()->push(e, ORCHARD_PUSH_TORQUE, x, y, z); }
 
+#include "orchard_lib.h"
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,8 +1,10 @@
 #ifndef ORCHARD_SCRIPTING_HPP
 #define ORCHARD_SCRIPTING_HPP
 
+#include "ai/world.hpp"
 #include "axes.hpp"
 #include "gameplay.hpp"
+#include "random.hpp"
 #include "project.hpp"
 #include "scene.hpp"
 
@@ -76,6 +78,15 @@ public:
         static_cast<void>(layer);
         static_cast<void>(mask);
     }
+    virtual bool walk(Entity e, Vec3 wish, bool jump, float jump_speed, float dt) {
+        static_cast<void>(dt);
+        if (!has_body(e)) return false;
+        const Vec3 v = velocity(e);
+        set_velocity(e, Vec3{wish.x, jump ? jump_speed : v.y, wish.z});
+        return true;
+    }
+    virtual bool flat() const { return false; }
+    virtual float gravity() const { return 9.81f; }
 };
 
 struct ScriptHooks {
@@ -122,6 +133,22 @@ struct ParticleCommand {
     Entity entity;
     int action = 1;
     int count = 0;
+};
+
+enum class SoundOp { play, stop, volume, pitch, stop_all, pause, resume };
+
+struct SoundCommand {
+    SoundOp op = SoundOp::play;
+    int id = 0;
+    std::string clip;
+    Vec3 at;
+    Entity follow;
+    bool positional = true;
+    float volume = 1.0f;
+    float pitch = 1.0f;
+    bool loop = false;
+    float range = 25.0f;
+    float min_distance = 1.0f;
 };
 
 class ScriptRuntime {
@@ -177,6 +204,26 @@ public:
     void set_animation_status(Entity e, double time, double length, bool playing);
     Gameplay& gameplay() { return m_gameplay; }
     const Gameplay& gameplay() const { return m_gameplay; }
+    ai::AiWorld& ai() { return m_ai; }
+    const ai::AiWorld& ai() const { return m_ai; }
+    Random& random() { return m_random; }
+
+    int play_sound(const std::string& clip, Vec3 at, Entity follow, bool positional, float volume = 1.0f, float pitch = 1.0f, bool loop = false, float range = 25.0f, float ai_loudness = 0.0f);
+    int play_sound_source(Entity e);
+    void stop_sound_source(Entity e);
+    void stop_sound(int id);
+    void set_sound_volume(int id, float volume);
+    void set_sound_pitch(int id, float pitch);
+    void pause_sound(int id, bool paused);
+    bool sound_playing(int id) const;
+    void stop_all_sounds();
+    std::vector<SoundCommand> take_sound_commands();
+    void sound_finished(int id);
+
+    ShuffleBag<std::string>& bag(const std::string& name);
+    bool has_bag(const std::string& name) const { return m_bags.count(name) > 0; }
+    void drop_bag(const std::string& name) { m_bags.erase(name); }
+    std::string& text_buffer() { return m_text_buffer; }
 
     static ScriptHooks find_hooks(const std::string& source);
     static std::string with_hooks(const std::string& source, const ScriptHooks& hooks);
@@ -216,6 +263,14 @@ private:
     std::string m_event_text;
     std::vector<std::size_t> m_pending_starts;
     Gameplay m_gameplay;
+    ai::AiWorld m_ai;
+    Random m_random;
+    std::map<std::string, ShuffleBag<std::string>> m_bags;
+    std::vector<SoundCommand> m_sound_commands;
+    std::set<int> m_sounds_playing;
+    std::map<std::uint64_t, int> m_source_sounds;
+    int m_next_sound = 1;
+    std::string m_text_buffer;
     int m_call_depth = 0;
     std::set<std::string> m_keys;
     std::map<std::string, ScriptBuildResult> m_built;

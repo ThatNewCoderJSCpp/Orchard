@@ -605,6 +605,74 @@ struct Health {
     float respawn_delay = 2.0f;
 };
 
+struct Agent {
+    std::string brain = "guard";
+    std::string behavior;
+    std::string team = "enemies";
+    std::string targets;
+    float walk_speed = 2.0f;
+    float run_speed = 5.0f;
+    float turn_speed = 540.0f;
+    float sight_range = 25.0f;
+    float sight_angle = 120.0f;
+    float hearing = 1.0f;
+    float eye_height = 1.6f;
+    float awareness = 1.0f;
+    float reaction = 0.35f;
+    float attack_range = 1.6f;
+    float attack_damage = 10.0f;
+    float attack_rate = 1.0f;
+    bool ranged = false;
+    float accuracy = 0.6f;
+    int magazine = 30;
+    float reload_time = 2.0f;
+    float aggression = 0.5f;
+    float flee_health = 0.2f;
+    std::string patrol;
+    std::string squad;
+    std::string leader;
+    float radius = 0.4f;
+    float height = 1.8f;
+    float step = 0.45f;
+    float jump = 1.1f;
+    float max_drop = 4.0f;
+    bool flying = false;
+    float fly_height = 4.0f;
+    bool enabled = true;
+    bool show_path = false;
+    std::string attack_sound;
+    std::string alert_sound;
+    std::string shoot_effect = "muzzle-flash";
+
+    static std::optional<Agent> preset(const std::string& brain);
+    static const std::vector<std::string>& brains();
+    static const char* brain_label(const std::string& brain);
+};
+
+struct SoundSource {
+    std::string clip;
+    float volume = 1.0f;
+    float pitch = 1.0f;
+    bool loop = false;
+    bool autoplay = true;
+    bool spatial = true;
+    float range = 25.0f;
+    float min_distance = 1.0f;
+    bool ai_hears = false;
+    float loudness = 10.0f;
+};
+
+enum class SolidOperation { none, union_parts, intersect_parts };
+const char* to_string(SolidOperation v);
+std::optional<SolidOperation> parse_solid_operation(const std::string& text);
+
+struct Solid {
+    bool negative = false;
+    SolidOperation operation = SolidOperation::none;
+    std::string parts;
+    bool one_color = false;
+};
+
 enum class HumanoidKind { basic, head_and_body, full_body, detailed };
 const char* to_string(HumanoidKind v);
 std::optional<HumanoidKind> parse_humanoid_kind(const std::string& text);
@@ -693,6 +761,18 @@ public:
     const Health* health(Entity e) const;
     Health& add_health(Entity e);
     bool remove_health(Entity e);
+    Agent* agent(Entity e);
+    const Agent* agent(Entity e) const;
+    Agent& add_agent(Entity e);
+    bool remove_agent(Entity e);
+    SoundSource* sound(Entity e);
+    const SoundSource* sound(Entity e) const;
+    SoundSource& add_sound(Entity e);
+    bool remove_sound(Entity e);
+    Solid* solid(Entity e);
+    const Solid* solid(Entity e) const;
+    Solid& add_solid(Entity e);
+    bool remove_solid(Entity e);
     const std::vector<std::string>& tags(Entity e) const;
     bool add_tag(Entity e, const std::string& tag);
     bool remove_tag(Entity e, const std::string& tag);
@@ -745,6 +825,9 @@ private:
         std::optional<Animator> animator;
         std::optional<Terrain> terrain;
         std::optional<Health> health;
+        std::optional<Agent> agent;
+        std::optional<SoundSource> sound;
+        std::optional<Solid> solid;
         std::vector<std::string> tags;
         std::string bone;
         std::string instance_of;

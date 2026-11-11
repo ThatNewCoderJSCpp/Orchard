@@ -95,6 +95,7 @@ public:
         m_brush_visible = visible;
     }
     void set_extra_models(const std::vector<ModelInstance>* instances) { m_extra_models = instances; }
+    void set_also_selected(const std::vector<Entity>& also) { m_also_selected = also; }
     const GpuViewOptions& options() const noexcept { return m_options; }
     const GpuViewStats& stats() const noexcept { return m_stats; }
 
@@ -107,6 +108,7 @@ private:
     std::unique_ptr<Meshes> m_meshes;
     ParticleView m_particles;
     ModelView m_models;
+    std::vector<Entity> m_also_selected;
     const std::vector<ModelInstance>* m_extra_models = nullptr;
     TerrainView m_terrain;
     std::vector<ModelInstance> m_scatter_models;

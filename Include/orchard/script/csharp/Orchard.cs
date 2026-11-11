@@ -99,7 +99,7 @@ namespace Orchard
         public virtual void OnStop() { }
     }
 
-    public static class World
+    public static partial class World
     {
         public static void Log(object message) => Native.Log(message?.ToString() ?? "null", false);
         public static void Warn(object message) => Native.Log(message?.ToString() ?? "null", true);
@@ -208,6 +208,8 @@ namespace Orchard
         public delegate* unmanaged<ulong, byte*> animation_event;
         public delegate* unmanaged<int, ulong, ulong, double*, int, byte*, double> game;
         public delegate* unmanaged<int, ulong, ulong, double*, int, byte*, ulong> game_entity;
+        public delegate* unmanaged<int, ulong, ulong, double*, int, byte*, byte*> game_text;
+        public delegate* unmanaged<int, ulong, ulong, double*, int, byte*, double*, int, int> game_values;
     }
 
     internal static unsafe class Native
@@ -287,6 +289,29 @@ namespace Orchard
             args ??= System.Array.Empty<double>();
             fixed (double* a = args)
             fixed (byte* t = Utf8(text)) return Host->game_entity(op, e, other, args.Length > 0 ? a : null, args.Length, t);
+        }
+
+        public static string GameText(int op, ulong e, ulong other, string text, params double[] args)
+        {
+            if (!Has((int)Marshal.OffsetOf<HostApi>("game_text"), sizeof(nint)) || Host->game_text == null) return "";
+            args ??= System.Array.Empty<double>();
+            fixed (double* a = args)
+            fixed (byte* t = Utf8(text)) return Text(Host->game_text(op, e, other, args.Length > 0 ? a : null, args.Length, t));
+        }
+
+        public static double[] GameValues(int op, ulong e, ulong other, string text, params double[] args)
+        {
+            if (!Has((int)Marshal.OffsetOf<HostApi>("game_values"), sizeof(nint)) || Host->game_values == null) return System.Array.Empty<double>();
+            args ??= System.Array.Empty<double>();
+            var output = new double[4096];
+            int n;
+            fixed (double* a = args)
+            fixed (double* o = output)
+            fixed (byte* t = Utf8(text)) n = Host->game_values(op, e, other, args.Length > 0 ? a : null, args.Length, t, o, output.Length);
+            if (n <= 0) return System.Array.Empty<double>();
+            var result = new double[n];
+            System.Array.Copy(output, result, n);
+            return result;
         }
 
         public static int Fluid(int brush, double x, double y, double radius, double vx, double vy, int material)

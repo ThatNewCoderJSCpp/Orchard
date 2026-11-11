@@ -1,8 +1,13 @@
 #include <xylem/xylem.hpp>
 #include <orchard/effects.hpp>
 #include <orchard/gameplay.hpp>
+#include <orchard/ai/world.hpp>
+#include <orchard/graph.hpp>
 
 #include <cmath>
+#include <set>
+#include <functional>
+#include <memory>
 #include <cstdlib>
 #include <algorithm>
 #include <iostream>
@@ -861,6 +866,297 @@ void test_render_smoothing() {
     check(std::fabs(pos.x - x1) < 0.02f, "and moves on smoothly after the next step (" + str(pos.x) + ")");
 }
 
+struct AiScene {
+    orchard::Scene s{orchard::Dimension::three_d};
+    std::unique_ptr<xylem::World> w;
+    orchard::Gameplay g;
+    orchard::ai::AiWorld ai;
+    double t = 0.0;
+
+    explicit AiScene(orchard::Dimension dim = orchard::Dimension::three_d) : s(dim) {
+        const orchard::Entity ground = s.create("Ground");
+        s.transform(ground)->position = {0.0f, -0.5f, 0.0f};
+        s.add_body(ground).type = orchard::BodyType::fixed;
+        s.add_collider(ground)->size = {80.0f, 1.0f, dim == orchard::Dimension::two_d ? 1.0f : 80.0f};
+    }
+
+    orchard::Entity wall(orchard::Vec3 at, orchard::Vec3 size) {
+        const orchard::Entity e = s.create("Wall");
+        s.transform(e)->position = at;
+        s.add_body(e).type = orchard::BodyType::fixed;
+        s.add_collider(e)->size = size;
+        return e;
+    }
+
+    orchard::Entity body(const char* name, orchard::Vec3 at, float height = 1.8f) {
+        const orchard::Entity e = s.create(name);
+        s.transform(e)->position = at;
+        orchard::Body& b = s.add_body(e);
+        b.set(orchard::body_lock_rotation_x, true);
+        b.set(orchard::body_lock_rotation_y, true);
+        b.set(orchard::body_lock_rotation_z, true);
+        b.set(orchard::body_sleep, false);
+        orchard::Collider* c = s.add_collider(e, orchard::ColliderShape::capsule);
+        c->size = {0.6f, height, 0.6f};
+        c->offset = {0.0f, height * 0.5f, 0.0f};
+        c->friction = 0.0f;
+        return e;
+    }
+
+    orchard::Entity player(orchard::Vec3 at) {
+        const orchard::Entity p = body("Player", at);
+        s.add_tag(p, "player");
+        s.add_health(p);
+        return p;
+    }
+
+    orchard::Entity agent(const char* brain, orchard::Vec3 at) {
+        const orchard::Entity e = body(brain, at);
+        s.add_agent(e) = *orchard::Agent::preset(brain);
+        s.add_health(e);
+        return e;
+    }
+
+    void start() {
+        w = std::make_unique<xylem::World>(s.dimension());
+        w->build(s);
+        g.start(&s, w.get());
+        ai.start(&s, w.get(), &g);
+        ai.random().seed(12345);
+    }
+
+    void run(double seconds, const std::function<void()>& each = {}) {
+        const int n = static_cast<int>(seconds * 60.0);
+        for (int i = 0; i < n; ++i) {
+            t += 1.0 / 60.0;
+            ai.tick(1.0 / 60.0, t);
+            w->step(1.0f / 60.0f);
+            g.tick(1.0 / 60.0, t);
+            if (each) each();
+        }
+    }
+
+    orchard::Vec3 pos(orchard::Entity e) const { return s.transform(e)->position; }
+};
+
+float flat_distance(orchard::Vec3 a, orchard::Vec3 b) {
+    return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z));
+}
+
+void test_ai_zombie_chases_and_bites() {
+    AiScene a;
+    const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+    const orchard::Entity z = a.agent("runner", {0.0f, 0.05f, 10.0f});
+    a.s.transform(z)->rotation = orchard::from_euler({0.0f, 180.0f, 0.0f});
+    a.start();
+    const float before = flat_distance(a.pos(p), a.pos(z));
+    a.run(3.0);
+    const float after = flat_distance(a.pos(p), a.pos(z));
+    check(after < 3.0f && after < before, "a runner zombie sees the player and runs to them (" + str(before) + " m -> " + str(after) + " m)");
+    a.run(3.0);
+    check(a.g.health(p) < 100.0f, "and bites them (" + str(a.g.health(p)) + " health left)");
+    check(a.ai.state(z) == "combat" && a.ai.target(z) == p, "its state is combat with the player as its target (" + a.ai.state(z) + ")");
+    bool spotted = false;
+    for (std::string e = a.ai.next_event(z); !e.empty(); e = a.ai.next_event(z)) spotted = spotted || e == "spotted";
+    check(spotted, "it reports a spotted event");
+}
+
+void test_ai_walks_around_walls() {
+    AiScene a;
+    a.wall({0.0f, 1.5f, 5.0f}, {12.0f, 3.0f, 0.5f});
+    const orchard::Entity z = a.agent("custom", {0.0f, 0.05f, 0.0f});
+    a.start();
+    a.ai.move_to(z, {0.0f, 0.0f, 10.0f}, true);
+    a.run(12.0);
+    const orchard::Vec3 at = a.pos(z);
+    check(flat_distance(at, {0.0f, 0.0f, 10.0f}) < 1.2f, "an agent walks around a wall to reach a point (ended at " + str(at.x) + ", " + str(at.z) + ")");
+    check(a.ai.arrived(z), "and says it arrived");
+    const orchard::ai::NavPath path = a.ai.find_path({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 10.0f});
+    check(path.found && path.length > 12.0f, "a found path goes around the wall (" + str(path.length) + " m)");
+}
+
+void test_ai_guard_shoots() {
+    AiScene a;
+    const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+    const orchard::Entity guard = a.agent("guard", {0.0f, 0.05f, 12.0f});
+    a.s.transform(guard)->rotation = orchard::from_euler({0.0f, 180.0f, 0.0f});
+    a.start();
+    a.run(6.0);
+    check(a.g.health(p) < 100.0f, "a guard spots and shoots the player (" + str(a.g.health(p)) + " health left)");
+    bool shot = false;
+    for (std::string e = a.ai.next_event(guard); !e.empty(); e = a.ai.next_event(guard)) shot = shot || e == "shoot";
+    check(shot, "and reports shoot events");
+}
+
+void test_ai_stealth_suspicion() {
+    AiScene a;
+    const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+    const orchard::Entity guard = a.agent("stealth-guard", {0.0f, 0.05f, 20.0f});
+    a.s.transform(guard)->rotation = orchard::from_euler({0.0f, 180.0f, 0.0f});
+    a.s.agent(guard)->walk_speed = 0.0f;
+    a.start();
+    a.run(0.3);
+    const float early = a.ai.awareness(guard, p);
+    check(early > 0.0f && early < 1.0f, "a stealth guard's awareness builds up instead of spotting at once (" + str(early) + ")");
+    a.run(6.0);
+    check(a.ai.awareness(guard, p) >= 1.0f, "and then spots the player");
+    check(a.ai.team_alert("enemies") == orchard::ai::AlertPhase::alert, "spotting raises the team's alarm");
+    a.ai.set_visibility(p, 0.0f);
+    AiScene b;
+    const orchard::Entity p2 = b.player({0.0f, 0.05f, 0.0f});
+    const orchard::Entity g2 = b.agent("stealth-guard", {0.0f, 0.05f, 10.0f});
+    b.s.transform(g2)->rotation = orchard::from_euler({0.0f, 180.0f, 0.0f});
+    b.start();
+    b.ai.set_visibility(p2, 0.0f);
+    b.run(3.0);
+    check(b.ai.awareness(g2, p2) == 0.0f, "an invisible player isn't noticed");
+}
+
+void test_ai_hears_noise() {
+    AiScene a;
+    const orchard::Entity guard = a.agent("guard", {0.0f, 0.05f, 0.0f});
+    a.start();
+    a.run(0.5);
+    a.ai.make_noise({8.0f, 0.0f, 3.0f}, 25.0f, orchard::Entity{}, "glass");
+    a.run(6.0);
+    check(flat_distance(a.pos(guard), {8.0f, 0.0f, 3.0f}) < 3.0f, "a guard goes to check out a noise (" + str(flat_distance(a.pos(guard), {8.0f, 0.0f, 3.0f})) + " m away)");
+}
+
+void test_ai_prey_flees() {
+    AiScene a;
+    const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+    const orchard::Entity deer = a.agent("prey", {0.0f, 0.05f, 6.0f});
+    a.start();
+    a.w->set_velocity(p, {0.0f, 0.0f, 4.0f});
+    const float before = flat_distance(a.pos(p), a.pos(deer));
+    a.run(3.0, [&] { a.w->set_velocity(p, {0.0f, a.w->velocity(p).y, 4.0f}); });
+    const float after = flat_distance(a.pos(p), a.pos(deer));
+    check(after > before + 3.0f, "a prey animal runs from a player charging at it (" + str(before) + " m -> " + str(after) + " m)");
+}
+
+void test_ai_flat_2d() {
+    AiScene a(orchard::Dimension::two_d);
+    const orchard::Entity z = a.agent("custom", {0.0f, 0.05f, 0.0f});
+    a.wall({6.0f, 0.4f, 0.0f}, {1.0f, 0.8f, 1.0f});
+    a.start();
+    a.ai.move_to(z, {12.0f, 0.0f, 0.0f}, true);
+    a.run(8.0);
+    check(std::fabs(a.pos(z).x - 12.0f) < 1.2f, "a 2D agent walks (and hops a low wall) along X (x = " + str(a.pos(z).x) + ")");
+}
+
+void test_ai_script_action_and_extras() {
+    AiScene a;
+    const orchard::Entity e = a.agent("custom", {0.0f, 0.05f, 0.0f});
+    a.start();
+    std::string err;
+    check(a.ai.set_behavior(e, "sequence\n  dance fast\n  set done=yes\n", &err), "a custom behavior tree loads: " + err);
+    a.run(0.2);
+    check(a.ai.pending_action(e) == "dance" && a.ai.pending_argument(e, 0) == "fast", "an action the AI doesn't know is handed to scripts (" + a.ai.pending_action(e) + ")");
+    a.ai.finish_action(e, true);
+    a.run(0.2);
+    check(a.ai.blackboard(e) && a.ai.blackboard(e)->text("done") == "yes", "finishing it lets the tree carry on");
+    check(!a.ai.set_behavior(e, "sequence\n", &err), "a broken behavior is refused (" + err + ")");
+    {
+        orchard::graph::Graph brain(orchard::graph::GraphKind::brain);
+        const int root = brain.add_node("bt_root", 0, 0);
+        const int seq = brain.add_node("bt_sequence", 300, 0);
+        const int ask = brain.add_node("bt_ask", 600, 0);
+        const int note = brain.add_node("bt_set", 600, 120);
+        brain.connect(root, "start", seq, "in");
+        brain.connect(seq, "children", ask, "in");
+        brain.connect(seq, "children", note, "in");
+        brain.set_value(ask, "action", "open_door");
+        brain.set_value(ask, "arguments", "fast");
+        brain.set_value(note, "note", "door");
+        brain.set_value(note, "value", "open");
+        const std::optional<std::string> tree = orchard::graph::brain_file_behavior(brain.save(), &err);
+        check(tree && a.ai.define_behavior("Behaviors/door.brain", *tree, &err) && a.ai.set_behavior(e, "Behaviors/door.brain", &err), "a brain graph drives an agent: " + err);
+        a.run(0.2);
+        check(a.ai.pending_action(e) == "open_door" && a.ai.pending_argument(e, 0) == "fast", "the brain graph's Ask My Script To Do node reaches the script (" + a.ai.pending_action(e) + ")");
+        a.ai.finish_action(e, true);
+        a.run(0.2);
+        check(a.ai.blackboard(e) && a.ai.blackboard(e)->text("door") == "open", "and the graph carries on after it");
+    }
+    orchard::ai::VoxelWorld& vw = a.ai.voxels();
+    vw.fill({-5, -1, -5}, {20, -1, 5}, vw.type_id("solid"));
+    vw.fill({6, -1, -5}, {7, -1, 5}, vw.type_id("lava"));
+    orchard::ai::VoxelAgent va;
+    const orchard::ai::VoxelPath none = vw.pathfinder().find({0, 0, 0}, {10, 0, 0}, va, false);
+    va.jump_across = 3;
+    const orchard::ai::VoxelPath jump = vw.pathfinder().find({0, 0, 0}, {10, 0, 0}, va, false);
+    check(!none.found && jump.found, "voxel paths won't walk through lava, but jump over it when they can");
+    const int game = a.ai.new_chess();
+    orchard::ai::Chess* c = a.ai.chess(game);
+    check(c && c->play("f3") && c->play("e5") && c->play("g4"), "a chess game plays moves");
+    const orchard::ai::Chess::SearchInfo best = c->search_level(6);
+    check(best.found && best.move.uci() == "d8h4", "the chess AI finds a mate in one (" + best.move.uci() + ")");
+    orchard::ai::GoapPlanner& planner = a.ai.planner("test");
+    planner.add("get_axe", "", "has_axe", 2.0f);
+    planner.add("chop", "has_axe", "has_wood", 4.0f);
+    planner.add("buy_wood", "has_money", "has_wood", 1.0f);
+    const orchard::ai::GoapPlan plan = planner.plan(orchard::ai::parse_state("has_money=0"), orchard::ai::parse_state("has_wood"));
+    check(plan.found && plan.actions.size() == 2 && plan.actions[0] == "get_axe", "GOAP plans get_axe then chop");
+}
+
+void test_ai_soldiers_plan() {
+    AiScene a;
+    const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+    a.wall({3.0f, 0.5f, 10.0f}, {2.0f, 1.0f, 0.4f});
+    a.wall({-3.0f, 0.5f, 10.0f}, {2.0f, 1.0f, 0.4f});
+    std::vector<orchard::Entity> squad;
+    for (int i = 0; i < 3; ++i) {
+        const orchard::Entity s = a.agent("soldier", {-2.0f + 2.0f * static_cast<float>(i), 0.05f, 14.0f});
+        a.s.transform(s)->rotation = orchard::from_euler({0.0f, 180.0f, 0.0f});
+        squad.push_back(s);
+    }
+    a.start();
+    a.run(8.0);
+    int plans = 0, shots = 0;
+    for (orchard::Entity s : squad)
+        for (std::string e = a.ai.next_event(s); !e.empty(); e = a.ai.next_event(s)) {
+            if (e.rfind("plan:", 0) == 0) ++plans;
+            if (e == "shoot") ++shots;
+        }
+    check(plans >= 3 && shots > 0, "a squad of soldiers plans its moves and fires (" + str(static_cast<float>(plans)) + " plan steps, " + str(static_cast<float>(shots)) + " shots)");
+    check(a.g.health(p) < 100.0f, "and hurts the player");
+}
+
+void test_ai_horde_flow() {
+    AiScene a;
+    const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+    std::vector<orchard::Entity> horde;
+    for (int i = 0; i < 10; ++i) {
+        const orchard::Entity z = a.agent("runner", {-9.0f + 2.0f * static_cast<float>(i), 0.05f, 11.0f});
+        a.s.transform(z)->rotation = orchard::from_euler({0.0f, 180.0f, 0.0f});
+        horde.push_back(z);
+    }
+    a.start();
+    std::set<std::uint64_t> reached;
+    a.run(6.0, [&] {
+        for (orchard::Entity z : horde)
+            if (flat_distance(a.pos(z), a.pos(p)) < 3.0f) reached.insert(z.id());
+    });
+    check(reached.size() >= 7, "a horde of 10 runners closes in on the player (" + str(static_cast<float>(reached.size())) + " got within 3 m)");
+    check(a.g.health(p) <= 50.0f, "and overwhelms them (" + str(a.g.health(p)) + " health left)");
+}
+
+void test_ai_director() {
+    orchard::ai::Director d;
+    for (int i = 0; i < 600 && d.phase() == orchard::ai::Director::Phase::build_up; ++i) {
+        d.report_damage(5.0f);
+        d.report_nearby(3, 2.0f);
+        d.tick(1.0f / 30.0f);
+    }
+    check(d.phase() == orchard::ai::Director::Phase::peak, "the director hits a peak when the player is under pressure");
+    for (int i = 0; i < 30 * 12; ++i) d.tick(1.0f / 30.0f);
+    check(d.phase() == orchard::ai::Director::Phase::relax && !d.wants_spawn(0), "then relaxes and stops spawning");
+    for (int i = 0; i < 30 * 6; ++i) {
+        d.report_seen(true, 4.0f);
+        d.tick(1.0f / 30.0f);
+    }
+    check(d.wants_backoff(), "a hunter seen up close too long is told to back off");
+}
+
 int main() {
     test_running_stays_down();
     test_detailed_player_walks_hills();
@@ -885,6 +1181,17 @@ int main() {
     test_effects();
     test_sprinting();
     test_render_smoothing();
+    test_ai_zombie_chases_and_bites();
+    test_ai_walks_around_walls();
+    test_ai_guard_shoots();
+    test_ai_stealth_suspicion();
+    test_ai_hears_noise();
+    test_ai_prey_flees();
+    test_ai_flat_2d();
+    test_ai_script_action_and_extras();
+    test_ai_soldiers_plan();
+    test_ai_horde_flow();
+    test_ai_director();
     std::cout << (checks - failures) << "/" << checks << " checks passed\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

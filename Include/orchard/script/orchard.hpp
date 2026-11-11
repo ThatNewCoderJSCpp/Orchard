@@ -2,6 +2,7 @@
 #define ORCHARD_SCRIPT_ORCHARD_HPP
 
 #include "script_api.hpp"
+#include "script_lib.hpp"
 
 #include <sstream>
 #include <string>

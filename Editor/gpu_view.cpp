@@ -12,6 +12,7 @@
 #endif
 #include <fizmo/includes.hpp>
 #include <fizmo/../physics.hpp>
+#include <orchard/solid.hpp>
 
 #include <algorithm>
 #include <array>
@@ -67,6 +68,8 @@ const Color icon_outline(16, 18, 15);
 const Color icon_body(235, 240, 230);
 const Color light_color(242, 201, 109);
 const Color selected_color(247, 180, 72);
+const Color also_selected_color(247, 214, 150);
+const Color negative_color(236, 72, 153);
 
 bool named(const Scene& scene, Entity e, const char* what) {
     return scene.name(e).find(what) != std::string::npos;
@@ -874,6 +877,8 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 const std::uint64_t base = static_cast<std::uint64_t>(e.id()) << 20;
                 if (scene.alive(viewer) && scene.body_owner(e) == viewer) continue;
                 const std::vector<Collider>* cs = scene.colliders(e);
+                const bool negative = cs && !cs->empty() && is_negative_part(scene, e);
+                if (negative && playing) continue;
                 const Entity shown_by = model_owner(e);
                 const bool as_model = scene.alive(shown_by);
                 const bool hint_parts = !playing && as_model && scene.alive(selected) && (selected == e || selected == shown_by || model_owner(selected) == shown_by);
@@ -884,6 +889,17 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                         const Material* mat = m_options.materials ? scene.material(e) : nullptr;
                         if (mat && !mat->visible) continue;
                         const Color col = mat ? material_color(*mat) : body_color(scene, e, c);
+                        if (negative) {
+                            const Color neg = with_alpha(negative_color, 235);
+                            if ((c.shape == ColliderShape::mesh || c.shape == ColliderShape::convex_hull) && !c.source.empty()) {
+                                const Mat4 placed = world * translation(c.offset) * scaling(c.size);
+                                Vec3 lo, hi;
+                                if (m_models.local_bounds(c.source, lo, hi)) box_edges(r, placed * translation((lo + hi) * 0.5f) * scaling(hi - lo), neg, 1.6f, false);
+                            } else if (c.shape == ColliderShape::triangle) prism_edges(r, world, c, neg, 1.6f, false);
+                            else if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, neg, 1.6f, false);
+                            else ring_edges(r, m, neg, 1.6f, false);
+                            continue;
+                        }
                         if (c.shape == ColliderShape::mesh || c.shape == ColliderShape::convex_hull) {
                             const Mat4 placed = world * translation(c.offset) * scaling(c.size);
                             if (!as_model && !c.source.empty()) {
@@ -1235,24 +1251,31 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                     if (m_brush_visible && !playing) m_terrain.draw_brush(r, scene, m_brush_entity, m_brush_point, m_brush_radius);
                     if (m_extra_models) m_models.draw_instances(r, *m_extra_models, visible);
                 }
-                if (scene.alive(selected) && !playing) {
-                    const Mat4 world = scene.world_matrix(selected);
-                    const std::vector<Collider>* cs = scene.colliders(selected);
+                auto outline = [&](Entity which, Color color, bool bones) {
+                    const Mat4 world = scene.world_matrix(which);
+                    const std::vector<Collider>* cs = scene.colliders(which);
                     Vec3 mlo, mhi;
-                    if (scene.model(selected) && m_models.local_bounds(scene.model(selected)->source, mlo, mhi)) {
-                        box_edges(r, world * translation((mlo + mhi) * 0.5f) * scaling((mhi - mlo) * 1.01f), selected_color, 2.0f, false);
-                        if (m_options.show_bones) m_models.draw_bones(r, scene, selected);
+                    if (scene.model(which) && m_models.local_bounds(scene.model(which)->source, mlo, mhi)) {
+                        box_edges(r, world * translation((mlo + mhi) * 0.5f) * scaling((mhi - mlo) * 1.01f), color, 2.0f, false);
+                        if (bones && m_options.show_bones) m_models.draw_bones(r, scene, which);
                     } else if (cs && !cs->empty()) {
                         for (const Collider& c : *cs) {
                             const Mat4 m = shape_matrix(world, c);
-                            if (c.shape == ColliderShape::triangle) prism_edges(r, world, c, selected_color, 2.0f, false);
-                            else if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, selected_color, 2.0f, false);
-                            else ring_edges(r, m, selected_color, 2.0f, false);
+                            if ((c.shape == ColliderShape::mesh || c.shape == ColliderShape::convex_hull) && !c.source.empty()) {
+                                const Mat4 placed = world * translation(c.offset) * scaling(c.size);
+                                if (m_models.local_bounds(c.source, mlo, mhi)) box_edges(r, placed * translation((mlo + mhi) * 0.5f) * scaling((mhi - mlo) * 1.01f), color, 2.0f, false);
+                            } else if (c.shape == ColliderShape::triangle) prism_edges(r, world, c, color, 2.0f, false);
+                            else if (c.shape == ColliderShape::box || c.shape == ColliderShape::rounded_box) box_edges(r, m, color, 2.0f, false);
+                            else ring_edges(r, m, color, 2.0f, false);
                         }
-                    } else if (!(scene.camera(selected) || named(scene, selected, "Camera")) && !scene.light(selected) && !named(scene, selected, "Light")) {
-                        box_edges(r, world * scaling({1.04f, 1.04f, 1.04f}), selected_color, 2.0f, false);
+                    } else if (!(scene.camera(which) || named(scene, which, "Camera")) && !scene.light(which) && !named(scene, which, "Light")) {
+                        box_edges(r, world * scaling({1.04f, 1.04f, 1.04f}), color, 2.0f, false);
                     }
-                }
+                };
+                if (!playing)
+                    for (Entity also : m_also_selected)
+                        if (scene.alive(also) && also != selected) outline(also, also_selected_color, false);
+                if (scene.alive(selected) && !playing) outline(selected, selected_color, true);
                 if (m_meshes->fluids && !m_meshes->fluids->empty()) {
                     Meshes& mm = *m_meshes;
                     std::size_t used = 0;

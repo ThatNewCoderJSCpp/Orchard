@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(orchard VERSION 1.4.1 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
+project(orchard VERSION 2.0.0 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -13,7 +13,7 @@ option(ORCHARD_BUILD_XYLEM "Build Xylem, Orchard's physics (fetches Fizmo)" ON)
 option(ORCHARD_BUILD_CHLOROPHYLL "Build Chlorophyll, Orchard's lighting (fetches Fizmo)" ON)
 option(ORCHARD_BUNDLE "Run orchard-host --bundle as part of the build to make orchard with its window built in (turn off when cross-compiling)" ON)
 option(ORCHARD_PACKAGE "Link orchard so it runs on machines without the build's C++ runtime, for release downloads" OFF)
-set(ORCHARD_FIZMO_TAG "v1.4.2" CACHE STRING "Fizmo git tag to fetch")
+set(ORCHARD_FIZMO_TAG "v1.4.3" CACHE STRING "Fizmo git tag to fetch")
 set(ORCHARD_GROVE_TAG "v1.1.1" CACHE STRING "Grove git tag to fetch")
 set(ORCHARD_WALNUT_TAG "v1.2.1" CACHE STRING "Walnut git tag to fetch")
 set(ORCHARD_ANDROID_LIBS_DIR "${CMAKE_BINARY_DIR}/android-libs" CACHE PATH "Where the Android build puts <abi>/liborchard_android.so for grove build --runtime-lib")
@@ -53,13 +53,32 @@ add_library(orchard_heartwood STATIC
     Source/orchard/graph.cpp
     Source/orchard/viewport.cpp
     Source/orchard/scripting.cpp
-    Source/orchard/axes.cpp)
+    Source/orchard/axes.cpp
+    Source/orchard/random.cpp
+    Source/orchard/secure_random.cpp
+    Source/orchard/solid.cpp
+    Source/orchard/ai/expression.cpp
+    Source/orchard/ai/behavior_tree.cpp
+    Source/orchard/ai/goap.cpp
+    Source/orchard/ai/steering.cpp
+    Source/orchard/ai/tactics.cpp
+    Source/orchard/ai/learning.cpp
+    Source/orchard/ai/game_search.cpp
+    Source/orchard/ai/chess.cpp
+    Source/orchard/ai/voxel.cpp
+    Source/orchard/ai/navgrid.cpp
+    Source/orchard/ai/brains.cpp
+    Source/orchard/ai/world.cpp)
 add_library(orchard::heartwood ALIAS orchard_heartwood)
 target_compile_features(orchard_heartwood PUBLIC cxx_std_17)
 target_include_directories(orchard_heartwood PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Include"
     "${CMAKE_BINARY_DIR}/generated")
-target_link_libraries(orchard_heartwood PUBLIC ${CMAKE_DL_LIBS})
+find_package(Threads REQUIRED)
+target_link_libraries(orchard_heartwood PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
+if(WIN32)
+    target_link_libraries(orchard_heartwood PUBLIC bcrypt)
+endif()
 target_compile_definitions(orchard_heartwood PRIVATE "ORCHARD_SOURCE_INCLUDE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/Include\"")
 orchard_warnings(orchard_heartwood)
 
@@ -148,6 +167,14 @@ else()
     FetchContent_MakeAvailable(fizmo)
 endif()
 
+if(TARGET fizmo::random)
+    target_link_libraries(orchard_heartwood PRIVATE fizmo::random)
+    target_compile_definitions(orchard_heartwood PRIVATE ORCHARD_WITH_FIZMO_RANDOM)
+elseif(TARGET fizmo::fizmo)
+    target_link_libraries(orchard_heartwood PRIVATE fizmo::fizmo)
+    target_compile_definitions(orchard_heartwood PRIVATE ORCHARD_WITH_FIZMO_RANDOM)
+endif()
+
 if(TARGET fizmo::physics)
     set(ORCHARD_FIZMO_PHYSICS fizmo::physics)
 else()
@@ -207,7 +234,7 @@ if(NOT ORCHARD_BUILD_EDITOR)
 endif()
 
 if(ANDROID)
-    add_library(orchard_android SHARED Editor/orchard.cpp Editor/gpu_view.cpp Editor/graph_view.cpp Editor/particle_view.cpp Editor/terrain_view.cpp Editor/particle_textures.cpp Editor/model_view.cpp Editor/builtin_models.cpp Editor/axes_preview.cpp)
+    add_library(orchard_android SHARED Editor/orchard.cpp Editor/gpu_view.cpp Editor/graph_view.cpp Editor/particle_view.cpp Editor/terrain_view.cpp Editor/particle_textures.cpp Editor/model_view.cpp Editor/builtin_models.cpp Editor/axes_preview.cpp Editor/sound_player.cpp)
     target_link_libraries(orchard_android PRIVATE orchard_heartwood orchard_xylem orchard_chlorophyll grove::core grove::runtime)
     target_link_options(orchard_android PRIVATE
         "LINKER:-z,max-page-size=16384"
@@ -221,7 +248,7 @@ if(ANDROID)
     return()
 endif()
 
-add_executable(orchard-host Editor/orchard.cpp Editor/gpu_view.cpp Editor/graph_view.cpp Editor/particle_view.cpp Editor/terrain_view.cpp Editor/particle_textures.cpp Editor/model_view.cpp Editor/builtin_models.cpp Editor/axes_preview.cpp)
+add_executable(orchard-host Editor/orchard.cpp Editor/gpu_view.cpp Editor/graph_view.cpp Editor/particle_view.cpp Editor/terrain_view.cpp Editor/particle_textures.cpp Editor/model_view.cpp Editor/builtin_models.cpp Editor/axes_preview.cpp Editor/sound_player.cpp)
 target_link_libraries(orchard-host PRIVATE orchard_heartwood orchard_xylem orchard_chlorophyll grove::core grove::runtime)
 target_compile_definitions(orchard-host PRIVATE "ORCHARD_SOURCE_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/UI\"")
 orchard_warnings(orchard-host)

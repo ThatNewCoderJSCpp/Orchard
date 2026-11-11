@@ -139,6 +139,8 @@ public:
     void to_graph(float x, float y, float& wx, float& wy) const;
 
     static std::vector<GraphCategory> catalog();
+    static std::vector<GraphCategory> catalog(graph::GraphKind kind);
+    bool is_brain() const noexcept { return m_graph.is_brain(); }
     int add_node(const std::string& type, float x, float y);
     int add_node_centered(const std::string& type);
     bool remove_node(int node);
