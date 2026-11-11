@@ -6,6 +6,7 @@
 #include <orchard/solid.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -312,6 +313,48 @@ void test_script_runtime() {
     const orchard::ScriptBuildResult broken = runtime.build(*project, "Scripts/broken.wal");
     check(!broken.ok && broken.log.find("Scripts/broken.wal") != std::string::npos, "build errors name the script: " + broken.log);
     fs::remove_all(dir, ec);
+}
+
+void test_script_keys() {
+    orchard::ScriptRuntime names;
+    names.set_key("Space", true);
+    names.set_key("LeftShift", true);
+    check(names.key_down("space") && names.key_down("Space") && names.key_down("shift"), "without a resolver, keys are kept by name");
+    check(names.physical_key_down("Space") && names.either_key_down("space"), "without a resolver, every kind reads the name");
+    names.set_key("Space", false);
+    check(!names.key_down("space") && names.key_down("shift"), "releasing one key by name keeps the others");
+    names.clear_keys();
+    check(!names.key_down("shift"), "clear_keys releases everything");
+
+    enum : int { Q = 17, W = 23, Z = 26, LeftShift = 113, RightShift = 114, Space = 65 };
+    orchard::ScriptRuntime codes;
+    codes.set_key_resolver([](std::string_view n) {
+        std::string l(n);
+        for (char& c : l) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (l == "q") return static_cast<int>(Q);
+        if (l == "w") return static_cast<int>(W);
+        if (l == "z") return static_cast<int>(Z);
+        if (l == "space") return static_cast<int>(Space);
+        if (l == "leftshift") return static_cast<int>(LeftShift);
+        if (l == "rightshift") return static_cast<int>(RightShift);
+        return 0;
+    });
+    codes.set_key(W, Z, true);
+    check(codes.key_down("w") && codes.logical_key_down("W") && !codes.key_down("z"), "key_down goes by the layout");
+    check(codes.physical_key_down("z") && !codes.physical_key_down("w"), "physical_key_down goes by position");
+    check(codes.either_key_down("w") && codes.either_key_down("z") && !codes.either_key_down("q"), "either_key_down takes both");
+    check(codes.logical_key_down(static_cast<int>(W)) && codes.physical_key_down(static_cast<int>(Z)), "keys can be read by code");
+    codes.set_key(Z, Z, false);
+    check(!codes.key_down("w") && !codes.physical_key_down("z"), "releasing a key releases its layout key too");
+    codes.set_key(RightShift, RightShift, true);
+    check(codes.key_down("shift") && codes.physical_key_down("Shift") && codes.key_down("RightShift") && codes.key_down("LeftShift"), "shift, LeftShift and RightShift all mean either Shift key, as before");
+    codes.set_key("Space", true);
+    check(codes.key_down("space") && codes.physical_key_down(" "), "a key set by name still works with a resolver");
+    codes.set_key(Q, W, true);
+    codes.set_key(W, W, true);
+    check(codes.key_down("w") && !codes.key_down("q"), "a key held again with a new layout key moves to it");
+    codes.clear_keys();
+    check(!codes.key_down("shift") && !codes.key_down("space") && !codes.physical_key_down("w"), "clear_keys releases every code");
 }
 
 void test_native_hooks() {
@@ -1986,6 +2029,7 @@ int main() {
     test_textures_sections_and_fluids();
     test_entity_templates_and_emitters();
     test_light_animation();
+    test_script_keys();
     test_project_physics_and_lighting();
     test_graph_view();
     test_models_and_animation();

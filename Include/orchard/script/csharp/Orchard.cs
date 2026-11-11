@@ -107,6 +107,9 @@ namespace Orchard
         public static double Dt { get; internal set; }
         public static bool Is2D => Native.Is2D();
         public static bool KeyDown(string key) => Native.KeyDown(key);
+        public static bool LogicalKeyDown(string key) => Native.KeyState(key, Native.KeyLogical);
+        public static bool PhysicalKeyDown(string key) => Native.KeyState(key, Native.KeyPhysical);
+        public static bool EitherKeyDown(string key) => Native.KeyState(key, Native.KeyEither);
         public static Entity Find(string name) => new Entity(Native.Find(name));
         public static Entity Spawn(string name) => new Entity(Native.Spawn(name, 0));
         public static Entity Spawn(string name, Entity parent) => new Entity(Native.Spawn(name, parent?.Id ?? 0));
@@ -210,6 +213,7 @@ namespace Orchard
         public delegate* unmanaged<int, ulong, ulong, double*, int, byte*, ulong> game_entity;
         public delegate* unmanaged<int, ulong, ulong, double*, int, byte*, byte*> game_text;
         public delegate* unmanaged<int, ulong, ulong, double*, int, byte*, double*, int, int> game_values;
+        public delegate* unmanaged<byte*, int, int> key_state;
     }
 
     internal static unsafe class Native
@@ -224,6 +228,9 @@ namespace Orchard
         public const int PushImpulse = 0;
         public const int PushForce = 1;
         public const int PushTorque = 2;
+        public const int KeyLogical = 0;
+        public const int KeyPhysical = 1;
+        public const int KeyEither = 2;
 
         public static HostApi* Host;
 
@@ -346,6 +353,12 @@ namespace Orchard
         public static bool KeyDown(string key)
         {
             fixed (byte* p = Utf8(key)) return Host->key_down(p) != 0;
+        }
+
+        public static bool KeyState(string key, int kind)
+        {
+            if (Host->size < (nuint)sizeof(HostApi) || Host->key_state == null) return KeyDown(key);
+            fixed (byte* p = Utf8(key)) return Host->key_state(p, kind) != 0;
         }
 
         public static bool Touching(ulong a, ulong b) => Host->touching(a, b) != 0;

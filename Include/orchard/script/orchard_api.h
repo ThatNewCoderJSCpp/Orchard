@@ -237,6 +237,10 @@ extern "C" {
 #define ORCHARD_GAME_SECURE_HEX 342
 #define ORCHARD_GAME_SECURE_UUID 343
 
+#define ORCHARD_KEY_LOGICAL 0
+#define ORCHARD_KEY_PHYSICAL 1
+#define ORCHARD_KEY_EITHER 2
+
 typedef unsigned long long orchard_entity;
 
 typedef struct orchard_host_api {
@@ -270,6 +274,7 @@ typedef struct orchard_host_api {
     orchard_entity (*game_entity)(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text);
     const char* (*game_text)(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text);
     int (*game_values)(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text, double* out, int capacity);
+    int (*key_state)(const char* key, int kind);
 } orchard_host_api;
 
 #define ORCHARD_HOST_HAS(host, member) ((host) && (host)->size >= offsetof(orchard_host_api, member) + sizeof((host)->member) && (host)->member)

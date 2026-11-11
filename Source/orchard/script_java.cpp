@@ -151,6 +151,10 @@ void JNICALL n_set_vec(JNIEnv*, jclass, jlong e, jint which, jdouble x, jdouble 
 void JNICALL n_push(JNIEnv*, jclass, jlong e, jint kind, jdouble x, jdouble y, jdouble z) { host().push(static_cast<orchard_entity>(e), kind, x, y, z); }
 jboolean JNICALL n_has_body(JNIEnv*, jclass, jlong e) { return host().has_body(static_cast<orchard_entity>(e)) ? JNI_TRUE : JNI_FALSE; }
 jboolean JNICALL n_key_down(JNIEnv* env, jclass, jstring key) { return host().key_down(utf(env, key).c_str()) ? JNI_TRUE : JNI_FALSE; }
+jboolean JNICALL n_key_state(JNIEnv* env, jclass, jstring key, jint kind) {
+    const std::string k = utf(env, key);
+    return (ORCHARD_HOST_HAS(&host(), key_state) ? host().key_state(k.c_str(), kind) : host().key_down(k.c_str())) ? JNI_TRUE : JNI_FALSE;
+}
 jboolean JNICALL n_touching(JNIEnv*, jclass, jlong a, jlong b) { return host().touching(static_cast<orchard_entity>(a), static_cast<orchard_entity>(b)) ? JNI_TRUE : JNI_FALSE; }
 
 struct Jvm {
@@ -270,6 +274,7 @@ JNIEnv* start_jvm(const ScriptToolchain& tools, const std::string& api_dir, std:
         {const_cast<char*>("push"), const_cast<char*>("(JIDDD)V"), reinterpret_cast<void*>(&n_push)},
         {const_cast<char*>("hasBody"), const_cast<char*>("(J)Z"), reinterpret_cast<void*>(&n_has_body)},
         {const_cast<char*>("keyDown"), const_cast<char*>("(Ljava/lang/String;)Z"), reinterpret_cast<void*>(&n_key_down)},
+        {const_cast<char*>("keyState"), const_cast<char*>("(Ljava/lang/String;I)Z"), reinterpret_cast<void*>(&n_key_state)},
         {const_cast<char*>("touching"), const_cast<char*>("(JJ)Z"), reinterpret_cast<void*>(&n_touching)},
         {const_cast<char*>("game"), const_cast<char*>("(IJJ[DLjava/lang/String;)D"), reinterpret_cast<void*>(&n_game)},
         {const_cast<char*>("gameEntity"), const_cast<char*>("(IJJ[DLjava/lang/String;)J"), reinterpret_cast<void*>(&n_game_entity)},

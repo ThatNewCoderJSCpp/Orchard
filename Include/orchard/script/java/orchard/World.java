@@ -12,6 +12,12 @@ public final class World extends Lib {
     public static double dt() { return dt; }
     public static boolean is2d() { return Native.is2d(); }
     public static boolean keyDown(String key) { return Native.keyDown(key); }
+    public static final int KEY_LOGICAL = 0;
+    public static final int KEY_PHYSICAL = 1;
+    public static final int KEY_EITHER = 2;
+    public static boolean logicalKeyDown(String key) { return Native.keyState(key, KEY_LOGICAL); }
+    public static boolean physicalKeyDown(String key) { return Native.keyState(key, KEY_PHYSICAL); }
+    public static boolean eitherKeyDown(String key) { return Native.keyState(key, KEY_EITHER); }
     public static Entity find(String name) { return new Entity(Native.find(name)); }
     public static Entity spawn(String name) { return new Entity(Native.spawn(name, 0)); }
     public static Entity spawn(String name, Entity parent) { return new Entity(Native.spawn(name, parent.id())); }

@@ -365,6 +365,12 @@ int host_key_down(const char* key) {
     return g_runtime && key && rt().key_down(key) ? 1 : 0;
 }
 
+int host_key_state(const char* key, int kind) {
+    if (!g_runtime || !key) return 0;
+    const ScriptRuntime::KeyKind k = kind == ORCHARD_KEY_PHYSICAL ? ScriptRuntime::KeyKind::physical : kind == ORCHARD_KEY_EITHER ? ScriptRuntime::KeyKind::either : ScriptRuntime::KeyKind::logical;
+    return rt().key_state(key, k) ? 1 : 0;
+}
+
 int host_touching(orchard_entity a, orchard_entity b) {
     return g_runtime && rt().physics() && rt().physics()->touching(entity_of(a), entity_of(b)) ? 1 : 0;
 }
@@ -966,6 +972,7 @@ const orchard_host_api& host_table() {
         t.game_entity = &host_game_entity;
         t.game_text = &host_game_text;
         t.game_values = &host_game_values;
+        t.key_state = &host_key_state;
         return t;
     }();
     return table;
@@ -1413,6 +1420,11 @@ std::string ScriptRuntime::key_name(const std::string& key) {
 }
 
 void ScriptRuntime::set_key(const std::string& key, bool down) {
+    const int code = key_code(key);
+    if (code > 0) {
+        set_key(code, code, down);
+        return;
+    }
     const std::string k = key_name(key);
     if (down) {
         m_keys.insert(key);
@@ -1421,6 +1433,79 @@ void ScriptRuntime::set_key(const std::string& key, bool down) {
         m_keys.erase(key);
         m_keys.erase(k);
     }
+}
+
+void ScriptRuntime::set_key(int logical, int physical, bool down) {
+    if (physical <= 0 || physical >= kKeyCodes) physical = logical;
+    if (logical <= 0 || logical >= kKeyCodes) logical = physical;
+    if (physical <= 0 || physical >= kKeyCodes) return;
+    const std::size_t p = static_cast<std::size_t>(physical);
+
+    auto release_logical = [this](std::size_t l) {
+        if (l == 0 || m_logical_count[l] == 0) return;
+        if (--m_logical_count[l] == 0) m_logical_down.reset(l);
+    };
+
+    if (down) {
+        if (m_physical_down.test(p) && m_logical_of[p] == static_cast<std::uint16_t>(logical)) return;
+        if (m_physical_down.test(p)) release_logical(m_logical_of[p]);
+        m_physical_down.set(p);
+        m_logical_of[p] = static_cast<std::uint16_t>(logical);
+        const std::size_t l = static_cast<std::size_t>(logical);
+        if (m_logical_count[l]++ == 0) m_logical_down.set(l);
+        return;
+    }
+
+    if (!m_physical_down.test(p)) return;
+    m_physical_down.reset(p);
+    release_logical(m_logical_of[p]);
+    m_logical_of[p] = 0;
+}
+
+void ScriptRuntime::clear_keys() {
+    m_keys.clear();
+    m_logical_down.reset();
+    m_physical_down.reset();
+    m_logical_of.fill(0);
+    m_logical_count.fill(0);
+}
+
+void ScriptRuntime::set_key_resolver(KeyResolver resolver) {
+    m_key_resolver = std::move(resolver);
+    auto code = [this](std::string_view name) { return m_key_resolver ? m_key_resolver(name) : 0; };
+    m_shift_codes = { code("LeftShift"), code("RightShift") };
+    m_ctrl_codes = { code("LeftControl"), code("RightControl") };
+    m_alt_codes = { code("LeftAlt"), code("RightAlt") };
+}
+
+int ScriptRuntime::key_code(const std::string& key) const {
+    if (!m_key_resolver || key.empty()) return 0;
+    int code = m_key_resolver(key);
+    if (code <= 0) code = m_key_resolver(key_name(key));
+    return code > 0 && code < kKeyCodes ? code : 0;
+}
+
+bool ScriptRuntime::code_down(int code, KeyKind kind) const {
+    switch (kind) {
+        case KeyKind::physical: return physical_key_down(code);
+        case KeyKind::either:   return physical_key_down(code) || logical_key_down(code);
+        default:                return logical_key_down(code);
+    }
+}
+
+bool ScriptRuntime::group_down(const std::array<int, 2>& codes, KeyKind kind) const {
+    return code_down(codes[0], kind) || code_down(codes[1], kind);
+}
+
+bool ScriptRuntime::key_state(const std::string& key, KeyKind kind) const {
+    if (m_keys.count(key) > 0) return true;
+    const std::string k = key_name(key);
+    if (m_keys.count(k) > 0) return true;
+    if (!m_key_resolver) return false;
+    if (k == "shift") return group_down(m_shift_codes, kind);
+    if (k == "ctrl") return group_down(m_ctrl_codes, kind);
+    if (k == "alt") return group_down(m_alt_codes, kind);
+    return code_down(key_code(key), kind);
 }
 
 void ScriptRuntime::log(const std::string& message, bool error) const {

@@ -343,6 +343,16 @@ int o_key_down(lua_State* L) {
     return 1;
 }
 
+int key_state(lua_State* L, int kind) {
+    const char* key = luaL_checkstring(L, 1);
+    lua_pushboolean(L, ORCHARD_HOST_HAS(&host(), key_state) ? host().key_state(key, kind) : host().key_down(key));
+    return 1;
+}
+
+int o_logical_key_down(lua_State* L) { return key_state(L, ORCHARD_KEY_LOGICAL); }
+int o_physical_key_down(lua_State* L) { return key_state(L, ORCHARD_KEY_PHYSICAL); }
+int o_either_key_down(lua_State* L) { return key_state(L, ORCHARD_KEY_EITHER); }
+
 int o_find(lua_State* L) {
     push_entity(L, host().find(luaL_checkstring(L, 1)));
     return 1;
@@ -582,7 +592,7 @@ void open_orchard(lua_State* L) {
 
     static const luaL_Reg api[] = {
         {"vec", o_vec}, {"log", o_log}, {"warn", o_warn}, {"time", o_time}, {"dt", o_dt}, {"is_2d", o_is_2d},
-        {"key_down", o_key_down}, {"find", o_find}, {"spawn", o_spawn}, {"self", o_self},
+        {"key_down", o_key_down}, {"logical_key_down", o_logical_key_down}, {"physical_key_down", o_physical_key_down}, {"either_key_down", o_either_key_down}, {"find", o_find}, {"spawn", o_spawn}, {"self", o_self},
         {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {"instantiate", o_instantiate}, {"particles", o_particles}, {"animation", o_animation}, {"fluid", o_fluid}, {"_game", o_game}, {"_game_entity", o_game_entity}, {"_game_text", o_game_text}, {"_game_values", o_game_values}, {nullptr, nullptr}};
     luaL_newlib(L, api);
     luaL_getmetatable(L, k_entity_meta);

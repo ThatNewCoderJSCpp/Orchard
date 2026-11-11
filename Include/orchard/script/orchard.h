@@ -30,6 +30,10 @@ static inline void orchard_warn(const char* message) { orchard_host()->log(messa
 static inline double orchard_time(void) { return orchard_host()->time(); }
 static inline int orchard_is_2d(void) { return orchard_host()->is_2d(); }
 static inline int orchard_key_down(const char* key) { return orchard_host()->key_down(key); }
+static inline int orchard_key_state(const char* key, int kind) { return ORCHARD_HOST_HAS(orchard_host(), key_state) ? orchard_host()->key_state(key, kind) : orchard_host()->key_down(key); }
+static inline int orchard_logical_key_down(const char* key) { return orchard_key_state(key, ORCHARD_KEY_LOGICAL); }
+static inline int orchard_physical_key_down(const char* key) { return orchard_key_state(key, ORCHARD_KEY_PHYSICAL); }
+static inline int orchard_either_key_down(const char* key) { return orchard_key_state(key, ORCHARD_KEY_EITHER); }
 static inline orchard_entity orchard_find(const char* name) { return orchard_host()->find(name); }
 static inline orchard_entity orchard_spawn(const char* name, orchard_entity parent) { return orchard_host()->spawn(name, parent); }
 static inline orchard_entity orchard_instantiate(const char* entity_template, double x, double y, double z, orchard_entity parent) { return ORCHARD_HOST_HAS(orchard_host(), instantiate) ? orchard_host()->instantiate(entity_template, x, y, z, parent) : 0; }

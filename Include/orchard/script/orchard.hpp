@@ -18,6 +18,9 @@ inline double dt() { return World::dt(); }
 inline double time() { return World::time(); }
 inline bool is_2d() { return World::is_2d(); }
 inline bool key_down(const std::string& key) { return World::key_down(key); }
+inline bool logical_key_down(const std::string& key) { return World::logical_key_down(key); }
+inline bool physical_key_down(const std::string& key) { return World::physical_key_down(key); }
+inline bool either_key_down(const std::string& key) { return World::either_key_down(key); }
 inline Entity self() { return Entity::current(); }
 inline Entity find(const std::string& name) { return World::find(name); }
 inline Entity spawn(const std::string& name) { return World::spawn(name); }

@@ -34,6 +34,7 @@ final class Native {
     static native void push(long entity, int kind, double x, double y, double z);
     static native boolean hasBody(long entity);
     static native boolean keyDown(String key);
+    static native boolean keyState(String key, int kind);
     static native boolean touching(long entity, long other);
     static native double game(int op, long entity, long other, double[] args, String text);
     static native long gameEntity(int op, long entity, long other, double[] args, String text);

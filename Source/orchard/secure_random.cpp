@@ -15,10 +15,12 @@
 #endif
 #include <windows.h>
 #include <bcrypt.h>
-#elif defined(__linux__) || defined(__ANDROID__)
+#elif defined(__ANDROID__) || defined(__APPLE__)
+#include <stdlib.h>
+#elif defined(__linux__)
 #include <cerrno>
 #include <sys/random.h>
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #include <unistd.h>
 #endif
 
@@ -43,8 +45,11 @@ bool os_entropy(void* data, std::size_t size) {
         size -= part;
     }
     return true;
+#elif defined(__ANDROID__) || defined(__APPLE__)
+    arc4random_buf(out, size);
+    return true;
 #else
-#if defined(__linux__) || defined(__ANDROID__)
+#if defined(__linux__)
     while (size > 0) {
         const ssize_t got = getrandom(out, size, 0);
         if (got < 0) {
@@ -55,7 +60,7 @@ bool os_entropy(void* data, std::size_t size) {
         size -= static_cast<std::size_t>(got);
     }
     if (size == 0) return true;
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
     while (size > 0) {
         const std::size_t part = size > 256 ? 256 : size;
         if (getentropy(out, part) != 0) break;

@@ -2697,7 +2697,7 @@ viewport.on("wheel", [](grove::Event&: e) -> void {
 viewport.on("key_down", [](grove::Event&: e) -> void {
     if (mode == "playing") then {
         e.prevent_default();
-        call("key", e.key() + "\t1");
+        call("key", e.key() + "\t1\t" + e.key_code().to_string() + "\t" + e.physical_key_code().to_string());
     } else if (fly_key(e, true)) then {
         e.prevent_default();
     } else then {
@@ -2707,6 +2707,9 @@ viewport.on("key_down", [](grove::Event&: e) -> void {
 
 viewport.on("blur", [](grove::Event&: e) -> void {
     call("fly_key", "*\t0");
+    if (mode == "playing") then {
+        call("key", "*\t0");
+    }
 });
 
 grove::get_by_id("tree").on("key_down", [](grove::Event&: e) -> void {
@@ -2715,7 +2718,7 @@ grove::get_by_id("tree").on("key_down", [](grove::Event&: e) -> void {
 
 viewport.on("key_up", [](grove::Event&: e) -> void {
     if (mode == "playing") then {
-        call("key", e.key() + "\t0");
+        call("key", e.key() + "\t0\t" + e.key_code().to_string() + "\t" + e.physical_key_code().to_string());
     } else then {
         fly_key(e, false);
     }

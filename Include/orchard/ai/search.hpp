@@ -1,6 +1,9 @@
 #ifndef ORCHARD_AI_SEARCH_HPP
 #define ORCHARD_AI_SEARCH_HPP
 
+#include "search_result.hpp"
+#include "parallel_search.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -15,14 +18,6 @@
 
 namespace orchard {
 namespace ai {
-
-template <class Node>
-struct SearchResult {
-    std::vector<Node> path;
-    double cost = 0.0;
-    bool found = false;
-    std::size_t expanded = 0;
-};
 
 template <class Node, class Hash = std::hash<Node>, class Neighbors, class Heuristic, class Goal>
 SearchResult<Node> astar(const Node& start, Goal is_goal, Neighbors neighbors, Heuristic heuristic, std::size_t max_expand = 1000000, double heuristic_weight = 1.0) {
@@ -208,6 +203,9 @@ public:
         return astar<Cell, CellHash>(from, [&](const Cell& c) { return c == to; }, [&](const Cell& c, auto&& emit) { neighbors(c, emit); }, h, max_expand);
     }
 
+    SearchResult<Cell> find_breadth_first(Cell from, Cell to, const ParallelSearchOptions& options = {}) const { return find_runners(from, to, options, false); }
+    SearchResult<Cell> find_depth_first(Cell from, Cell to, const ParallelSearchOptions& options = {}) const { return find_runners(from, to, options, true); }
+
     template <class Emit>
     void neighbors(const Cell& c, Emit&& emit) const {
         static const int dirs[8][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
@@ -267,6 +265,35 @@ public:
 
 private:
     std::size_t at(int x, int y) const { return static_cast<std::size_t>(y) * static_cast<std::size_t>(m_w) + static_cast<std::size_t>(x); }
+    Cell cell_at(std::size_t i) const { return Cell{static_cast<int>(i % static_cast<std::size_t>(m_w)), static_cast<int>(i / static_cast<std::size_t>(m_w))}; }
+
+    double step_cost(const Cell& a, const Cell& b) const {
+        const bool diag = a.x != b.x && a.y != b.y;
+        return (diag ? 1.41421356 : 1.0) * (cost(b.x, b.y) + danger(b.x, b.y) * danger_weight);
+    }
+
+    SearchResult<Cell> find_runners(Cell from, Cell to, const ParallelSearchOptions& options, bool depth) const {
+        if (!walkable(from.x, from.y) || !walkable(to.x, to.y)) return {};
+        const std::size_t goal = at(to.x, to.y);
+        auto is_goal = [goal](std::size_t n) { return n == goal; };
+        auto next = [this](std::size_t n, auto&& emit) {
+            neighbors(cell_at(n), [&](const Cell& v, double c) { emit(at(v.x, v.y), c); });
+        };
+        const SearchResult<std::size_t> r = depth ? parallel_depth_first_indexed(m_cost.size(), at(from.x, from.y), is_goal, next, options)
+                                                  : parallel_breadth_first_indexed(m_cost.size(), at(from.x, from.y), is_goal, next, options);
+        SearchResult<Cell> out;
+        out.found = r.found;
+        out.expanded = r.expanded;
+        out.runners = r.runners;
+        out.loops = r.loops;
+        out.collisions = r.collisions;
+        out.revisits = r.revisits;
+        out.winner = r.winner;
+        out.path.reserve(r.path.size());
+        for (std::size_t i : r.path) out.path.push_back(cell_at(i));
+        for (std::size_t i = 1; i < out.path.size(); ++i) out.cost += step_cost(out.path[i - 1], out.path[i]);
+        return out;
+    }
 
     int m_w = 0;
     int m_h = 0;

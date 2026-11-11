@@ -8,6 +8,8 @@
 #include "project.hpp"
 #include "scene.hpp"
 
+#include <array>
+#include <bitset>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -15,6 +17,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace orchard {
@@ -165,7 +168,13 @@ public:
     void set_log(Log log) { m_log = std::move(log); }
     void set_physics(ScriptPhysics* physics) { m_physics = physics; }
     void set_key(const std::string& key, bool down);
-    void clear_keys() { m_keys.clear(); }
+    void set_key(int logical, int physical, bool down);
+    void clear_keys();
+
+    using KeyResolver = std::function<int(std::string_view name)>;
+    void set_key_resolver(KeyResolver resolver);
+    bool has_key_resolver() const { return static_cast<bool>(m_key_resolver); }
+    int key_code(const std::string& key) const;
 
     void add_language(std::unique_ptr<ScriptLanguage> language);
     ScriptLanguage* language_for(const std::string& script) const;
@@ -189,7 +198,15 @@ public:
     std::size_t instance_count() const { return m_instances.size(); }
     Scene* scene() const { return m_scene; }
     ScriptPhysics* physics() const { return m_physics; }
-    bool key_down(const std::string& key) const { return m_keys.count(key) > 0 || m_keys.count(key_name(key)) > 0; }
+    bool key_down(const std::string& key) const { return logical_key_down(key); }
+    bool logical_key_down(const std::string& key) const { return key_state(key, KeyKind::logical); }
+    bool physical_key_down(const std::string& key) const { return key_state(key, KeyKind::physical); }
+    bool either_key_down(const std::string& key) const { return key_state(key, KeyKind::either); }
+    bool logical_key_down(int code) const { return code > 0 && code < kKeyCodes && m_logical_down.test(static_cast<std::size_t>(code)); }
+    bool physical_key_down(int code) const { return code > 0 && code < kKeyCodes && m_physical_down.test(static_cast<std::size_t>(code)); }
+
+    enum class KeyKind { logical = 0, physical = 1, either = 2 };
+    bool key_state(const std::string& key, KeyKind kind) const;
     static std::string key_name(const std::string& key);
     void log(const std::string& message, bool error) const;
 
@@ -273,6 +290,17 @@ private:
     std::string m_text_buffer;
     int m_call_depth = 0;
     std::set<std::string> m_keys;
+    static constexpr int kKeyCodes = 512;
+    KeyResolver m_key_resolver;
+    std::bitset<kKeyCodes> m_logical_down;
+    std::bitset<kKeyCodes> m_physical_down;
+    std::array<std::uint16_t, kKeyCodes> m_logical_of{};
+    std::array<std::uint8_t, kKeyCodes> m_logical_count{};
+    std::array<int, 2> m_shift_codes{};
+    std::array<int, 2> m_ctrl_codes{};
+    std::array<int, 2> m_alt_codes{};
+    bool group_down(const std::array<int, 2>& codes, KeyKind kind) const;
+    bool code_down(int code, KeyKind kind) const;
     std::map<std::string, ScriptBuildResult> m_built;
     std::map<std::string, std::unique_ptr<Module>> m_modules;
     std::vector<std::unique_ptr<ScriptLanguage>> m_languages;

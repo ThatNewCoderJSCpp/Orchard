@@ -137,6 +137,10 @@ public:
     static double time() { return detail::host() ? detail::host()->time() : 0.0; }
     static bool is_2d() { return detail::host() && detail::host()->is_2d() != 0; }
     static bool key_down(const std::string& key) { return detail::host() && detail::host()->key_down(key.c_str()) != 0; }
+    static bool key_state(const std::string& key, int kind) { return ORCHARD_HOST_HAS(detail::host(), key_state) ? detail::host()->key_state(key.c_str(), kind) != 0 : key_down(key); }
+    static bool logical_key_down(const std::string& key) { return key_state(key, ORCHARD_KEY_LOGICAL); }
+    static bool physical_key_down(const std::string& key) { return key_state(key, ORCHARD_KEY_PHYSICAL); }
+    static bool either_key_down(const std::string& key) { return key_state(key, ORCHARD_KEY_EITHER); }
     static Entity find(const std::string& name) { return detail::host() ? Entity(detail::host()->find(name.c_str())) : Entity(); }
     static Entity spawn(const std::string& name) { return detail::host() ? Entity(detail::host()->spawn(name.c_str(), 0)) : Entity(); }
     static Entity spawn_child(const std::string& name, const Entity& parent) { return detail::host() ? Entity(detail::host()->spawn(name.c_str(), parent.id())) : Entity(); }

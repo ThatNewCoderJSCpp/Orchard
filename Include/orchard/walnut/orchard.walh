@@ -29,6 +29,9 @@ extern "C++" from "<orchard/script/script_api.hpp>" {
         static function time() -> short float;
         static function is_2d() -> bool;
         static function key_down(const string&: key) -> bool;
+        static function logical_key_down(const string&: key) -> bool;
+        static function physical_key_down(const string&: key) -> bool;
+        static function either_key_down(const string&: key) -> bool;
         static function find(const string&: name) -> NativeEntity;
         static function spawn(const string&: name) -> NativeEntity;
         static function spawn_child(const string&: name, const NativeEntity&: parent) -> NativeEntity;
@@ -641,6 +644,18 @@ function is_2d() -> bool {
 function key_down(const string&: key) -> bool {
     return NativeWorld::key_down(key);
 } end function key_down
+
+function logical_key_down(const string&: key) -> bool {
+    return NativeWorld::logical_key_down(key);
+} end function logical_key_down
+
+function physical_key_down(const string&: key) -> bool {
+    return NativeWorld::physical_key_down(key);
+} end function physical_key_down
+
+function either_key_down(const string&: key) -> bool {
+    return NativeWorld::either_key_down(key);
+} end function either_key_down
 
 function on_start(function() -> void: fn) -> void {
     NativeWorld::on_start(fn);

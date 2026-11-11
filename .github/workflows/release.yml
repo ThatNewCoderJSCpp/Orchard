@@ -85,8 +85,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config xvfb rpm dpkg-dev file desktop-file-utils \
+          bash .github/scripts/apt-install.sh ninja-build pkg-config xvfb rpm dpkg-dev file desktop-file-utils \
             libx11-dev libxft-dev libxrender-dev libfontconfig1-dev libfreetype-dev \
             libssl-dev libpango1.0-dev libcairo2-dev zlib1g-dev libjpeg-dev \
             libvulkan-dev libgl-dev
@@ -146,7 +145,7 @@ jobs:
 
       - name: Test the .deb
         run: |
-          sudo apt-get install -y ./pkg/Orchard-*.deb
+          bash .github/scripts/apt-install.sh ./pkg/Orchard-*.deb
           test -L /usr/bin/orchard
           desktop-file-validate /usr/share/applications/orchard.desktop
           test -f /usr/share/icons/hicolor/scalable/apps/orchard.svg
@@ -200,8 +199,8 @@ jobs:
           WALNUT_URL: ${{ needs.version.outputs.walnut_base }}-linux-i686.tar.gz
         run: |
           docker run --rm --platform linux/386 -e ORCHARD_VERSION -e WALNUT_URL -v "$PWD:/src" -w /src i386/debian:bookworm bash -euo pipefail -c '
-            apt-get update
-            apt-get install -y --no-install-recommends ca-certificates curl git g++ cmake ninja-build pkg-config file rpm dpkg-dev binutils unzip zip xz-utils \
+            for i in 1 2 3 4 5; do apt-get -o Acquire::Retries=5 update && break; sleep $((i * 20)); done
+            apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl git g++ cmake ninja-build pkg-config file rpm dpkg-dev binutils unzip zip xz-utils \
               libx11-dev libxft-dev libxrender-dev libfontconfig-dev libfreetype-dev \
               libssl-dev libpango1.0-dev libcairo2-dev zlib1g-dev libjpeg-dev \
               libvulkan-dev libgl-dev
@@ -405,9 +404,11 @@ jobs:
 
       - name: Install build tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build
-          if [ "${{ matrix.wine }}" = "true" ]; then sudo apt-get install -y wine64; fi
+          if [ "${{ matrix.wine }}" = "true" ]; then
+            bash .github/scripts/apt-install.sh ninja-build wine64
+          else
+            bash .github/scripts/apt-install.sh ninja-build || pipx install ninja
+          fi
 
       - name: Cache llvm-mingw
         id: llvm-mingw-cache
@@ -537,8 +538,7 @@ jobs:
 
       - name: Install packaging tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y nsis p7zip-full zip unzip
+          bash .github/scripts/apt-install.sh nsis p7zip-full zip unzip
 
       - uses: actions/download-artifact@v4
         with:
@@ -682,8 +682,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config unzip \
+          bash .github/scripts/apt-install.sh ninja-build pkg-config unzip \
             libx11-dev libxft-dev libxrender-dev libfontconfig1-dev libfreetype-dev \
             libssl-dev libpango1.0-dev libcairo2-dev libharfbuzz-dev zlib1g-dev libjpeg-dev \
             libvulkan-dev libgl-dev

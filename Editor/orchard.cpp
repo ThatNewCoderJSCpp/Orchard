@@ -284,6 +284,7 @@ public:
 
     explicit Session(Log log) : m_log(std::move(log)) {
         m_scripts.set_log(m_log);
+        m_scripts.set_key_resolver([](std::string_view name) { return static_cast<int>(fizmo::input::key_from_name(name.data(), name.size())); });
     }
 
     ~Session() {
@@ -3545,10 +3546,10 @@ private:
         const orchard::Vec3 right = orchard::normalize(orchard::cross(flat_forward, up));
         const orchard::Vec3 forward = c->control == orchard::CameraControl::fly ? look : flat_forward;
         orchard::Vec3 move{};
-        if (keys.key_down("w")) move += forward;
-        if (keys.key_down("s")) move += forward * -1.0f;
-        if (keys.key_down("d")) move += right;
-        if (keys.key_down("a")) move += right * -1.0f;
+        if (keys.physical_key_down("w")) move += forward;
+        if (keys.physical_key_down("s")) move += forward * -1.0f;
+        if (keys.physical_key_down("d")) move += right;
+        if (keys.physical_key_down("a")) move += right * -1.0f;
         const float speed = keys.key_down("shift") ? c->sprint() : c->move_speed;
         xylem::World* world = m_session.world();
         const orchard::Entity rider = m_scene.body_owner(cam);
@@ -3591,8 +3592,8 @@ private:
             return;
         }
         if (c->control == orchard::CameraControl::fly) {
-            if (keys.key_down("e") || keys.key_down("space")) move += up;
-            if (keys.key_down("q")) move += up * -1.0f;
+            if (keys.physical_key_down("e") || keys.key_down("space")) move += up;
+            if (keys.physical_key_down("q")) move += up * -1.0f;
             if (orchard::length(move) > 0.0f) t->position = t->position + orchard::normalize(move) * (speed * dt);
         } else {
             if (orchard::length(move) > 0.0f) {
@@ -3650,11 +3651,11 @@ private:
         orchard::ScriptRuntime& keys = m_session.scripts();
         orchard::Transform* t = m_scene.transform(cam);
         float side = 0.0f;
-        if (keys.key_down("d") || keys.key_down("right")) side += 1.0f;
-        if (keys.key_down("a") || keys.key_down("left")) side -= 1.0f;
+        if (keys.physical_key_down("d") || keys.key_down("right")) side += 1.0f;
+        if (keys.physical_key_down("a") || keys.key_down("left")) side -= 1.0f;
         float lift = 0.0f;
-        if (keys.key_down("w") || keys.key_down("up")) lift += 1.0f;
-        if (keys.key_down("s") || keys.key_down("down")) lift -= 1.0f;
+        if (keys.physical_key_down("w") || keys.key_down("up")) lift += 1.0f;
+        if (keys.physical_key_down("s") || keys.key_down("down")) lift -= 1.0f;
         const float speed = keys.key_down("shift") ? c.sprint() : c.move_speed;
         xylem::World* world = m_session.world();
         const orchard::Entity rider = m_scene.body_owner(cam);
@@ -5621,7 +5622,15 @@ private:
         });
 
         native("key", [this](const std::vector<std::string>& f) {
-            m_session.scripts().set_key(arg(f, 0), arg(f, 1) == "1");
+            const bool down = arg(f, 1) == "1";
+            if (arg(f, 0) == "*" && !down) {
+                m_session.scripts().clear_keys();
+                return std::string("ok");
+            }
+            const int logical = std::atoi(arg(f, 2).c_str());
+            const int physical = std::atoi(arg(f, 3).c_str());
+            if (logical > 0 || physical > 0) m_session.scripts().set_key(logical, physical, down);
+            else m_session.scripts().set_key(arg(f, 0), down);
             return std::string("ok");
         });
 
