@@ -168,6 +168,64 @@ public:
     }
     static void clear_particles(const Entity& e) { if (ORCHARD_HOST_HAS(detail::host(), particles)) detail::host()->particles(e.id(), ORCHARD_PARTICLES_CLEAR, 0); }
 
+    static double game(long long op, const Entity& e, const Entity& other, const std::vector<double>& args, const std::string& text) {
+        return ORCHARD_HOST_HAS(detail::host(), game) ? detail::host()->game(static_cast<int>(op), e.id(), other.id(), args.empty() ? nullptr : args.data(), static_cast<int>(args.size()), text.c_str()) : 0.0;
+    }
+    static Entity game_entity(long long op, const Entity& e, const Entity& other, const std::vector<double>& args, const std::string& text) {
+        return ORCHARD_HOST_HAS(detail::host(), game_entity) ? Entity(detail::host()->game_entity(static_cast<int>(op), e.id(), other.id(), args.empty() ? nullptr : args.data(), static_cast<int>(args.size()), text.c_str())) : Entity();
+    }
+    static double health(const Entity& e) { return game(ORCHARD_GAME_HEALTH, e, Entity(), {}, std::string()); }
+    static double max_health(const Entity& e) { return game(ORCHARD_GAME_MAX_HEALTH, e, Entity(), {}, std::string()); }
+    static bool has_health(const Entity& e) { return game(ORCHARD_GAME_HAS_HEALTH, e, Entity(), {}, std::string()) != 0.0; }
+    static void set_health(const Entity& e, double value) { game(ORCHARD_GAME_SET_HEALTH, e, Entity(), {value}, std::string()); }
+    static void set_max_health(const Entity& e, double value) { game(ORCHARD_GAME_SET_MAX_HEALTH, e, Entity(), {value}, std::string()); }
+    static double add_health(const Entity& e, double amount) { return game(ORCHARD_GAME_HEAL, e, Entity(), {amount}, std::string()); }
+    static double heal(const Entity& e, double amount) { return add_health(e, amount); }
+    static double damage(const Entity& e, double amount) { return game(ORCHARD_GAME_DAMAGE, e, Entity(), {amount}, std::string()); }
+    static double damage_from(const Entity& e, double amount, const Entity& attacker) { return game(ORCHARD_GAME_DAMAGE, e, attacker, {amount}, std::string()); }
+    static bool kill(const Entity& e) { return game(ORCHARD_GAME_KILL, e, Entity(), {}, std::string()) != 0.0; }
+    static bool is_dead(const Entity& e) { return game(ORCHARD_GAME_IS_DEAD, e, Entity(), {}, std::string()) != 0.0; }
+    static bool revive(const Entity& e) { return game(ORCHARD_GAME_REVIVE, e, Entity(), {-1.0}, std::string()) != 0.0; }
+    static bool revive_with(const Entity& e, double health) { return game(ORCHARD_GAME_REVIVE, e, Entity(), {health}, std::string()) != 0.0; }
+    static void set_invulnerable(const Entity& e, bool on) { game(ORCHARD_GAME_SET_INVULNERABLE, e, Entity(), {on ? 1.0 : 0.0}, std::string()); }
+    static double damage_taken(const Entity& e) { return game(ORCHARD_GAME_DAMAGE_TAKEN, e, Entity(), {}, std::string()); }
+    static bool died(const Entity& e) { return game(ORCHARD_GAME_DIED, e, Entity(), {}, std::string()) != 0.0; }
+    static Entity last_attacker(const Entity& e) { return game_entity(ORCHARD_GAME_LAST_ATTACKER, e, Entity(), {}, std::string()); }
+    static void ignite(const Entity& e, double seconds) { game(ORCHARD_GAME_IGNITE, e, Entity(), {seconds}, std::string()); }
+    static void extinguish(const Entity& e) { game(ORCHARD_GAME_EXTINGUISH, e, Entity(), {}, std::string()); }
+    static bool is_burning(const Entity& e) { return game(ORCHARD_GAME_IS_BURNING, e, Entity(), {}, std::string()) != 0.0; }
+    static long long explode(double x, double y, double z, double radius, double force, double damage) { return static_cast<long long>(game(ORCHARD_GAME_EXPLODE, Entity(), Entity(), {x, y, z, radius, force, damage, 1.0}, std::string())); }
+    static long long explode_by(const Entity& attacker, double x, double y, double z, double radius, double force, double damage) { return static_cast<long long>(game(ORCHARD_GAME_EXPLODE, attacker, Entity(), {x, y, z, radius, force, damage, 1.0}, std::string())); }
+    static long long push_away(double x, double y, double z, double radius, double force) { return static_cast<long long>(game(ORCHARD_GAME_EXPLODE, Entity(), Entity(), {x, y, z, radius, force, 0.0, 0.0}, std::string())); }
+    static Entity play_effect(const std::string& effect, double x, double y, double z, double scale) { return game_entity(ORCHARD_GAME_PLAY_EFFECT, Entity(), Entity(), {x, y, z, scale}, effect); }
+    static Entity attach_effect(const std::string& effect, const Entity& parent, double scale) { return game_entity(ORCHARD_GAME_PLAY_EFFECT, parent, Entity(), {0.0, 0.0, 0.0, scale}, effect); }
+    static void add_tag(const Entity& e, const std::string& tag) { game(ORCHARD_GAME_ADD_TAG, e, Entity(), {}, tag); }
+    static void remove_tag(const Entity& e, const std::string& tag) { game(ORCHARD_GAME_REMOVE_TAG, e, Entity(), {}, tag); }
+    static bool has_tag(const Entity& e, const std::string& tag) { return game(ORCHARD_GAME_HAS_TAG, e, Entity(), {}, tag) != 0.0; }
+    static long long tagged_count(const std::string& tag) { return static_cast<long long>(game(ORCHARD_GAME_TAGGED_COUNT, Entity(), Entity(), {}, tag)); }
+    static Entity tagged_at(const std::string& tag, long long i) { return game_entity(ORCHARD_GAME_TAGGED_AT, Entity(), Entity(), {static_cast<double>(i)}, tag); }
+    static std::vector<Entity> find_tagged(const std::string& tag) {
+        std::vector<Entity> out;
+        const long long n = tagged_count(tag);
+        for (long long i = 0; i < n; ++i) out.push_back(tagged_at(tag, i));
+        return out;
+    }
+    static Entity nearest_tagged(const std::string& tag, const Entity& from) { return game_entity(ORCHARD_GAME_NEAREST_TAGGED, from, Entity(), {}, tag); }
+    static double distance(const Entity& a, const Entity& b) { return game(ORCHARD_GAME_DISTANCE, a, b, {}, std::string()); }
+    static void teleport(const Entity& e, double x, double y, double z) { game(ORCHARD_GAME_TELEPORT, e, Entity(), {x, y, z}, std::string()); }
+    static void look_at(const Entity& e, double x, double y, double z) { game(ORCHARD_GAME_LOOK_AT, e, Entity(), {x, y, z}, std::string()); }
+    static double random(double low, double high) { return game(ORCHARD_GAME_RANDOM, Entity(), Entity(), {low, high}, std::string()); }
+    static long long random_int(long long low, long long high) {
+        const long long r = static_cast<long long>(std::floor(random(static_cast<double>(low), static_cast<double>(high) + 1.0)));
+        return r > high ? high : r;
+    }
+    static double clamp(double v, double low, double high) { return v < low ? low : (v > high ? high : v); }
+    static double lerp(double a, double b, double t) { return a + (b - a) * t; }
+    static double move_towards(double current, double target, double max_step) {
+        const double d = target - current;
+        return d > max_step ? current + max_step : (d < -max_step ? current - max_step : target);
+    }
+
     static Entity raycast(double ox, double oy, double oz, double dx, double dy, double dz, double max_distance) {
         double* hit = last_hit();
         for (int i = 0; i < 7; ++i) hit[i] = 0.0;

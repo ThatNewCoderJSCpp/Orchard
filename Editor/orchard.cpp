@@ -1,5 +1,6 @@
 #include <orchard/orchard.hpp>
 #include <orchard/scripting.hpp>
+#include <orchard/effects.hpp>
 #include <xylem/xylem.hpp>
 #include <chlorophyll/chlorophyll.hpp>
 
@@ -293,6 +294,8 @@ public:
     orchard::ScriptRuntime& scripts() { return m_scripts; }
     xylem::World* world() { return m_world.get(); }
     void set_terrain_source(xylem::TerrainSource source) { m_terrain_source = std::move(source); }
+    void set_play_dimension(std::optional<orchard::Dimension> d) { m_play_dimension = d; }
+    orchard::Dimension play_dimension() const { return m_world ? m_world->dimension() : (m_play_dimension ? *m_play_dimension : (m_scene ? m_scene->dimension() : orchard::Dimension::three_d)); }
 
     void begin(const orchard::Project& project, orchard::Scene& scene) {
         if (m_playing || m_build.valid()) return;
@@ -347,7 +350,10 @@ public:
 private:
     void start_now() {
         if (!m_scene || !m_project) return;
-        m_world = std::make_unique<xylem::World>(m_scene->dimension(), xylem::Settings::for_project(m_project->info()));
+        const orchard::Dimension dim = m_play_dimension ? *m_play_dimension : m_scene->dimension();
+        xylem::Settings settings = xylem::Settings::for_project(m_project->info());
+        if (dim == orchard::Dimension::two_d && m_scene->dimension() == orchard::Dimension::three_d) settings = xylem::Settings::flattened(settings);
+        m_world = std::make_unique<xylem::World>(dim, settings);
         m_world->set_asset_root(m_project->folder());
         if (m_terrain_source) m_world->set_terrain_source(m_terrain_source);
         m_world->build(*m_scene);
@@ -378,6 +384,7 @@ private:
     bool m_playing = false;
     double m_time = 0.0;
     xylem::TerrainSource m_terrain_source;
+    std::optional<orchard::Dimension> m_play_dimension;
 };
 
 class Editor {
@@ -427,6 +434,7 @@ public:
         m_scene = std::move(*s);
         m_selected = orchard::Entity{};
         m_dirty = false;
+        ensure_character_models();
         m_graphs.clear();
         m_graph_open.clear();
         m_graph_close_warned.clear();
@@ -547,10 +555,9 @@ private:
             m_trace_poser.clear();
             m_light_dirty = true;
         }
-        if (m_session.playing() && pref("play.use_camera", "1") == "1") {
-            drive_player_camera(static_cast<float>(f.dt));
-            follow_game_camera();
-        }
+        if (m_session.playing() && pref("play.use_camera", "1") == "1") drive_player_camera(static_cast<float>(f.dt));
+        smooth_bodies_for_drawing();
+        if (m_session.playing() && pref("play.use_camera", "1") == "1") follow_game_camera();
         for (const orchard::ParticleCommand& c : m_session.scripts().take_particle_commands()) m_gpu.particles().command(c.entity, c.action, c.count);
         for (const orchard::ParticleCommand& c : m_particle_commands) m_gpu.particles().command(c.entity, c.action, c.count);
         m_particle_commands.clear();
@@ -567,7 +574,61 @@ private:
         m_gpu.set_fluids(&m_fluid_draws);
         m_gpu.set_texture_folder(m_project ? m_project->folder() : std::string());
         m_gpu.draw(f, m_scene, m_selected, m_view, m_session.playing(), seconds);
+        unsmooth_bodies();
         if (m_gpu.terrain().stats().pending > 0) redraw();
+    }
+
+    std::string group_particle_look(orchard::Entity e) const {
+        std::string seen;
+        for (orchard::Entity c : m_scene.subtree(e)) {
+            const orchard::Emitter* ce = m_scene.emitter(c);
+            if (!ce) continue;
+            const std::string look = orchard::editor::particle_look_of(*ce);
+            if (ce->flat || look == "custom") continue;
+            const orchard::editor::ParticleLook pl = orchard::editor::particle_look_for(ce->texture, ce->preset);
+            if (pl.simple == pl.better && !pl.better_covers && look == "better") continue;
+            if (seen.empty()) seen = look;
+            else if (seen != look) return "mixed";
+        }
+        return seen.empty() ? "mixed" : seen;
+    }
+
+    void smooth_bodies_for_drawing() {
+        m_smoothed.clear();
+        xylem::World* world = m_session.playing() ? m_session.world() : nullptr;
+        if (!world || pref("play.smooth", "1") != "1") return;
+        std::vector<orchard::Entity> todo = m_scene.roots();
+        while (!todo.empty()) {
+            const orchard::Entity e = todo.back();
+            todo.pop_back();
+            orchard::Vec3 pos;
+            orchard::Quat rot;
+            orchard::Transform* t = m_scene.transform(e);
+            if (t && world->has_body(e) && world->render_pose(e, pos, rot)) {
+                m_smoothed.push_back({e, *t});
+                const orchard::Entity parent = m_scene.parent(e);
+                if (m_scene.alive(parent)) {
+                    const orchard::Vec3 pp = xylem::world_position(m_scene, parent);
+                    const orchard::Quat pr = xylem::world_rotation(m_scene, parent);
+                    const orchard::Vec3 ps = xylem::world_scale(m_scene, parent);
+                    const orchard::Quat pinv{-pr.x, -pr.y, -pr.z, pr.w};
+                    const orchard::Vec3 local = orchard::rotate(pinv, pos - pp);
+                    t->position = {ps.x != 0.0f ? local.x / ps.x : local.x, ps.y != 0.0f ? local.y / ps.y : local.y, ps.z != 0.0f ? local.z / ps.z : local.z};
+                    t->rotation = orchard::normalize(pinv * rot);
+                } else {
+                    t->position = pos;
+                    t->rotation = rot;
+                }
+                continue;
+            }
+            for (orchard::Entity c : m_scene.children(e)) todo.push_back(c);
+        }
+    }
+
+    void unsmooth_bodies() {
+        for (const auto& [e, t] : m_smoothed)
+            if (orchard::Transform* now = m_scene.transform(e)) *now = t;
+        m_smoothed.clear();
     }
 
     void moved_view() {
@@ -1622,6 +1683,19 @@ private:
         }
         out += field("script", "Script", "select", m_scene.script(e), options_of(scripts));
 
+        const std::optional<orchard::HumanoidKind> human = orchard::humanoid_kind_of(m_scene, e);
+        const std::string look = orchard::character_style(m_scene, e);
+        if (human || !look.empty()) {
+            group("Character");
+            std::vector<std::pair<std::string, std::string>> looks = {{"", "Colliders only (no mesh)"}};
+            for (const std::string& st : orchard::character_styles()) looks.emplace_back(st, orchard::character_style_label(st));
+            out += field("character_style", "Looks like", "select", look, options_of(looks), "In 3D it's a mesh over the colliders; in 2D it's drawn as pixel art facing the way it moves.");
+            std::vector<std::pair<std::string, std::string>> kinds;
+            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) kinds.emplace_back(orchard::to_string(hk), orchard::humanoid_label(hk));
+            if (!human) kinds.insert(kinds.begin(), {"", "Its own colliders"});
+            out += field("character_colliders", "Colliders", "select", human ? std::string(orchard::to_string(*human)) : std::string(), options_of(kinds), is_physical_player(e) ? "Swapping them keeps the player at 75 kg with no friction." : "");
+        }
+
         group("Physics");
         const orchard::Body* b = m_scene.body(e);
         out += field("has_body", "Rigid body", "bool", yesno(b != nullptr), "", "Off: it doesn't move on its own. Colliders without a body act as walls and floors.");
@@ -1782,7 +1856,8 @@ private:
             out += field("camera.active", "Player view (Play looks through it)", "bool", yesno(cam->active));
             out += field("camera.control", "Built-in controls", "select", orchard::to_string(cam->control), options_of({{"none", "None (scripts move it)"}, {"fly", "Fly (W A S D, Q / E, drag to look)"}, {"walk", "Walk (W A S D, Space jumps, drag to look)"}}));
             if (cam->control != orchard::CameraControl::none) {
-                out += field("camera.move_speed", "Speed (m/s, Shift is 3x)", "float", number(cam->move_speed), "0.5");
+                out += field("camera.move_speed", "Speed (m/s)", "float", number(cam->move_speed), "0.5");
+                out += field("camera.sprint_speed", "Shift speed (m/s, 0 = 3x speed)", "float", number(cam->sprint_speed), "0.5");
                 out += field("camera.mouse_look", "Drag to look around", "bool", yesno(cam->mouse_look));
                 out += field("camera.look_speed", "Look speed (degrees per pixel)", "float", number(cam->look_speed), "0.05");
                 if (cam->control == orchard::CameraControl::walk) {
@@ -1803,6 +1878,34 @@ private:
                 out += field("camera.far_clip", "Farthest it draws (m)", "float", number(cam->far_clip), "10");
             }
             out += field("camera_from_view", "Move it to where the view is now", "button", "1");
+        }
+
+        group("Health and tags");
+        const orchard::Health* hp = m_scene.health(e);
+        out += field("has_health", "Has health (can be hurt, burn, explode)", "bool", yesno(hp != nullptr));
+        if (hp) {
+            out += field("health.value", "Health", "float", number(hp->value), "5");
+            out += field("health.max", "Max health", "float", number(hp->max), "5");
+            out += field("health.regen", "Heals per second", "float", number(hp->regen), "1");
+            if (hp->regen != 0.0f) out += field("health.regen_delay", "Starts healing after (s without damage)", "float", number(hp->regen_delay), "0.5");
+            out += field("health.invulnerable", "Can't be hurt", "bool", yesno(hp->invulnerable));
+            out += field("health.impact_damage", "Hurt by hard hits (0 = off)", "float", number(hp->impact_damage), "0.1");
+            out += field("health.flammable", "Catches fire", "bool", yesno(hp->flammable));
+            if (hp->flammable) out += field("health.burn_damage", "Burn damage per second", "float", number(hp->burn_damage), "1");
+            std::vector<std::pair<std::string, std::string>> deaths;
+            for (orchard::DeathAction a : orchard::death_actions()) deaths.emplace_back(orchard::to_string(a), orchard::death_action_label(a));
+            out += field("health.on_death", "When health runs out", "select", orchard::to_string(hp->on_death), options_of(deaths));
+            if (hp->on_death == orchard::DeathAction::explode) {
+                out += field("health.explode_radius", "Blast radius (m)", "float", number(hp->explode_radius), "0.5");
+                out += field("health.explode_force", "Blast push", "float", number(hp->explode_force), "1000");
+                out += field("health.explode_damage", "Blast damage", "float", number(hp->explode_damage), "5");
+            }
+            if (hp->on_death == orchard::DeathAction::respawn) out += field("health.respawn_delay", "Comes back after (s)", "float", number(hp->respawn_delay), "0.5");
+        }
+        {
+            std::string joined;
+            for (const std::string& t : m_scene.tags(e)) joined += (joined.empty() ? "" : ", ") + t;
+            out += field("tags", "Tags (comma separated, scripts find things by tag)", "string", joined);
         }
 
         if (!flat) {
@@ -1956,10 +2059,24 @@ private:
         group("Particles");
         const orchard::Emitter* pe = m_scene.emitter(e);
         out += field("has_emitter", "Particle emitter (sparks, smoke, fire...)", "bool", yesno(pe != nullptr));
+        if (!pe) {
+            int inside = 0;
+            for (orchard::Entity c : m_scene.subtree(e))
+                if (c != e && m_scene.emitter(c)) ++inside;
+            if (inside > 0)
+                out += field("effect_look", "Look of all " + std::to_string(inside) + " particle emitters inside", "select", group_particle_look(e), options_of({{"mixed", "Mixed"}, {"plain", "Plain (soft dots, fastest)"}, {"simple", "Simple (the older look)"}, {"better", "Better (softer, more detailed)"}}));
+        }
         if (pe) {
             std::vector<std::pair<std::string, std::string>> ppresets = {{"", "Custom"}};
             for (const std::string& p : orchard::Emitter::presets()) ppresets.emplace_back(p, p);
             out += field("emitter.preset", "Preset", "select", pe->preset, options_of(ppresets));
+            {
+                std::vector<std::pair<std::string, std::string>> looks = orchard::editor::particle_look_options(orchard::editor::particle_look_for(pe->texture, pe->preset));
+                const std::string look = orchard::editor::particle_look_of(*pe);
+                if (look == "custom") looks.emplace_back("custom", "Custom texture");
+                out += field("emitter.look", "Look", "select", look, options_of(looks), "Plain is a soft dot. Simple is the look particles had before. Better uses the newer soft smoke, thin steam and flame textures.");
+            }
+            out += field("emitter.flat", "Lies flat on the ground (scorch marks, puddles)", "bool", yesno(pe->flat));
             out += field("emitter.enabled", "On", "bool", yesno(pe->enabled));
             out += field("emitter.autoplay", "Starts by itself", "bool", yesno(pe->autoplay));
             out += field("emitter.loop", "Keeps going (loop)", "bool", yesno(pe->loop));
@@ -1991,11 +2108,21 @@ private:
             out += field("emitter.size", "Size at start (m)", "float", number(pe->size), "0.01");
             out += field("emitter.size_end", "Size at the end (m)", "float", number(pe->size_end), "0.01");
             out += field("emitter.color", "Color at start", "color", hex_color(pe->color));
+            out += field("emitter.use_mid", "Middle color", "bool", yesno(pe->color_mid_at >= 0.0f), "", "A third color part way through each particle's life (fire: white, then orange, then dark red).");
+            if (pe->color_mid_at >= 0.0f) {
+                out += field("emitter.color_mid", "Color in the middle", "color", hex_color(pe->color_mid));
+                out += field("emitter.color_mid_at", "Middle color at (0 to 1 of its life)", "slider", number(pe->color_mid_at), "0.05");
+            }
             out += field("emitter.color_end", "Color at the end", "color", hex_color(pe->color_end));
+            out += field("emitter.variation", "Brightness varies between particles (0 to 1)", "slider", number(pe->variation), "0.05");
             out += field("emitter.alpha", "See-through at start (1 = solid)", "slider", number(pe->alpha), "0.05");
             out += field("emitter.alpha_end", "See-through at the end", "slider", number(pe->alpha_end), "0.05");
             out += field("emitter.glow", "Glow", "float", number(pe->glow), "0.25");
             out += field("emitter.stretch", "Stretch along movement", "float", number(pe->stretch), "0.1");
+            out += field("emitter.fade_in", "Fade in over (0 to 1 of its life)", "slider", number(pe->fade_in), "0.05", "Particles appear gently instead of popping in. Smoke and steam look better with a little.");
+            out += field("emitter.grow", "Grows fast then slows (0 = steady)", "slider", number(pe->grow), "0.05", "How quickly it reaches its end size. Smoke and explosions puff out quickly then drift.");
+            out += field("emitter.spin", "Spin (degrees/s, random each way)", "float", number(pe->spin), "5");
+            out += field("emitter.start_delay", "Starts after (s)", "float", number(pe->start_delay), "0.05");
             out += field("emitter.soft", "Soft edges where it meets walls and floors", "select", pe->soft, options_of({{"auto", "Automatic (smoke, fire, steam, dust)"}, {"on", "On"}, {"off", "Off"}}));
             if (pe->soft != "off") out += field("emitter.soft_distance", "Soft edge depth (m, 0 = automatic)", "float", number(pe->soft_distance), "0.05");
             out += field("emitter.blend", "Blend", "select", orchard::to_string(pe->blend), options_of({{"additive", "Adds light (sparks, fire)"}, {"alpha", "Covers (smoke, dust)"}}));
@@ -2149,6 +2276,23 @@ private:
             else t->rotation = orchard::from_euler(vec);
             if (m_session.world()) m_session.world()->moved(e);
             return "ok";
+        }
+        if (key == "character_style") {
+            if (!orchard::set_character_style(m_scene, e, value)) return std::string();
+            ensure_character_models();
+            m_light_dirty = true;
+            return "rebuild";
+        }
+        if (key == "character_colliders") {
+            const std::optional<orchard::HumanoidKind> hk = orchard::parse_humanoid_kind(value);
+            if (!hk || !orchard::set_humanoid_colliders(m_scene, e, *hk)) return std::string();
+            if (is_physical_player(e)) {
+                make_player_colliders(e);
+                for (orchard::Entity c : m_scene.children(e))
+                    if (m_scene.camera(c)) m_scene.transform(c)->position.y = *hk == orchard::HumanoidKind::detailed || *hk == orchard::HumanoidKind::full_body ? 1.64f : m_scene.camera(c)->eye_height;
+            }
+            m_light_dirty = true;
+            return "rebuild";
         }
         if (key == "has_body") return set_component(e, "body", value) ? "rebuild" : "";
         if (key == "add_collider") return set_component(e, "add_collider", value.empty() ? "box" : value) ? "rebuild" : "";
@@ -2467,6 +2611,56 @@ private:
             redraw();
             return "ok";
         }
+        if (key == "has_health") {
+            if (on) {
+                if (!m_scene.health(e)) m_scene.add_health(e);
+            } else {
+                m_scene.remove_health(e);
+            }
+            return "rebuild";
+        }
+        if (key == "tags") {
+            const std::vector<std::string> old = m_scene.tags(e);
+            for (const std::string& t : old) m_scene.remove_tag(e, t);
+            std::string cur;
+            for (char ch : value + ",") {
+                if (ch == ',') {
+                    const std::size_t a = cur.find_first_not_of(" \t");
+                    const std::size_t b = cur.find_last_not_of(" \t");
+                    if (a != std::string::npos) m_scene.add_tag(e, cur.substr(a, b - a + 1));
+                    cur.clear();
+                } else {
+                    cur += ch;
+                }
+            }
+            return std::string("ok");
+        }
+        if (key.rfind("health.", 0) == 0) {
+            orchard::Health* h = m_scene.health(e);
+            if (!h) return std::string();
+            const std::string k = key.substr(7);
+            if (k == "value") h->value = std::max(0.0f, v);
+            else if (k == "max") h->max = std::max(0.0f, v);
+            else if (k == "regen") {
+                h->regen = v;
+                return std::string("rebuild");
+            } else if (k == "regen_delay") h->regen_delay = std::max(0.0f, v);
+            else if (k == "invulnerable") h->invulnerable = on;
+            else if (k == "impact_damage") h->impact_damage = std::max(0.0f, v);
+            else if (k == "flammable") {
+                h->flammable = on;
+                return std::string("rebuild");
+            } else if (k == "burn_damage") h->burn_damage = std::max(0.0f, v);
+            else if (k == "on_death") {
+                if (const auto a = orchard::parse_death_action(value)) h->on_death = *a;
+                return std::string("rebuild");
+            } else if (k == "explode_radius") h->explode_radius = std::max(0.1f, v);
+            else if (k == "explode_force") h->explode_force = std::max(0.0f, v);
+            else if (k == "explode_damage") h->explode_damage = std::max(0.0f, v);
+            else if (k == "respawn_delay") h->respawn_delay = std::max(0.0f, v);
+            else return std::string();
+            return std::string("ok");
+        }
         if (key == "has_camera") {
             if (on) {
                 if (!m_scene.camera(e)) m_scene.add_camera(e);
@@ -2505,6 +2699,7 @@ private:
                 c->control = *cc;
                 return std::string("rebuild");
             } else if (k == "move_speed") c->move_speed = std::max(0.0f, v);
+            else if (k == "sprint_speed") c->sprint_speed = std::clamp(v, 0.0f, 500.0f);
             else if (k == "look_speed") c->look_speed = std::max(0.0f, v);
             else if (k == "eye_height") c->eye_height = std::max(0.0f, v);
             else if (k == "jump_speed") c->jump_speed = std::clamp(v, 0.0f, 100.0f);
@@ -2516,6 +2711,12 @@ private:
             else if (k == "view_height") c->view_height = std::max(0.01f, v);
             else return std::string();
             return "ok";
+        }
+        if (key == "effect_look") {
+            if (value == "mixed") return std::string();
+            for (orchard::Entity c : m_scene.subtree(e))
+                if (orchard::Emitter* ce = m_scene.emitter(c); ce && !ce->flat) orchard::editor::set_particle_look(*ce, value);
+            return std::string("rebuild");
         }
         if (key == "has_emitter") {
             if (on) {
@@ -2584,6 +2785,17 @@ private:
             if (k == "local_space") return flag(pe->local_space, false);
             if (k == "color") return parse_hex_color(value, pe->color) ? "ok" : "";
             if (k == "color_end") return parse_hex_color(value, pe->color_end) ? "ok" : "";
+            if (k == "color_mid") return parse_hex_color(value, pe->color_mid) ? "ok" : "";
+            if (k == "use_mid") {
+                const bool use = value == "1" || value == "true";
+                if (use && pe->color_mid_at < 0.0f) {
+                    pe->color_mid_at = 0.4f;
+                    pe->color_mid = (pe->color + pe->color_end) * 0.5f;
+                } else if (!use) {
+                    pe->color_mid_at = -1.0f;
+                }
+                return "rebuild";
+            }
             if (k == "direction") return parse_vec3(value, pe->direction) ? "ok" : "";
             if (k == "shape_size") return parse_vec3(value, pe->shape_size) ? "ok" : "";
             if (k == "wind") return parse_vec3(value, pe->wind) ? "ok" : "";
@@ -2598,6 +2810,11 @@ private:
                 if (!bl) return std::string();
                 pe->blend = *bl;
                 return "ok";
+            }
+            if (k == "look") return orchard::editor::set_particle_look(*pe, value) ? std::string("rebuild") : std::string();
+            if (k == "flat") {
+                pe->flat = on;
+                return std::string("ok");
             }
             if (k == "texture") {
                 auto image = [](const std::string& t) { return !t.empty() && !orchard::editor::is_builtin_particle_texture(t); };
@@ -2650,10 +2867,17 @@ private:
             else if (k == "bounce") target = &pe->bounce;
             else if (k == "friction") target = &pe->friction;
             else if (k == "inherit_velocity") target = &pe->inherit_velocity;
+            else if (k == "color_mid_at") target = &pe->color_mid_at;
+            else if (k == "fade_in") target = &pe->fade_in;
+            else if (k == "grow") target = &pe->grow;
+            else if (k == "spin") target = &pe->spin;
+            else if (k == "variation") target = &pe->variation;
+            else if (k == "start_delay") target = &pe->start_delay;
             if (!target) return std::string();
             float x = v;
             if (k != "gravity" && k != "speed" && k != "inherit_velocity") x = std::max(0.0f, v);
-            if (k == "alpha" || k == "alpha_end" || k == "bounce") x = std::clamp(v, 0.0f, 1.0f);
+            if (k == "alpha" || k == "alpha_end" || k == "bounce" || k == "color_mid_at" || k == "grow" || k == "variation") x = std::clamp(v, 0.0f, 1.0f);
+            if (k == "fade_in") x = std::clamp(v, 0.0f, 0.9f);
             if (k == "spread") x = std::clamp(v, 0.0f, 180.0f);
             if (k == "lifetime") x = std::max(0.01f, v);
             *target = x;
@@ -2961,7 +3185,12 @@ private:
         m_player_ready = false;
         const orchard::Entity cam = m_scene.active_camera();
         const orchard::Camera* c = m_scene.camera(cam);
-        if (!c || c->control == orchard::CameraControl::none || m_view.dimension() != orchard::Dimension::three_d) return;
+        if (!c || c->control == orchard::CameraControl::none) return;
+        if (m_view.dimension() != orchard::Dimension::three_d) {
+            m_player_fall = 0.0f;
+            m_player_ready = true;
+            return;
+        }
         const orchard::Mat4 w = m_scene.world_matrix(cam);
         orchard::Vec3 f = orchard::normalize(orchard::mul_direction(w, camera_forward_axis()));
         if (orchard::length(f) < 0.5f) f = camera_forward_axis();
@@ -2980,6 +3209,10 @@ private:
         orchard::Transform* t = m_scene.transform(cam);
         if (!c || !t || c->control == orchard::CameraControl::none) return;
         dt = std::clamp(dt, 0.0f, 0.1f);
+        if (m_view.dimension() != orchard::Dimension::three_d) {
+            drive_player_2d(cam, *c, dt);
+            return;
+        }
         orchard::ScriptRuntime& keys = m_session.scripts();
         const float turn = 90.0f * dt;
         if (keys.key_down("left")) m_player_yaw += turn;
@@ -2997,8 +3230,7 @@ private:
         if (keys.key_down("s")) move += forward * -1.0f;
         if (keys.key_down("d")) move += right;
         if (keys.key_down("a")) move += right * -1.0f;
-        float speed = c->move_speed;
-        if (keys.key_down("shift")) speed *= 3.0f;
+        const float speed = keys.key_down("shift") ? c->sprint() : c->move_speed;
         xylem::World* world = m_session.world();
         const orchard::Entity rider = m_scene.body_owner(cam);
         const orchard::Body* rider_body = rider.valid() ? m_scene.body(rider) : nullptr;
@@ -3069,6 +3301,83 @@ private:
             }
         }
         t->rotation = camera_rotation(look);
+        if (world) world->moved(cam);
+    }
+
+    void face_along(orchard::Entity e, orchard::Vec3 dir, xylem::World* world) {
+        orchard::Transform* rt = m_scene.transform(e);
+        if (!rt) return;
+        const orchard::Vec3 up{0.0f, 1.0f, 0.0f};
+        orchard::Vec3 face = orchard::rotate(xylem::world_rotation(m_scene, e), orchard::Vec3{0.0f, 0.0f, 1.0f});
+        face = face - up * orchard::dot(face, up);
+        if (orchard::length(face) < 1e-3f) return;
+        face = orchard::normalize(face);
+        const float yaw = std::atan2(orchard::dot(orchard::cross(face, dir), up), orchard::dot(face, dir));
+        if (std::fabs(yaw) < 0.002f) return;
+        const float step = std::clamp(yaw, -0.35f, 0.35f);
+        const orchard::Quat turn{0.0f, std::sin(step * 0.5f), 0.0f, std::cos(step * 0.5f)};
+        const orchard::Entity rp = m_scene.parent(e);
+        if (m_scene.alive(rp)) {
+            const orchard::Quat pr = xylem::world_rotation(m_scene, rp);
+            const orchard::Quat pinv{-pr.x, -pr.y, -pr.z, pr.w};
+            rt->rotation = orchard::normalize(pinv * turn * pr * rt->rotation);
+        } else {
+            rt->rotation = orchard::normalize(turn * rt->rotation);
+        }
+        if (world) world->moved(e);
+    }
+
+    void drive_player_2d(orchard::Entity cam, const orchard::Camera& c, float dt) {
+        orchard::ScriptRuntime& keys = m_session.scripts();
+        orchard::Transform* t = m_scene.transform(cam);
+        float side = 0.0f;
+        if (keys.key_down("d") || keys.key_down("right")) side += 1.0f;
+        if (keys.key_down("a") || keys.key_down("left")) side -= 1.0f;
+        float lift = 0.0f;
+        if (keys.key_down("w") || keys.key_down("up")) lift += 1.0f;
+        if (keys.key_down("s") || keys.key_down("down")) lift -= 1.0f;
+        const float speed = keys.key_down("shift") ? c.sprint() : c.move_speed;
+        xylem::World* world = m_session.world();
+        const orchard::Entity rider = m_scene.body_owner(cam);
+        const orchard::Body* rider_body = rider.valid() ? m_scene.body(rider) : nullptr;
+        const bool riding = world && rider_body && rider_body->type == orchard::BodyType::dynamic && world->has_body(rider);
+        if (c.control == orchard::CameraControl::walk && riding) {
+            xylem::CharacterMove mv;
+            mv.wish = orchard::Vec3{side * speed, 0.0f, 0.0f};
+            mv.jump = keys.key_down("space") || lift > 0.0f;
+            mv.jump_speed = c.jump_speed;
+            mv.ride_height = 0.05f;
+            world->move_character(rider, mv, dt);
+            if (side != 0.0f && m_scene.dimension() == orchard::Dimension::three_d) face_along(rider, orchard::Vec3{side, 0.0f, 0.0f}, world);
+            return;
+        }
+        if (!t) return;
+        if (c.control == orchard::CameraControl::fly) {
+            t->position = t->position + orchard::Vec3{side, lift, 0.0f} * (speed * dt);
+            if (world) world->moved(cam);
+            return;
+        }
+        if (side != 0.0f) {
+            float allowed = std::fabs(side) * speed * dt;
+            float hit = 0.0f;
+            const orchard::Vec3 dir{side > 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f};
+            if (world && world->raycast_ignoring(cam, t->position + orchard::Vec3{0.0f, -c.eye_height * 0.5f, 0.0f}, dir, allowed + 0.3f, nullptr, nullptr, &hit).valid()) allowed = std::max(0.0f, hit - 0.3f);
+            if (world && world->raycast_ignoring(cam, t->position, dir, allowed + 0.3f, nullptr, nullptr, &hit).valid()) allowed = std::min(allowed, std::max(0.0f, hit - 0.3f));
+            t->position.x += dir.x * allowed;
+        }
+        float ground = 0.0f;
+        const bool has_ground = world && world->raycast_ignoring(cam, t->position, orchard::Vec3{0.0f, -1.0f, 0.0f}, c.eye_height + 50.0f, nullptr, nullptr, &ground).valid();
+        const bool grounded = has_ground && ground <= c.eye_height + 0.05f && m_player_fall <= 0.0f;
+        if (grounded) {
+            m_player_fall = 0.0f;
+            t->position.y += c.eye_height - ground;
+            if (keys.key_down("space") || lift > 0.0f) m_player_fall = c.jump_speed > 0.0f ? c.jump_speed : 5.0f;
+        } else {
+            m_player_fall -= 9.81f * dt;
+            float step = m_player_fall * dt;
+            if (step < 0.0f && has_ground && ground + step < c.eye_height) step = c.eye_height - ground;
+            t->position.y += step;
+        }
         if (world) world->moved(cam);
     }
 
@@ -3308,7 +3617,7 @@ private:
             page("player", "Physical player");
             page("physics", "Physics object");
             if (!flat) page("terrain", "Terrain");
-            page("characters", "Character colliders");
+            page("characters", "Characters");
             page("particles", "Particles");
             line();
             page("water", "Water");
@@ -3319,18 +3628,31 @@ private:
             add("add:", "Empty entity");
             return items;
         }
-        items.push_back(grove::menu_item(at == "triangle" ? "page:physics" : "page:", "\u2039 Back"));
-        if (at == "player") {
-            header("A body you walk around in (W A S D, Space, Shift)");
-            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) add(std::string("add:physical-player:") + orchard::to_string(hk), orchard::humanoid_label(hk));
-            line();
-            add("add:player-camera", "Walking camera only (no body)");
+        const std::string back = at == "triangle" ? "physics" : at == "effects" ? "particles" : at.rfind("player-look:", 0) == 0 ? "player" : at.rfind("character-look:", 0) == 0 ? "characters" : "";
+        items.push_back(grove::menu_item("page:" + back, "\u2039 Back"));
+        if (at == "player" || at == "characters") {
+            const bool player = at == "player";
+            header(player ? "A body you walk around in. Pick how it looks:" : "A character (no controls). Pick how it looks:");
+            for (const std::string& style : orchard::character_styles()) page((player ? "player-look:" : "character-look:") + style, orchard::character_style_label(style));
+            page(player ? "player-look:none" : "character-look:none", "Colliders only (no mesh)");
+            if (player) {
+                line();
+                add("add:player-camera", "Walking camera only (no body)");
+            }
+        } else if (at.rfind("player-look:", 0) == 0 || at.rfind("character-look:", 0) == 0) {
+            const bool player = at.rfind("player-look:", 0) == 0;
+            std::string style = at.substr(at.find(':') + 1);
+            if (style == "none") style.clear();
+            header("Its colliders:");
+            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) add(std::string(player ? "add:physical-player:" : "add:human:") + orchard::to_string(hk) + (style.empty() ? "" : ":" + style), orchard::humanoid_label(hk));
         } else if (at == "physics") {
             header("Falls and gets pushed around");
             add("add:box", "Box");
             add("add:ball", "Ball");
             add("add:shape:capsule", "Capsule");
             add("add:shape:rounded-box", "Rounded box");
+            add("add:barrel", "Explosive barrel (blows up when hurt)");
+            add("add:crate", "Wooden crate (burns, breaks)");
             add("add:triangle:sss", "Triangle (equilateral)");
             page("triangle", "Triangle from SSS, SAS, ASA...");
             if (!flat) {
@@ -3351,12 +3673,14 @@ private:
                 else if (name == "forest") label = "Forest (1 km of hills with trees and rocks)";
                 add("add:terrain:" + name, label);
             }
-        } else if (at == "characters") {
-            header("Colliders shaped like a person (no controls)");
-            for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) add(std::string("add:human:") + orchard::to_string(hk), orchard::humanoid_label(hk));
         } else if (at == "particles") {
-            header("Particle effects");
+            page("effects", "Effects (explosions, fire, steam...)");
+            line();
+            header("Single particle emitters");
             for (const std::string& name : orchard::Emitter::presets()) add("add:particles:" + name, title_case(name));
+        } else if (at == "effects") {
+            header("Several emitters and a light, ready to use");
+            for (const std::string& name : orchard::effect_names()) add("add:effect:" + name, orchard::effect_label(name));
         } else if (at == "water") {
             header("Water");
             add("add:pool", "Pool (walls and water)");
@@ -3444,6 +3768,13 @@ private:
                 made = m_scene.create("Entity", orchard::Entity{});
             } else {
                 made = add_preset(kind, orchard::Entity{});
+            }
+            if (m_scene.alive(made) && m_scene.dimension() == orchard::Dimension::three_d && m_view.dimension() == orchard::Dimension::two_d) {
+                if (orchard::Transform* t = m_scene.transform(made)) {
+                    const orchard::Vec2 c = m_view.pan_camera().center;
+                    const float lift = t->position.y - m_view.orbit_camera().target.y;
+                    t->position = {c.x, c.y + lift, 0.0f};
+                }
             }
             m_selected = made;
             m_light_dirty = true;
@@ -3975,19 +4306,7 @@ private:
         return false;
     }
 
-    orchard::Entity add_physical_player(orchard::HumanoidKind hk, orchard::Entity parent) {
-        const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
-        for (orchard::Entity other : m_scene.entities())
-            if (orchard::Camera* oc = m_scene.camera(other)) oc->active = false;
-        const orchard::Entity e = orchard::add_humanoid(m_scene, hk, parent, "Player");
-        orchard::Body& b = *m_scene.body(e);
-        b.type = orchard::BodyType::dynamic;
-        b.set(orchard::body_lock_rotation_x, !flat);
-        b.set(orchard::body_lock_rotation_y, !flat);
-        b.set(orchard::body_lock_rotation_z, true);
-        b.set(orchard::body_sleep, false);
-        b.continuous = orchard::BodyContinuous::on;
-        b.angular_damping = 1.0f;
+    void make_player_colliders(orchard::Entity e) {
         const orchard::Vec3 one{1.0f, 1.0f, 1.0f};
         std::vector<orchard::Collider*> solid;
         float total = 0.0f;
@@ -3998,6 +4317,7 @@ private:
             if (std::vector<orchard::Collider>* cs = m_scene.colliders(at)) {
                 for (orchard::Collider& c : *cs) {
                     if (c.sensor) continue;
+                    c.lock(orchard::collider_lock_mass, false);
                     c.friction = 0.0f;
                     c.friction_combine = orchard::CombineMode::minimum;
                     total += orchard::collider_mass(c, one, m_scene.dimension());
@@ -4013,9 +4333,47 @@ private:
             c->lock(orchard::collider_lock_mass, true);
         }
         if (solid.size() == 1) solid.front()->name = "Body";
+    }
+
+    bool is_physical_player(orchard::Entity e) const {
+        for (orchard::Entity c : m_scene.children(e))
+            if (const orchard::Camera* cam = m_scene.camera(c))
+                if (cam->control == orchard::CameraControl::walk) return true;
+        return false;
+    }
+
+    void ensure_character_models() {
+        if (!m_project) return;
+        for (orchard::Entity e : m_scene.entities()) {
+            const orchard::Model* md = m_scene.model(e);
+            if (!md || md->style.empty() || md->source.empty()) continue;
+            if (!fs::exists(m_project->path_of(md->source))) orchard::editor::write_builtin_model("character-" + md->style, m_project->path_of(md->source));
+        }
+    }
+
+    orchard::Entity add_physical_player(orchard::HumanoidKind hk, orchard::Entity parent, const std::string& style) {
+        const orchard::Entity e = add_physical_player(hk, parent);
+        if (!style.empty() && orchard::set_character_style(m_scene, e, style)) ensure_character_models();
+        return e;
+    }
+
+    orchard::Entity add_physical_player(orchard::HumanoidKind hk, orchard::Entity parent) {
+        const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
+        for (orchard::Entity other : m_scene.entities())
+            if (orchard::Camera* oc = m_scene.camera(other)) oc->active = false;
+        const orchard::Entity e = orchard::add_humanoid(m_scene, hk, parent, "Player");
+        orchard::Body& b = *m_scene.body(e);
+        b.type = orchard::BodyType::dynamic;
+        b.set(orchard::body_lock_rotation_x, !flat);
+        b.set(orchard::body_lock_rotation_y, !flat);
+        b.set(orchard::body_lock_rotation_z, true);
+        b.set(orchard::body_sleep, false);
+        b.continuous = orchard::BodyContinuous::on;
+        b.angular_damping = 1.0f;
+        make_player_colliders(e);
         const orchard::Entity cam = m_scene.create("Camera", e);
         orchard::Camera& cc = m_scene.add_camera(cam);
-        cc.control = flat ? orchard::CameraControl::none : orchard::CameraControl::walk;
+        cc.control = orchard::CameraControl::walk;
         cc.fov = m_view.orbit_camera().fov;
         m_scene.transform(cam)->position = {0.0f, hk == orchard::HumanoidKind::detailed || hk == orchard::HumanoidKind::full_body ? 1.64f : cc.eye_height, flat ? 0.0f : 0.08f};
         orchard::Transform* t = m_scene.transform(e);
@@ -4050,9 +4408,18 @@ private:
         const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
         if (kind == "physical-player" || kind.rfind("physical-player:", 0) == 0) {
             std::optional<orchard::HumanoidKind> hk = orchard::HumanoidKind::basic;
-            if (kind.size() > 16) hk = orchard::parse_humanoid_kind(kind.substr(16));
+            std::string style;
+            if (kind.size() > 16) {
+                std::string rest = kind.substr(16);
+                const std::size_t colon = rest.find(':');
+                if (colon != std::string::npos) {
+                    style = rest.substr(colon + 1);
+                    rest = rest.substr(0, colon);
+                }
+                hk = orchard::parse_humanoid_kind(rest);
+            }
             if (!hk) return orchard::Entity{};
-            return add_physical_player(*hk, parent);
+            return add_physical_player(*hk, parent, style);
         }
         if (kind.rfind("shape:", 0) == 0 || kind.rfind("triangle:", 0) == 0) {
             const bool tri = kind.rfind("triangle:", 0) == 0;
@@ -4143,6 +4510,42 @@ private:
             }
             return e;
         }
+        if (kind.rfind("effect:", 0) == 0) {
+            const orchard::Entity e = orchard::add_effect(m_scene, kind.substr(7), parent);
+            if (!m_scene.alive(e)) return orchard::Entity{};
+            orchard::Transform* t = m_scene.transform(e);
+            if (flat) {
+                const orchard::Vec2 cc = m_view.pan_camera().center;
+                t->position = {cc.x, cc.y + 0.5f, 0.0f};
+            } else {
+                t->position = m_view.orbit_camera().target;
+            }
+            return e;
+        }
+        if (kind == "barrel" || kind == "crate") {
+            const bool barrel = kind == "barrel";
+            const orchard::Entity e = m_scene.create(barrel ? "Explosive barrel" : "Crate", parent);
+            m_scene.add_body(e);
+            orchard::Collider* c = m_scene.add_collider(e, barrel && !flat ? orchard::ColliderShape::cylinder : orchard::ColliderShape::box);
+            c->size = barrel ? orchard::Vec3{0.6f, 0.9f, 0.6f} : orchard::Vec3{0.8f, 0.8f, 0.8f};
+            c->density = barrel ? 0.3f : 0.5f;
+            orchard::Material& m = m_scene.add_material(e);
+            m.color = barrel ? orchard::Vec3{0.75f, 0.12f, 0.08f} : orchard::Vec3{0.62f, 0.45f, 0.26f};
+            orchard::Health& h = m_scene.add_health(e);
+            h.value = h.max = barrel ? 25.0f : 60.0f;
+            h.flammable = true;
+            h.impact_damage = barrel ? 0.6f : 0.3f;
+            h.on_death = barrel ? orchard::DeathAction::explode : orchard::DeathAction::shatter;
+            m_scene.add_tag(e, kind);
+            orchard::Transform* t = m_scene.transform(e);
+            if (flat) {
+                const orchard::Vec2 cc = m_view.pan_camera().center;
+                t->position = {cc.x, cc.y + 3.0f, 0.0f};
+            } else {
+                t->position = m_view.orbit_camera().target + camera_up_axis() * 3.0f;
+            }
+            return e;
+        }
         if (kind.rfind("particles:", 0) == 0) {
             const std::optional<orchard::Emitter> named = orchard::Emitter::named(kind.substr(10));
             if (!named) return orchard::Entity{};
@@ -4164,9 +4567,17 @@ private:
             return e;
         }
         if (kind.rfind("human:", 0) == 0) {
-            const std::optional<orchard::HumanoidKind> hk = orchard::parse_humanoid_kind(kind.substr(6));
+            std::string rest = kind.substr(6);
+            std::string style;
+            const std::size_t colon = rest.find(':');
+            if (colon != std::string::npos) {
+                style = rest.substr(colon + 1);
+                rest = rest.substr(0, colon);
+            }
+            const std::optional<orchard::HumanoidKind> hk = orchard::parse_humanoid_kind(rest);
             if (!hk) return orchard::Entity{};
             const orchard::Entity e = orchard::add_humanoid(m_scene, *hk, parent, *hk == orchard::HumanoidKind::basic ? "Player" : "Character");
+            if (!style.empty() && orchard::set_character_style(m_scene, e, style)) ensure_character_models();
             orchard::Transform* t = m_scene.transform(e);
             if (flat) {
                 const orchard::Vec2 c = m_view.pan_camera().center;
@@ -4629,6 +5040,7 @@ private:
 
         native("play", [this](const std::vector<std::string>&) {
             if (!m_project) return std::string("error\tno project is open");
+            m_session.set_play_dimension(m_view.dimension());
             m_session.begin(*m_project, m_scene);
             set_animating(true);
             return mode();
@@ -5512,6 +5924,7 @@ private:
     bool m_particles_were_playing = false;
     std::optional<orchard::Viewport> m_view_before_play;
     bool m_player_ready = false;
+    std::vector<std::pair<orchard::Entity, orchard::Transform>> m_smoothed;
     std::string m_component_error;
     int m_trace_spp = 1;
     std::string m_menu_page;

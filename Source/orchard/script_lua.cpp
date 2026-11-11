@@ -425,6 +425,85 @@ int o_fluid(lua_State* L) {
     return 1;
 }
 
+int o_game_call(lua_State* L, bool entity_result) {
+    const orchard_host_api& h = host();
+    const int op = static_cast<int>(luaL_checkinteger(L, 1));
+    const orchard_entity e = opt_entity(L, 2);
+    const orchard_entity other = opt_entity(L, 3);
+    const char* text = luaL_optstring(L, 4, "");
+    double args[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    int count = 0;
+    for (int i = 5; i <= lua_gettop(L) && count < 8; ++i) args[count++] = luaL_optnumber(L, i, 0.0);
+    if (entity_result) {
+        if (!ORCHARD_HOST_HAS(&h, game_entity)) return 0;
+        push_entity(L, h.game_entity(op, e, other, args, count, text));
+        return 1;
+    }
+    if (!ORCHARD_HOST_HAS(&h, game)) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    lua_pushnumber(L, h.game(op, e, other, args, count, text));
+    return 1;
+}
+
+int o_game(lua_State* L) {
+    return o_game_call(L, false);
+}
+
+int o_game_entity(lua_State* L) {
+    return o_game_call(L, true);
+}
+
+const char* const k_game_prelude = R"LUA(
+local o = orchard
+local g, ge = o._game, o._game_entity
+local m = o._entity_methods
+o._entity_methods = nil
+local function v3(p) if type(p) == "table" then return p.x or p[1] or 0, p.y or p[2] or 0, p.z or p[3] or 0 end return 0, 0, 0 end
+function o.health(e) return g(0, e) end
+function o.max_health(e) return g(1, e) end
+function o.has_health(e) return g(24, e) ~= 0 end
+function o.set_health(e, v) g(2, e, nil, nil, v) end
+function o.set_max_health(e, v) g(3, e, nil, nil, v) end
+function o.add_health(e, v) return g(4, e, nil, nil, v) end
+o.heal = o.add_health
+function o.damage(e, v, attacker) return g(5, e, attacker, nil, v) end
+function o.kill(e) return g(6, e) ~= 0 end
+function o.is_dead(e) return g(7, e) ~= 0 end
+function o.revive(e, v) return g(8, e, nil, nil, v or -1) ~= 0 end
+function o.set_invulnerable(e, on) g(9, e, nil, nil, on and 1 or 0) end
+function o.damage_taken(e) return g(10, e) end
+function o.died(e) return g(11, e) ~= 0 end
+function o.last_attacker(e) return ge(100, e) end
+function o.ignite(e, seconds) g(12, e, nil, nil, seconds or 10) end
+function o.extinguish(e) g(13, e) end
+function o.is_burning(e) return g(14, e) ~= 0 end
+function o.explode(at, radius, force, damage, attacker) local x, y, z = v3(at) return math.floor(g(15, attacker, nil, nil, x, y, z, radius or 5, force or 20000, damage or 100, 1)) end
+function o.push_away(at, radius, force) local x, y, z = v3(at) return math.floor(g(15, nil, nil, nil, x, y, z, radius or 5, force or 20000, 0, 0)) end
+function o.play_effect(name, at, scale) local x, y, z = v3(at) return ge(101, nil, nil, name, x, y, z, scale or 1) end
+function o.attach_effect(name, parent, scale) return ge(101, parent, nil, name, 0, 0, 0, scale or 1) end
+function o.add_tag(e, tag) g(16, e, nil, tag) end
+function o.remove_tag(e, tag) g(17, e, nil, tag) end
+function o.has_tag(e, tag) return g(18, e, nil, tag) ~= 0 end
+function o.find_tagged(tag) local out = {} for i = 0, math.floor(g(19, nil, nil, tag)) - 1 do out[#out + 1] = ge(102, nil, nil, tag, i) end return out end
+function o.nearest_tagged(tag, from) return ge(103, from, nil, tag) end
+function o.distance(a, b) return g(20, a, b) end
+function o.teleport(e, to) local x, y, z = v3(to) g(21, e, nil, nil, x, y, z) end
+function o.look_at(e, target) local x, y, z if type(target) == "userdata" then local p = target:world_position() x, y, z = p.x, p.y, p.z else x, y, z = v3(target) end g(22, e, nil, nil, x, y, z) end
+function o.random(low, high) return g(23, nil, nil, nil, low or 0, high or 1) end
+function o.random_int(low, high) local r = math.floor(g(23, nil, nil, nil, low, high + 1)) if r > high then r = high end return r end
+function o.clamp(v, low, high) if v < low then return low elseif v > high then return high end return v end
+function o.lerp(a, b, t) return a + (b - a) * t end
+function o.move_towards(c, t, step) local d = t - c if d > step then return c + step elseif d < -step then return c - step end return t end
+for _, name in ipairs({"health", "max_health", "has_health", "set_health", "set_max_health", "add_health", "heal", "damage", "kill", "is_dead", "revive", "set_invulnerable", "damage_taken", "died", "last_attacker", "ignite", "extinguish", "is_burning", "add_tag", "remove_tag", "has_tag", "teleport", "look_at", "attach_effect"}) do
+    local f = o[name]
+    if name == "attach_effect" then m[name] = function(e, effect, scale) return f(effect, e, scale) end
+    else m[name] = f end
+end
+function m.distance_to(e, other) return g(20, e, other) end
+)LUA";
+
 int o_self(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, "orchard.self");
     return 1;
@@ -466,9 +545,14 @@ void open_orchard(lua_State* L) {
     static const luaL_Reg api[] = {
         {"vec", o_vec}, {"log", o_log}, {"warn", o_warn}, {"time", o_time}, {"dt", o_dt}, {"is_2d", o_is_2d},
         {"key_down", o_key_down}, {"find", o_find}, {"spawn", o_spawn}, {"self", o_self},
-        {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {"instantiate", o_instantiate}, {"particles", o_particles}, {"animation", o_animation}, {"fluid", o_fluid}, {nullptr, nullptr}};
+        {"raycast", o_raycast}, {"overlap_sphere", o_overlap_sphere}, {"instantiate", o_instantiate}, {"particles", o_particles}, {"animation", o_animation}, {"fluid", o_fluid}, {"_game", o_game}, {"_game_entity", o_game_entity}, {nullptr, nullptr}};
     luaL_newlib(L, api);
+    luaL_getmetatable(L, k_entity_meta);
+    lua_getfield(L, -1, "methods");
+    lua_setfield(L, -3, "_entity_methods");
+    lua_pop(L, 1);
     lua_setglobal(L, "orchard");
+    if (luaL_dostring(L, k_game_prelude) != LUA_OK) lua_pop(L, 1);
     lua_pushcfunction(L, o_log);
     lua_setglobal(L, "print");
     lua_pushcfunction(L, o_vec);

@@ -1,6 +1,8 @@
 #ifndef ORCHARD_EDITOR_PARTICLE_TEXTURES_HPP
 #define ORCHARD_EDITOR_PARTICLE_TEXTURES_HPP
 
+#include <orchard/scene.hpp>
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -40,6 +42,11 @@ inline const std::vector<BuiltinParticleTexture>& builtin_particle_textures() {
         {"builtin:debris", "Debris chunks (16 variants)", 4, 4, ParticleFlipbook::random, 0.0f, 360.0f, 420.0f},
         {"builtin:dust", "Dust motes (4 variants)", 2, 2, ParticleFlipbook::random, 0.0f, 360.0f, 30.0f},
         {"builtin:shockwave", "Shockwave ring", 1, 1, ParticleFlipbook::single, 0.0f, 360.0f, 0.0f},
+        {"builtin:smoke-soft", "Soft smoke (16 variants, no lumps)", 4, 4, ParticleFlipbook::random, 0.0f, 360.0f, 18.0f},
+        {"builtin:steam-wisp", "Steam wisps, thin (16 variants)", 4, 4, ParticleFlipbook::random, 0.0f, 25.0f, 15.0f},
+        {"builtin:flame", "Flame tongues (16 variants)", 4, 4, ParticleFlipbook::random, 0.0f, 8.0f, 0.0f},
+        {"builtin:flash", "Bright flash", 1, 1, ParticleFlipbook::single, 0.0f, 360.0f, 0.0f},
+        {"builtin:scorch", "Scorch mark (4 variants)", 2, 2, ParticleFlipbook::random, 0.0f, 360.0f, 0.0f},
     };
     return all;
 }
@@ -60,13 +67,71 @@ inline const char* builtin_particle_texture_for_preset(std::string_view preset) 
         const char* texture;
     };
     static const Pair pairs[] = {
-        {"sparks", "builtin:spark"}, {"smoke", "builtin:smoke"}, {"fire", "builtin:fire"}, {"explosion", "builtin:explosion"},
+        {"sparks", "builtin:spark"}, {"smoke", "builtin:smoke-soft"}, {"fire", "builtin:fire"}, {"explosion", "builtin:explosion"},
         {"dust", "builtin:dust"}, {"rain", "builtin:rain"}, {"snow", "builtin:snow"}, {"magic", "builtin:magic"},
-        {"debris", "builtin:debris"}, {"bubbles", "builtin:bubble"}, {"steam", "builtin:steam"}, {"embers", "builtin:ember"},
+        {"debris", "builtin:debris"}, {"bubbles", "builtin:bubble"}, {"steam", "builtin:steam-wisp"}, {"embers", "builtin:ember"},
+        {"flames", "builtin:flame"}, {"smoke-dark", "builtin:smoke-soft"}, {"smoke-puffs", "builtin:smoke"}, {"steam-puffs", "builtin:steam"},
+        {"steam-jet", "builtin:steam-wisp"}, {"spark-shower", "builtin:spark"}, {"zap", "builtin:spark"}, {"flash", "builtin:flash"},
+        {"fireball", "builtin:explosion"}, {"shockwave", "builtin:shockwave"}, {"splash", "builtin:rain"}, {"dust-burst", "builtin:smoke-soft"}, {"scorch", "builtin:scorch"},
     };
     for (const Pair& p : pairs)
         if (preset == p.preset) return p.texture;
     return nullptr;
+}
+
+struct ParticleLook {
+    std::string simple;
+    std::string better;
+    bool better_covers = false;
+};
+
+inline ParticleLook particle_look_for(std::string_view texture, std::string_view preset) {
+    std::string t(texture);
+    if ((t.empty() || t == "builtin:glow") && !preset.empty())
+        if (const char* p = builtin_particle_texture_for_preset(preset)) t = p;
+    if (t == "builtin:smoke" || t == "builtin:smoke-soft") return {"builtin:smoke", "builtin:smoke-soft", false};
+    if (t == "builtin:steam" || t == "builtin:steam-wisp") return {"builtin:steam", "builtin:steam-wisp", false};
+    if (t == "builtin:fire" || t == "builtin:flame") return {"builtin:fire", "builtin:flame", false};
+    if (t == "builtin:explosion") return {"builtin:explosion", "builtin:explosion", true};
+    if (t.empty() || !is_builtin_particle_texture(t)) return {};
+    return {t, t, false};
+}
+
+inline std::vector<std::pair<std::string, std::string>> particle_look_options(const ParticleLook& look) {
+    std::vector<std::pair<std::string, std::string>> out = {{"plain", "Plain (soft dots, fastest)"}};
+    if (look.simple.empty()) return out;
+    if (look.simple == look.better && !look.better_covers) {
+        out.emplace_back("better", "Textured");
+        return out;
+    }
+    out.emplace_back("simple", "Simple (the older look)");
+    out.emplace_back("better", "Better (softer, more detailed)");
+    return out;
+}
+
+inline std::string particle_look_of(const Emitter& e) {
+    const ParticleLook look = particle_look_for(e.texture, e.preset);
+    if (e.texture == "builtin:glow") return "plain";
+    if (look.simple.empty()) return "custom";
+    const bool covers = e.blend == ParticleBlend::alpha;
+    if (look.better_covers) return covers ? "better" : "simple";
+    const std::string t = e.texture.empty() ? std::string(builtin_particle_texture_for_preset(e.preset) ? builtin_particle_texture_for_preset(e.preset) : "") : e.texture;
+    if (t == look.better) return "better";
+    if (t == look.simple) return "simple";
+    return "custom";
+}
+
+inline bool set_particle_look(Emitter& e, std::string_view which) {
+    const ParticleLook look = particle_look_for(e.texture, e.preset);
+    if (which == "plain") {
+        e.texture = "builtin:glow";
+        return true;
+    }
+    if (look.simple.empty()) return false;
+    const bool better = which == "better";
+    e.texture = better ? look.better : look.simple;
+    if (look.better_covers) e.blend = better ? ParticleBlend::alpha : ParticleBlend::additive;
+    return true;
 }
 
 struct ParticlePixels {

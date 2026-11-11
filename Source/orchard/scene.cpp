@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <unordered_map>
 
@@ -829,7 +830,13 @@ LightAnimationSample LightAnimation::evaluate(double seconds, const Vec3& base) 
     if (duration > 0.0f) {
         const double d = static_cast<double>(duration);
         if (t >= d) {
-            if (!loop) return out;
+            if (!loop) {
+                if (mode == LightAnimationMode::fade) {
+                    out.brightness = std::max(0.0f, low);
+                    out.on = false;
+                }
+                return out;
+            }
             t = std::fmod(t, d);
         }
     }
@@ -935,6 +942,41 @@ std::vector<std::string> Material::texture_paths() const {
     for (const std::string* p : {&base_map, &normal_map, &orm_map, &roughness_map, &metallic_map, &emission_map, &opacity_map})
         if (!p->empty()) out.push_back(*p);
     return out;
+}
+
+const char* to_string(DeathAction v) {
+    switch (v) {
+    case DeathAction::nothing: return "nothing";
+    case DeathAction::destroy: return "destroy";
+    case DeathAction::explode: return "explode";
+    case DeathAction::shatter: return "shatter";
+    case DeathAction::respawn: return "respawn";
+    }
+    return "nothing";
+}
+
+std::optional<DeathAction> parse_death_action(const std::string& text) {
+    for (DeathAction d : death_actions())
+        if (text == to_string(d)) return d;
+    if (text == "none") return DeathAction::nothing;
+    if (text == "break" || text == "gib") return DeathAction::shatter;
+    return std::nullopt;
+}
+
+const std::vector<DeathAction>& death_actions() {
+    static const std::vector<DeathAction> all = {DeathAction::nothing, DeathAction::destroy, DeathAction::explode, DeathAction::shatter, DeathAction::respawn};
+    return all;
+}
+
+const char* death_action_label(DeathAction v) {
+    switch (v) {
+    case DeathAction::nothing: return "Nothing (stays, health 0)";
+    case DeathAction::destroy: return "Disappears";
+    case DeathAction::explode: return "Explodes (like an explosive barrel)";
+    case DeathAction::shatter: return "Breaks apart (dust and debris)";
+    case DeathAction::respawn: return "Respawns where it started";
+    }
+    return "Nothing";
 }
 
 bool is_model_file(const std::string& path) {
@@ -1079,6 +1121,8 @@ Entity Scene::create(const std::string& name, Entity parent) {
     s.model.reset();
     s.animator.reset();
     s.terrain.reset();
+    s.health.reset();
+    s.tags.clear();
     s.bone.clear();
     s.instance_of.clear();
     ++m_alive;
@@ -1410,6 +1454,72 @@ bool Scene::remove_model(Entity e) {
     return true;
 }
 
+Health* Scene::health(Entity e) {
+    Slot* s = slot(e);
+    return s && s->health ? &*s->health : nullptr;
+}
+
+const Health* Scene::health(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->health ? &*s->health : nullptr;
+}
+
+Health& Scene::add_health(Entity e) {
+    static Health none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Health{};
+        return none;
+    }
+    if (!s->health) s->health = Health{};
+    return *s->health;
+}
+
+bool Scene::remove_health(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->health) return false;
+    s->health.reset();
+    return true;
+}
+
+const std::vector<std::string>& Scene::tags(Entity e) const {
+    static const std::vector<std::string> none;
+    const Slot* s = slot(e);
+    return s ? s->tags : none;
+}
+
+bool Scene::add_tag(Entity e, const std::string& tag) {
+    Slot* s = slot(e);
+    std::string t;
+    for (char ch : tag)
+        if (!std::isspace(static_cast<unsigned char>(ch)) && ch != ',') t += ch;
+    if (!s || t.empty()) return false;
+    if (std::find(s->tags.begin(), s->tags.end(), t) != s->tags.end()) return true;
+    s->tags.push_back(t);
+    return true;
+}
+
+bool Scene::remove_tag(Entity e, const std::string& tag) {
+    Slot* s = slot(e);
+    if (!s) return false;
+    const auto it = std::find(s->tags.begin(), s->tags.end(), tag);
+    if (it == s->tags.end()) return false;
+    s->tags.erase(it);
+    return true;
+}
+
+bool Scene::has_tag(Entity e, const std::string& tag) const {
+    const Slot* s = slot(e);
+    return s && std::find(s->tags.begin(), s->tags.end(), tag) != s->tags.end();
+}
+
+std::vector<Entity> Scene::tagged(const std::string& tag) const {
+    std::vector<Entity> out;
+    for (Entity e : entities())
+        if (has_tag(e, tag)) out.push_back(e);
+    return out;
+}
+
 Animator* Scene::animator(Entity e) {
     Slot* s = slot(e);
     return s && s->animator ? &*s->animator : nullptr;
@@ -1582,6 +1692,8 @@ Entity Scene::copy_from(const Scene& other, Entity source, Entity parent) {
     dst->model = copy.model;
     dst->animator = copy.animator;
     dst->terrain = copy.terrain;
+    dst->health = copy.health;
+    dst->tags = copy.tags;
     dst->bone = copy.bone;
     dst->instance_of = copy.instance_of;
     if (&other == this) {
@@ -1769,9 +1881,73 @@ const char* humanoid_label(HumanoidKind v) {
     return "Basic (one capsule)";
 }
 
+const std::vector<std::string>& character_styles() {
+    static const std::vector<std::string> all = {"pixel", "mannequin", "robot"};
+    return all;
+}
+
+const char* character_style_label(const std::string& style) {
+    if (style == "pixel") return "Pixel person (blocky, like People Playground)";
+    if (style == "mannequin") return "Mannequin (smooth grey test dummy, like Unity's and Unreal's)";
+    if (style == "robot") return "Robot avatar (big-headed robot with a visor, like VRChat's)";
+    return "Colliders only";
+}
+
+std::string character_model_path(const std::string& style) {
+    return "Assets/Models/Characters/" + style + ".glb";
+}
+
+std::string character_style(const Scene& scene, Entity root) {
+    const Model* m = scene.model(root);
+    return m ? m->style : std::string();
+}
+
+bool set_character_style(Scene& scene, Entity root, const std::string& style) {
+    if (!scene.alive(root)) return false;
+    if (style.empty() || style == "none") {
+        if (const Model* m = scene.model(root); m && !m->style.empty()) scene.remove_model(root);
+        return true;
+    }
+    if (std::find(character_styles().begin(), character_styles().end(), style) == character_styles().end()) return false;
+    Model& m = scene.model(root) ? *scene.model(root) : scene.add_model(root);
+    m.source = character_model_path(style);
+    m.style = style;
+    m.visible = true;
+    return true;
+}
+
+std::optional<HumanoidKind> humanoid_kind_of(const Scene& scene, Entity root) {
+    if (!scene.alive(root)) return std::nullopt;
+    bool any_child_collider = false;
+    for (Entity c : scene.children(root)) {
+        const std::string& n = scene.name(c);
+        if (n == "Chest" || n == "Organs" || n == "Bones" || n == "Pelvis") return HumanoidKind::detailed;
+        if (n == "Torso") return HumanoidKind::full_body;
+        if (n == "Body") return HumanoidKind::head_and_body;
+        if (scene.colliders(c) && !scene.colliders(c)->empty()) any_child_collider = true;
+    }
+    const std::vector<Collider>* own = scene.colliders(root);
+    if (!any_child_collider && own && own->size() == 1 && (*own)[0].shape == ColliderShape::capsule) return HumanoidKind::basic;
+    return std::nullopt;
+}
+
+bool set_humanoid_colliders(Scene& scene, Entity root, HumanoidKind kind, float height) {
+    if (!scene.alive(root)) return false;
+    std::function<bool(Entity)> keeps = [&](Entity e) {
+        if (scene.camera(e) || scene.light(e) || scene.emitter(e) || !scene.script(e).empty()) return true;
+        for (Entity c : scene.children(e))
+            if (keeps(c)) return true;
+        return false;
+    };
+    const std::vector<Entity> kids = scene.children(root);
+    for (Entity c : kids)
+        if (!keeps(c)) scene.destroy(c);
+    while (scene.colliders(root) && !scene.colliders(root)->empty()) scene.remove_collider(root, 0);
+    add_humanoid_parts(scene, root, kind, height);
+    return true;
+}
+
 Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent, const std::string& name, float height) {
-    const float h = std::max(0.2f, height);
-    const float k = h / 1.8f;
     const bool flat = scene.dimension() == Dimension::two_d;
     const Entity root = scene.create(name.empty() ? std::string("Character") : name, parent);
     Body& body = scene.add_body(root);
@@ -1779,6 +1955,14 @@ Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent, const std::s
     body.set(body_lock_rotation_x, !flat);
     body.set(body_lock_rotation_z, true);
     body.angular_damping = 0.5f;
+    add_humanoid_parts(scene, root, kind, height);
+    return root;
+}
+
+void add_humanoid_parts(Scene& scene, Entity root, HumanoidKind kind, float height) {
+    const float h = std::max(0.2f, height);
+    const float k = h / 1.8f;
+    const bool flat = scene.dimension() == Dimension::two_d;
     auto depth = [flat](float d) { return flat ? 1.0f : d; };
     auto part = [&](Entity owner, const std::string& part_name, ColliderShape shape, Vec3 size, Vec3 at, float roll, bool sensor, float density) {
         const Entity e = scene.create(part_name, owner);
@@ -1810,12 +1994,12 @@ Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent, const std::s
         c->offset = Vec3{0.0f, h * 0.5f, 0.0f};
         c->density = 985.0f / collider_density_unit(scene.dimension());
         c->friction = 0.6f;
-        return root;
+        return;
     }
     if (kind == HumanoidKind::head_and_body) {
         capsule(root, "Body", 0.56f, 1.42f, Vec3{0.0f, 0.71f, 0.0f});
         capsule(root, "Head", 0.26f, 0.32f, Vec3{0.0f, 1.62f, 0.0f});
-        return root;
+        return;
     }
     if (kind == HumanoidKind::full_body) {
         capsule(root, "Head", 0.24f, 0.28f, Vec3{0.0f, 1.64f, 0.0f});
@@ -1831,7 +2015,7 @@ Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent, const std::s
             capsule(root, s + "shin", 0.12f, 0.42f, Vec3{0.1f * x, 0.27f, 0.0f});
             box(root, s + "foot", Vec3{0.1f, 0.06f, 0.24f}, Vec3{0.1f * x, 0.03f, 0.05f});
         }
-        return root;
+        return;
     }
     const Entity head = capsule(root, "Head", 0.22f, 0.26f, Vec3{0.0f, 1.65f, 0.0f});
     capsule(root, "Jaw", 0.12f, 0.12f, Vec3{0.0f, 1.55f, 0.04f}, 90.0f);
@@ -1892,7 +2076,6 @@ Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent, const std::s
     organ(bones, "Lower spine", ColliderShape::capsule, Vec3{0.04f, 0.24f, 0.04f}, Vec3{0.0f, 1.0f, -0.07f});
     organ(bones, "Ribs", ColliderShape::box, Vec3{0.32f, 0.26f, 0.2f}, Vec3{0.0f, 1.27f, 0.0f});
     organ(bones, "Hip bone", ColliderShape::box, Vec3{0.3f, 0.12f, 0.16f}, Vec3{0.0f, 0.86f, 0.0f});
-    return root;
 }
 
 const char* to_string(EmitterShape v) {
@@ -1940,7 +2123,8 @@ std::optional<ParticleBlend> parse_particle_blend(const std::string& text) {
 }
 
 const std::vector<std::string>& Emitter::presets() {
-    static const std::vector<std::string> all = {"sparks", "smoke", "fire", "explosion", "dust", "rain", "snow", "magic", "debris", "bubbles", "steam", "embers"};
+    static const std::vector<std::string> all = {"sparks", "smoke", "fire", "explosion", "dust", "rain", "snow", "magic", "debris", "bubbles", "steam", "embers",
+                                                 "flames", "smoke-dark", "steam-jet", "spark-shower", "zap", "flash", "fireball", "shockwave", "splash", "dust-burst", "smoke-puffs", "steam-puffs", "scorch"};
     return all;
 }
 
@@ -1949,31 +2133,33 @@ std::optional<Emitter> Emitter::named(const std::string& preset) {
     Emitter e;
     e.preset = s;
     if (s == "sparks") {
-        e.rate = 45.0f; e.lifetime = 0.7f; e.lifetime_spread = 0.3f; e.speed = 6.0f; e.speed_spread = 3.0f; e.spread = 30.0f;
-        e.gravity = 1.0f; e.drag = 0.35f; e.size = 0.035f; e.size_end = 0.012f; e.color = {1.0f, 0.92f, 0.65f}; e.color_end = {1.0f, 0.35f, 0.05f};
-        e.glow = 3.0f; e.stretch = 0.045f; e.collide = true; e.bounce = 0.35f; e.texture = "builtin:spark";
+        e.rate = 60.0f; e.lifetime = 0.8f; e.lifetime_spread = 0.35f; e.speed = 6.5f; e.speed_spread = 3.0f; e.spread = 32.0f;
+        e.gravity = 1.0f; e.drag = 0.3f; e.size = 0.04f; e.size_end = 0.012f; e.color = {1.0f, 0.98f, 0.9f}; e.color_mid = {1.0f, 0.72f, 0.25f}; e.color_mid_at = 0.3f;
+        e.color_end = {0.95f, 0.22f, 0.03f}; e.glow = 4.0f; e.stretch = 0.06f; e.collide = true; e.bounce = 0.4f; e.variation = 0.35f; e.texture = "builtin:spark";
         return e;
     }
     if (s == "smoke") {
-        e.rate = 10.0f; e.lifetime = 4.5f; e.lifetime_spread = 1.2f; e.speed = 0.9f; e.speed_spread = 0.3f; e.spread = 15.0f;
-        e.gravity = -0.08f; e.drag = 0.55f; e.turbulence = 0.45f; e.size = 0.55f; e.size_end = 2.4f;
-        e.color = {0.32f, 0.32f, 0.34f}; e.color_end = {0.58f, 0.58f, 0.6f}; e.alpha = 0.6f; e.alpha_end = 0.0f;
+        e.rate = 14.0f; e.lifetime = 5.0f; e.lifetime_spread = 1.5f; e.speed = 0.9f; e.speed_spread = 0.35f; e.spread = 14.0f;
+        e.gravity = -0.08f; e.drag = 0.6f; e.turbulence = 0.5f; e.size = 0.5f; e.size_end = 2.8f; e.grow = 0.55f; e.fade_in = 0.12f;
+        e.color = {0.3f, 0.3f, 0.32f}; e.color_end = {0.62f, 0.62f, 0.64f}; e.alpha = 0.5f; e.alpha_end = 0.0f; e.variation = 0.25f; e.spin = 14.0f;
         e.glow = 0.0f; e.stretch = 0.0f; e.blend = ParticleBlend::alpha; e.lit = true; e.shape = EmitterShape::circle; e.shape_size = {0.25f, 0.25f, 0.25f};
-        e.max_particles = 500; e.texture = "builtin:smoke";
+        e.max_particles = 500; e.texture = "builtin:smoke-soft";
         return e;
     }
     if (s == "fire") {
-        e.rate = 40.0f; e.lifetime = 0.85f; e.lifetime_spread = 0.25f; e.speed = 1.1f; e.speed_spread = 0.4f; e.spread = 10.0f;
-        e.gravity = -0.3f; e.drag = 0.8f; e.turbulence = 0.5f; e.size = 0.55f; e.size_end = 0.3f;
-        e.color = {1.0f, 0.82f, 0.6f}; e.color_end = {1.0f, 0.4f, 0.15f}; e.alpha = 0.85f; e.glow = 1.0f; e.stretch = 0.0f;
-        e.shape = EmitterShape::circle; e.shape_size = {0.25f, 0.25f, 0.25f}; e.on_death = "smoke"; e.max_particles = 400; e.texture = "builtin:fire";
+        e.rate = 55.0f; e.lifetime = 0.8f; e.lifetime_spread = 0.25f; e.speed = 1.2f; e.speed_spread = 0.45f; e.spread = 9.0f;
+        e.gravity = -0.35f; e.drag = 0.8f; e.turbulence = 0.6f; e.size = 0.6f; e.size_end = 0.25f;
+        e.color = {1.0f, 0.95f, 0.78f}; e.color_mid = {1.0f, 0.55f, 0.12f}; e.color_mid_at = 0.35f; e.color_end = {0.62f, 0.1f, 0.02f};
+        e.alpha = 0.9f; e.glow = 1.6f; e.stretch = 0.0f; e.variation = 0.3f; e.fade_in = 0.06f;
+        e.shape = EmitterShape::circle; e.shape_size = {0.25f, 0.25f, 0.25f}; e.on_death = "smoke-dark"; e.max_particles = 400; e.texture = "builtin:fire";
         return e;
     }
     if (s == "explosion") {
         e.loop = false; e.rate = 0.0f; e.burst = 30; e.duration = 0.1f; e.lifetime = 1.3f; e.lifetime_spread = 0.4f;
         e.speed = 3.5f; e.speed_spread = 2.0f; e.spread = 180.0f; e.shape = EmitterShape::sphere; e.shape_size = {0.4f, 0.4f, 0.4f};
-        e.gravity = -0.15f; e.drag = 2.6f; e.turbulence = 0.3f; e.size = 1.1f; e.size_end = 2.8f; e.color = {1.0f, 0.82f, 0.6f}; e.color_end = {0.8f, 0.32f, 0.12f};
-        e.alpha = 0.6f; e.glow = 1.0f; e.stretch = 0.0f; e.on_death = "smoke"; e.max_particles = 160; e.priority = 3; e.texture = "builtin:explosion";
+        e.gravity = -0.15f; e.drag = 2.6f; e.turbulence = 0.3f; e.size = 1.1f; e.size_end = 3.0f; e.grow = 0.7f;
+        e.color = {1.0f, 0.88f, 0.5f}; e.color_mid = {1.0f, 0.5f, 0.1f}; e.color_mid_at = 0.35f; e.color_end = {0.16f, 0.06f, 0.03f};
+        e.alpha = 0.92f; e.glow = 1.35f; e.stretch = 0.0f; e.variation = 0.2f; e.blend = ParticleBlend::alpha; e.lit = false; e.on_death = "smoke-dark"; e.max_particles = 160; e.priority = 3; e.texture = "builtin:explosion";
         return e;
     }
     if (s == "dust") {
@@ -2017,14 +2203,97 @@ std::optional<Emitter> Emitter::named(const std::string& preset) {
     }
     if (s == "steam") {
         Emitter m = *named("smoke");
-        m.preset = s; m.color = {0.95f, 0.96f, 0.98f}; m.color_end = {1.0f, 1.0f, 1.0f}; m.alpha = 0.3f; m.lifetime = 1.6f; m.lifetime_spread = 0.5f; m.speed = 1.5f; m.gravity = -0.2f;
-        m.rate = 18.0f; m.size = 0.3f; m.size_end = 1.5f; m.turbulence = 0.7f; m.texture = "builtin:steam";
+        m.preset = s; m.color = {0.96f, 0.97f, 0.99f}; m.color_end = {1.0f, 1.0f, 1.0f}; m.alpha = 0.24f; m.lifetime = 1.4f; m.lifetime_spread = 0.45f; m.speed = 1.8f; m.speed_spread = 0.5f;
+        m.gravity = -0.3f; m.drag = 1.1f; m.rate = 32.0f; m.size = 0.18f; m.size_end = 1.4f; m.grow = 0.6f; m.fade_in = 0.1f; m.turbulence = 0.9f; m.spin = 20.0f;
+        m.variation = 0.1f; m.lit = false; m.texture = "builtin:steam-wisp";
         return m;
     }
     if (s == "embers") {
         e.rate = 8.0f; e.lifetime = 2.5f; e.lifetime_spread = 1.0f; e.speed = 1.2f; e.speed_spread = 0.6f; e.spread = 25.0f; e.gravity = -0.15f; e.drag = 0.4f; e.turbulence = 1.0f;
         e.size = 0.04f; e.size_end = 0.015f; e.color = {1.0f, 0.65f, 0.25f}; e.color_end = {0.85f, 0.18f, 0.02f}; e.glow = 3.0f; e.stretch = 0.03f; e.shape = EmitterShape::circle; e.texture = "builtin:ember";
         e.shape_size = {0.3f, 0.3f, 0.3f}; e.max_particles = 200;
+        return e;
+    }
+    if (s == "flames") {
+        e.rate = 70.0f; e.lifetime = 0.6f; e.lifetime_spread = 0.2f; e.speed = 1.6f; e.speed_spread = 0.5f; e.spread = 7.0f;
+        e.gravity = -0.45f; e.drag = 0.9f; e.turbulence = 0.7f; e.size = 0.5f; e.size_end = 0.12f;
+        e.color = {1.0f, 0.97f, 0.85f}; e.color_mid = {1.0f, 0.62f, 0.16f}; e.color_mid_at = 0.3f; e.color_end = {0.75f, 0.14f, 0.02f};
+        e.alpha = 0.95f; e.glow = 2.0f; e.stretch = 0.0f; e.variation = 0.3f; e.fade_in = 0.05f;
+        e.shape = EmitterShape::circle; e.shape_size = {0.3f, 0.3f, 0.3f}; e.max_particles = 400; e.texture = "builtin:flame";
+        return e;
+    }
+    if (s == "smoke-dark") {
+        Emitter m = *named("smoke");
+        m.preset = s; m.color = {0.08f, 0.075f, 0.07f}; m.color_end = {0.3f, 0.3f, 0.31f}; m.alpha = 0.62f; m.rate = 12.0f; m.speed = 1.4f;
+        m.gravity = -0.18f; m.size = 0.6f; m.size_end = 3.4f; m.lifetime = 4.5f;
+        return m;
+    }
+    if (s == "smoke-puffs") {
+        Emitter m = *named("smoke");
+        m.preset = s; m.texture = "builtin:smoke"; m.alpha = 0.6f;
+        return m;
+    }
+    if (s == "steam-puffs") {
+        Emitter m = *named("steam");
+        m.preset = s; m.texture = "builtin:steam"; m.alpha = 0.3f; m.rate = 18.0f; m.size = 0.3f; m.size_end = 1.5f;
+        return m;
+    }
+    if (s == "steam-jet") {
+        Emitter m = *named("steam");
+        m.preset = s; m.speed = 7.0f; m.speed_spread = 1.5f; m.spread = 5.0f; m.lifetime = 0.9f; m.rate = 70.0f; m.size = 0.08f; m.size_end = 1.1f;
+        m.alpha = 0.3f; m.drag = 2.2f; m.turbulence = 1.2f; m.shape = EmitterShape::point; m.max_particles = 300;
+        return m;
+    }
+    if (s == "spark-shower") {
+        Emitter m = *named("sparks");
+        m.preset = s; m.rate = 220.0f; m.lifetime = 1.1f; m.speed = 3.5f; m.speed_spread = 2.5f; m.spread = 70.0f; m.size = 0.025f; m.size_end = 0.008f;
+        m.stretch = 0.08f; m.bounce = 0.5f; m.friction = 0.1f; m.max_particles = 1500;
+        return m;
+    }
+    if (s == "zap") {
+        e.rate = 90.0f; e.lifetime = 0.25f; e.lifetime_spread = 0.12f; e.speed = 5.0f; e.speed_spread = 3.0f; e.spread = 180.0f;
+        e.gravity = 0.0f; e.drag = 3.0f; e.turbulence = 3.0f; e.size = 0.03f; e.size_end = 0.01f;
+        e.color = {0.95f, 0.98f, 1.0f}; e.color_mid = {0.5f, 0.75f, 1.0f}; e.color_mid_at = 0.3f; e.color_end = {0.25f, 0.3f, 1.0f};
+        e.glow = 4.0f; e.stretch = 0.08f; e.variation = 0.4f; e.texture = "builtin:spark"; e.shape = EmitterShape::sphere; e.shape_size = {0.1f, 0.1f, 0.1f}; e.max_particles = 300;
+        return e;
+    }
+    if (s == "flash") {
+        e.loop = false; e.rate = 0.0f; e.burst = 2; e.duration = 0.05f; e.lifetime = 0.16f; e.lifetime_spread = 0.04f; e.speed = 0.0f; e.speed_spread = 0.0f; e.spread = 0.0f;
+        e.gravity = 0.0f; e.drag = 0.0f; e.size = 2.2f; e.size_end = 3.2f; e.color = {1.0f, 0.95f, 0.8f}; e.color_end = {1.0f, 0.6f, 0.2f};
+        e.alpha = 1.0f; e.glow = 3.0f; e.stretch = 0.0f; e.spin = 0.0f; e.texture = "builtin:flash"; e.max_particles = 8; e.priority = 3;
+        return e;
+    }
+    if (s == "fireball") {
+        Emitter m = *named("explosion");
+        m.preset = s; m.burst = 18; m.lifetime = 0.7f; m.lifetime_spread = 0.2f; m.speed = 4.5f; m.speed_spread = 1.5f; m.drag = 4.0f; m.size = 0.9f; m.size_end = 2.6f; m.grow = 0.8f;
+        m.alpha = 0.95f; m.on_death = ""; m.color_end = {0.3f, 0.07f, 0.02f};
+        return m;
+    }
+    if (s == "shockwave") {
+        e.loop = false; e.rate = 0.0f; e.burst = 1; e.duration = 0.05f; e.lifetime = 0.45f; e.lifetime_spread = 0.0f; e.speed = 0.0f; e.speed_spread = 0.0f; e.spread = 0.0f;
+        e.gravity = 0.0f; e.drag = 0.0f; e.size = 0.5f; e.size_end = 9.0f; e.grow = 0.7f; e.color = {1.0f, 0.9f, 0.75f}; e.color_end = {1.0f, 0.85f, 0.7f};
+        e.alpha = 0.55f; e.alpha_end = 0.0f; e.glow = 1.0f; e.stretch = 0.0f; e.texture = "builtin:shockwave"; e.max_particles = 4; e.priority = 2;
+        return e;
+    }
+    if (s == "splash") {
+        e.loop = false; e.rate = 0.0f; e.burst = 70; e.duration = 0.1f; e.lifetime = 1.0f; e.lifetime_spread = 0.3f; e.speed = 4.0f; e.speed_spread = 1.8f; e.spread = 35.0f;
+        e.gravity = 1.0f; e.drag = 0.2f; e.size = 0.06f; e.size_end = 0.03f; e.color = {0.85f, 0.92f, 1.0f}; e.color_end = {0.8f, 0.9f, 1.0f};
+        e.alpha = 0.8f; e.alpha_end = 0.0f; e.glow = 0.3f; e.stretch = 0.04f; e.blend = ParticleBlend::alpha; e.texture = "builtin:rain";
+        e.collide = true; e.die_on_hit = true; e.shape = EmitterShape::circle; e.shape_size = {0.3f, 0.3f, 0.3f}; e.max_particles = 300;
+        return e;
+    }
+    if (s == "dust-burst") {
+        e.loop = false; e.rate = 0.0f; e.burst = 14; e.duration = 0.1f; e.lifetime = 1.6f; e.lifetime_spread = 0.5f; e.speed = 1.6f; e.speed_spread = 0.8f; e.spread = 80.0f;
+        e.gravity = 0.05f; e.drag = 2.0f; e.turbulence = 0.3f; e.size = 0.25f; e.size_end = 1.1f; e.grow = 0.6f; e.fade_in = 0.05f;
+        e.color = {0.62f, 0.56f, 0.47f}; e.color_end = {0.7f, 0.65f, 0.58f}; e.alpha = 0.55f; e.alpha_end = 0.0f; e.glow = 0.0f; e.stretch = 0.0f; e.spin = 20.0f;
+        e.blend = ParticleBlend::alpha; e.lit = true; e.texture = "builtin:smoke-soft"; e.max_particles = 60;
+        return e;
+    }
+    if (s == "scorch") {
+        e.loop = false; e.rate = 0.0f; e.burst = 1; e.duration = 0.05f; e.lifetime = 300.0f; e.lifetime_spread = 0.0f; e.speed = 0.0f; e.speed_spread = 0.0f; e.spread = 0.0f;
+        e.gravity = 0.0f; e.drag = 0.0f; e.turbulence = 0.0f; e.size = 2.6f; e.size_end = 2.6f; e.fade_in = 0.0005f; e.variation = 0.15f;
+        e.color = {0.045f, 0.04f, 0.035f}; e.color_end = e.color; e.alpha = 0.92f; e.alpha_end = 0.92f; e.glow = 0.0f; e.stretch = 0.0f; e.spin = 0.0f;
+        e.blend = ParticleBlend::alpha; e.lit = false; e.flat = true; e.soft = "off"; e.shape = EmitterShape::point; e.texture = "builtin:scorch"; e.max_particles = 4; e.priority = 3;
         return e;
     }
     return std::nullopt;
@@ -2333,6 +2602,16 @@ std::string emitter_line(std::size_t n, const Emitter& v) {
     if (!v.part.empty()) out += " part:" + escape_token(v.part);
     if (v.soft != "auto") out += " soft:" + escape_token(v.soft);
     if (v.soft_distance > 0.0f) out += " soft-distance:" + number(v.soft_distance);
+    if (v.color_mid_at >= 0.0f) {
+        v3("color-mid", v.color_mid, Vec3{-1.0f, -1.0f, -1.0f});
+        f("color-mid-at", v.color_mid_at, -1.0f);
+    }
+    f("fade-in", v.fade_in, d.fade_in);
+    f("grow", v.grow, d.grow);
+    f("spin", v.spin, d.spin);
+    f("variation", v.variation, d.variation);
+    f("delay", v.start_delay, d.start_delay);
+    b("flat", v.flat, d.flat);
     if (!v.on_death.empty()) out += " on-death:" + escape_token(v.on_death);
     else if (v.on_death != d.on_death) out += " on-death:none";
     return out + "\n";
@@ -2390,6 +2669,14 @@ void read_emitter(std::istringstream& row, Emitter& v) {
         else if (key == "part") v.part = unescape_token(s);
         else if (key == "soft") v.soft = s == "on" || s == "off" ? s : std::string("auto");
         else if (key == "soft-distance") v.soft_distance = std::max(0.0f, x);
+        else if (key == "color-mid") parse_vec_token(s, v.color_mid);
+        else if (key == "color-mid-at") v.color_mid_at = std::min(x, 1.0f);
+        else if (key == "fade-in") v.fade_in = std::clamp(x, 0.0f, 0.95f);
+        else if (key == "grow") v.grow = std::clamp(x, 0.0f, 1.0f);
+        else if (key == "spin") v.spin = std::max(0.0f, x);
+        else if (key == "variation") v.variation = std::clamp(x, 0.0f, 1.0f);
+        else if (key == "delay") v.start_delay = std::max(0.0f, x);
+        else if (key == "flat") v.flat = s != "0";
         else if (key == "on-death") v.on_death = s == "none" ? std::string() : unescape_token(s);
     }
 }
@@ -2687,6 +2974,7 @@ std::string Scene::save() const {
             if (s.camera->view_height != d.view_height) out << " height:" << number(s.camera->view_height);
             if (s.camera->control != d.control) out << " control:" << to_string(s.camera->control);
             if (s.camera->move_speed != d.move_speed) out << " speed:" << number(s.camera->move_speed);
+            if (s.camera->sprint_speed != d.sprint_speed) out << " sprint:" << number(s.camera->sprint_speed);
             if (s.camera->look_speed != d.look_speed) out << " look:" << number(s.camera->look_speed);
             if (s.camera->eye_height != d.eye_height) out << " eye:" << number(s.camera->eye_height);
             if (s.camera->jump_speed != d.jump_speed) out << " jump:" << number(s.camera->jump_speed);
@@ -2698,6 +2986,29 @@ std::string Scene::save() const {
             out << "model " << n << " source:" << escape_token(s.model->source);
             if (s.model->visible != d.visible) out << " visible:" << (s.model->visible ? 1 : 0);
             if (s.model->cast_shadows != d.cast_shadows) out << " shadows:" << (s.model->cast_shadows ? 1 : 0);
+            if (!s.model->style.empty()) out << " style:" << escape_token(s.model->style);
+            out << "\n";
+        }
+        if (s.health) {
+            const Health d;
+            const Health& h = *s.health;
+            out << "health " << n << " value:" << number(h.value) << " max:" << number(h.max);
+            if (h.regen != d.regen) out << " regen:" << number(h.regen);
+            if (h.regen_delay != d.regen_delay) out << " regen-delay:" << number(h.regen_delay);
+            if (h.invulnerable) out << " invulnerable:1";
+            if (h.impact_damage != d.impact_damage) out << " impact:" << number(h.impact_damage);
+            if (h.flammable) out << " flammable:1";
+            if (h.burn_damage != d.burn_damage) out << " burn:" << number(h.burn_damage);
+            if (h.on_death != d.on_death) out << " death:" << to_string(h.on_death);
+            if (h.explode_radius != d.explode_radius) out << " blast-radius:" << number(h.explode_radius);
+            if (h.explode_force != d.explode_force) out << " blast-force:" << number(h.explode_force);
+            if (h.explode_damage != d.explode_damage) out << " blast-damage:" << number(h.explode_damage);
+            if (h.respawn_delay != d.respawn_delay) out << " respawn:" << number(h.respawn_delay);
+            out << "\n";
+        }
+        if (!s.tags.empty()) {
+            out << "tags " << n << " ";
+            for (std::size_t t = 0; t < s.tags.size(); ++t) out << (t ? "," : "") << escape_token(s.tags[t]);
             out << "\n";
         }
         if (s.animator) {
@@ -2746,7 +3057,7 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
         std::string kind;
         std::size_t num = 0, parent = 0;
         row >> kind >> num;
-        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material" || kind == "fluid" || kind == "emitter" || kind == "instance" || kind == "camera" || kind == "model" || kind == "animator" || kind == "anim-event" || kind == "bone" || is_terrain_line(kind)) {
+        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material" || kind == "fluid" || kind == "emitter" || kind == "instance" || kind == "camera" || kind == "model" || kind == "animator" || kind == "anim-event" || kind == "bone" || kind == "health" || kind == "tags" || is_terrain_line(kind)) {
             const auto owner = by_number.find(num);
             if (!row || owner == by_number.end()) {
                 if (error) *error = "line " + std::to_string(line_no) + ": " + kind + " for an entity that isn't there";
@@ -2771,6 +3082,44 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     if (key == "source") m.source = unescape_token(v);
                     else if (key == "visible") m.visible = v != "0";
                     else if (key == "shadows") m.cast_shadows = v != "0";
+                    else if (key == "style") m.style = unescape_token(v);
+                }
+                continue;
+            }
+            if (kind == "health") {
+                Health& h = scene.add_health(owner->second);
+                for (std::string token; row >> token;) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    const std::string key = token.substr(0, colon), v = token.substr(colon + 1);
+                    const float x = static_cast<float>(std::atof(v.c_str()));
+                    if (key == "value") h.value = x;
+                    else if (key == "max") h.max = std::max(0.0f, x);
+                    else if (key == "regen") h.regen = x;
+                    else if (key == "regen-delay") h.regen_delay = std::max(0.0f, x);
+                    else if (key == "invulnerable") h.invulnerable = v != "0";
+                    else if (key == "impact") h.impact_damage = std::max(0.0f, x);
+                    else if (key == "flammable") h.flammable = v != "0";
+                    else if (key == "burn") h.burn_damage = std::max(0.0f, x);
+                    else if (key == "death") {
+                        if (const auto d = parse_death_action(v)) h.on_death = *d;
+                    } else if (key == "blast-radius") h.explode_radius = std::max(0.0f, x);
+                    else if (key == "blast-force") h.explode_force = x;
+                    else if (key == "blast-damage") h.explode_damage = x;
+                    else if (key == "respawn") h.respawn_delay = std::max(0.0f, x);
+                }
+                continue;
+            }
+            if (kind == "tags") {
+                std::string list;
+                row >> list;
+                std::size_t from = 0;
+                while (from <= list.size()) {
+                    const std::size_t comma = list.find(',', from);
+                    const std::string one = unescape_token(list.substr(from, comma == std::string::npos ? std::string::npos : comma - from));
+                    if (!one.empty()) scene.add_tag(owner->second, one);
+                    if (comma == std::string::npos) break;
+                    from = comma + 1;
                 }
                 continue;
             }
@@ -2829,6 +3178,7 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     else if (key == "control") {
                         if (const auto cc = parse_camera_control(v)) c.control = *cc;
                     } else if (key == "speed") c.move_speed = std::max(0.0f, x);
+                    else if (key == "sprint") c.sprint_speed = std::max(0.0f, x);
                     else if (key == "look") c.look_speed = std::max(0.0f, x);
                     else if (key == "eye") c.eye_height = std::max(0.0f, x);
                     else if (key == "jump") c.jump_speed = std::max(0.0f, x);

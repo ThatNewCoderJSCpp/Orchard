@@ -77,6 +77,82 @@ orchard::Quat about_z(float radians) {
     return {0.0f, 0.0f, std::sin(radians * 0.5f), std::cos(radians * 0.5f)};
 }
 
+float angle_2d(orchard::Quat q) {
+    const orchard::Vec3 up = orchard::rotate(q, orchard::Vec3{0.0f, 1.0f, 0.0f});
+    if (up.x * up.x + up.y * up.y < 0.04f) return angle_z(q);
+    return std::atan2(-up.x, up.y);
+}
+
+std::vector<orchard::Vec2> hull_2d(std::vector<orchard::Vec2> pts) {
+    std::sort(pts.begin(), pts.end(), [](orchard::Vec2 a, orchard::Vec2 b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+    pts.erase(std::unique(pts.begin(), pts.end(), [](orchard::Vec2 a, orchard::Vec2 b) { return std::fabs(a.x - b.x) < 1e-5f && std::fabs(a.y - b.y) < 1e-5f; }), pts.end());
+    if (pts.size() < 3) return pts;
+    auto turn = [](orchard::Vec2 o, orchard::Vec2 a, orchard::Vec2 b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); };
+    std::vector<orchard::Vec2> h(pts.size() * 2);
+    std::size_t k = 0;
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        while (k >= 2 && turn(h[k - 2], h[k - 1], pts[i]) <= 1e-9f) --k;
+        h[k++] = pts[i];
+    }
+    for (std::size_t i = pts.size() - 1, t = k + 1; i > 0; --i) {
+        while (k >= t && turn(h[k - 2], h[k - 1], pts[i - 1]) <= 1e-9f) --k;
+        h[k++] = pts[i - 1];
+    }
+    h.resize(k > 0 ? k - 1 : 0);
+    while (h.size() > 8) {
+        std::size_t best = 0;
+        float least = 1e30f;
+        for (std::size_t i = 0; i < h.size(); ++i) {
+            const orchard::Vec2 a = h[(i + h.size() - 1) % h.size()], b = h[i], c = h[(i + 1) % h.size()];
+            const float area = std::fabs(turn(a, b, c));
+            if (area < least) {
+                least = area;
+                best = i;
+            }
+        }
+        h.erase(h.begin() + static_cast<std::ptrdiff_t>(best));
+    }
+    return h;
+}
+
+std::vector<orchard::Vec3> outline_points(const orchard::Collider& c, orchard::Vec3 s) {
+    std::vector<orchard::Vec3> out;
+    const float pi2 = 6.2831853f;
+    switch (c.shape) {
+    case orchard::ColliderShape::cylinder:
+    case orchard::ColliderShape::cone: {
+        const float r = std::max(s.x, s.z) * 0.5f, h = s.y * 0.5f;
+        for (int k = 0; k < 16; ++k) {
+            const float a = pi2 * static_cast<float>(k) / 16.0f;
+            out.push_back({r * std::cos(a), -h, r * std::sin(a)});
+            if (c.shape == orchard::ColliderShape::cylinder) out.push_back({r * std::cos(a), h, r * std::sin(a)});
+        }
+        if (c.shape == orchard::ColliderShape::cone) out.push_back({0.0f, h, 0.0f});
+        break;
+    }
+    case orchard::ColliderShape::triangle:
+        return orchard::triangle_prism_points(c, orchard::Vec3{s.x / std::max(c.size.x, 1e-6f), s.y / std::max(c.size.y, 1e-6f), s.z / std::max(c.size.z, 1e-6f)});
+    case orchard::ColliderShape::sphere_section: {
+        const float r = std::max({s.x, s.y, s.z}) * 0.5f;
+        const float p0 = c.polar_min * orchard::pi / 180.0f, p1 = c.polar_max * orchard::pi / 180.0f;
+        const float a0 = c.azimuth_min * orchard::pi / 180.0f, a1 = c.azimuth_max * orchard::pi / 180.0f;
+        for (int i = 0; i <= 8; ++i) {
+            const float th = p0 + (p1 - p0) * static_cast<float>(i) / 8.0f;
+            out.push_back({0.0f, r * std::cos(th), 0.0f});
+            for (int j = 0; j <= 16; ++j) {
+                const float ph = a0 + (a1 - a0) * static_cast<float>(j) / 16.0f;
+                out.push_back({r * std::sin(th) * std::cos(ph), r * std::cos(th), r * std::sin(th) * std::sin(ph)});
+            }
+        }
+        break;
+    }
+    default:
+        for (int k = 0; k < 8; ++k) out.push_back({(k & 1 ? 0.5f : -0.5f) * s.x, (k & 2 ? 0.5f : -0.5f) * s.y, (k & 4 ? 0.5f : -0.5f) * s.z});
+        break;
+    }
+    return out;
+}
+
 fp::FluidLevel to_fizmo(orchard::FluidLevel level) {
     switch (level) {
     case orchard::FluidLevel::blocky: return fp::FluidLevel::blocky;
@@ -519,6 +595,36 @@ struct World::Impl {
     std::vector<Contact> contacts;
     std::size_t colliders = 0;
     Real accumulator = 0.0_r;
+    struct Pose {
+        orchard::Vec3 position;
+        orchard::Quat rotation;
+    };
+    std::unordered_map<std::uint64_t, Pose> previous;
+
+    bool body_pose(std::uint64_t id, Pose& out) const {
+        if (auto it = bodies3.find(id); it != bodies3.end()) {
+            out.position = ov(it->second->position());
+            out.rotation = to_orchard(it->second->orientation());
+            return true;
+        }
+        if (auto it = bodies2.find(id); it != bodies2.end()) {
+            const RVec2 p = it->second->position();
+            out.position = {static_cast<float>(p.x), static_cast<float>(p.y), 0.0f};
+            const float a = static_cast<float>(it->second->angle()) * 0.5f;
+            out.rotation = {0.0f, 0.0f, std::sin(a), std::cos(a)};
+            return true;
+        }
+        return false;
+    }
+
+    void remember_poses() {
+        previous.clear();
+        Pose p;
+        for (const auto& [id, body] : bodies3)
+            if (body->inv_mass() > 0.0_r && body_pose(id, p)) previous[id] = p;
+        for (const auto& [id, body] : bodies2)
+            if (body->inv_mass() > 0.0_r && body_pose(id, p)) previous[id] = p;
+    }
     std::unique_ptr<fp::FluidWorld3D> fluids;
     std::vector<std::pair<orchard::Entity, fp::FluidVolume3D*>> volumes;
     std::vector<orchard::Fluid> volume_looks;
@@ -571,8 +677,54 @@ struct World::Impl {
         return it->second ? &*it->second : nullptr;
     }
 
+    void build_terrain_slices(const orchard::Scene& s) {
+        const orchard::Quat frame = orchard::terrain_frame(settings.up);
+        for (orchard::Entity e : s.entities()) {
+            const orchard::Terrain* t = s.terrain(e);
+            if (!t) continue;
+            std::shared_ptr<const orchard::TerrainHeights> heights = terrain_source ? terrain_source(e, *t) : nullptr;
+            if (!heights || !heights->valid()) {
+                auto made = std::make_shared<orchard::TerrainHeights>();
+                std::string why;
+                if (!orchard::build_terrain_heights(*t, asset_root, *made, &why) && !why.empty()) warn(s.name(e) + ": " + why);
+                heights = made;
+            }
+            if (!heights->valid()) continue;
+            const orchard::Vec3 pos = world_position(s, e);
+            const orchard::Quat rot = orchard::normalize(world_rotation(s, e) * frame);
+            const orchard::Vec3 ts = terrain_axis_scale(world_scale(s, e), frame);
+            const orchard::Vec3 to_up = orchard::rotate(rot, orchard::Vec3{0.0f, 1.0f, 0.0f});
+            if (to_up.y < 0.999f) {
+                warn(s.name(e) + ": only an unrotated, Y-up terrain can be sliced for 2D play");
+                continue;
+            }
+            const float lz = (0.0f - pos.z) / std::max(1e-6f, ts.z);
+            const orchard::Vec3 first = heights->local_position(0, 0), last = heights->local_position(heights->width - 1, heights->depth - 1);
+            if (lz < std::min(first.z, last.z) || lz > std::max(first.z, last.z)) continue;
+            const int n = std::clamp(heights->width, 2, 1024);
+            fp::RigidBody2D& body = sim2->add_body(fp::PhysicsFlags::DefaultStatic);
+            fp::Material mat(fp::MassSpec::from_density(1000.0_r), std::max(0.0f, t->friction), std::max(0.0f, t->restitution));
+            RVec2 prev{};
+            for (int i = 0; i < n; ++i) {
+                const float lx = first.x + (last.x - first.x) * static_cast<float>(i) / static_cast<float>(n - 1);
+                const RVec2 at{static_cast<Real>(lx * ts.x), static_cast<Real>(heights->height_at(lx, lz) * ts.y)};
+                if (i > 0) body.add_collider(fp::Shape2D::make_edge(prev, at), mat, fp::Transform2D(), fp::CollisionFilter{}, false);
+                prev = at;
+            }
+            if (const orchard::Body* owner = s.body(e)) body.set_collision_filter(owner->collision_layer, owner->collision_mask);
+            body.set_position(RVec2{pos.x, pos.y});
+            body.mark_mass_dirty();
+            owners[&body] = e;
+            ++colliders;
+            ++terrains;
+        }
+    }
+
     void build_terrains(const orchard::Scene& s) {
-        if (!sim3) return;
+        if (!sim3) {
+            if (sim2) build_terrain_slices(s);
+            return;
+        }
         const orchard::Quat frame = orchard::terrain_frame(settings.up);
         for (orchard::Entity e : s.entities()) {
             const orchard::Terrain* t = s.terrain(e);
@@ -692,7 +844,7 @@ struct World::Impl {
             auto it = bodies2.find(e.id());
             if (it == bodies2.end()) return;
             it->second->set_position(RVec2{pos.x, pos.y});
-            it->second->set_angle(angle_z(rot));
+            it->second->set_angle(angle_2d(rot));
             it->second->wake();
         } else {
             auto it = bodies3.find(e.id());
@@ -803,36 +955,79 @@ struct World::Impl {
     }
 
     void add_2d(orchard::Entity e, const orchard::Body& b, const std::vector<Part>& parts) {
+        const bool flatten = scene && scene->dimension() == orchard::Dimension::three_d;
+        const orchard::Quat owner_rot = scene ? world_rotation(*scene, e) : orchard::Quat{};
+        const float theta = angle_2d(owner_rot);
+        std::size_t kept = 0;
         fp::RigidBody2D& body = sim2->add_body(flags_with_overrides(b));
         for (const Part& p : parts) {
             const orchard::Collider& c = p.collider;
             fp::Shape2D shape;
-            const Real sx = std::max(0.001_r, static_cast<Real>(c.size.x * p.scale.x));
-            const Real sy = std::max(0.001_r, static_cast<Real>(c.size.y * p.scale.y));
-            if (c.shape == orchard::ColliderShape::sphere) {
-                shape = fp::Shape2D::make_circle(RVec2{0.0_r, 0.0_r}, std::max(sx, sy) * 0.5_r);
-            } else if (c.shape == orchard::ColliderShape::capsule) {
-                const Real r = sx * 0.5_r;
-                const Real half = std::max(0.0_r, sy * 0.5_r - r);
-                shape = fp::Shape2D::make_capsule(RVec2{0.0_r, -half}, RVec2{0.0_r, half}, r);
-            } else if (c.shape == orchard::ColliderShape::triangle) {
-                std::vector<RVec2> pts;
-                for (const orchard::Vec3& q : orchard::triangle_corners(c)) pts.push_back(RVec2{static_cast<Real>(q.x * p.scale.x), static_cast<Real>(q.y * p.scale.y)});
-                if (((pts[1].x - pts[0].x) * (pts[2].y - pts[0].y) - (pts[1].y - pts[0].y) * (pts[2].x - pts[0].x)) < 0.0_r) std::swap(pts[1], pts[2]);
-                shape = fp::Shape2D::make_polygon(pts.data(), pts.size());
-            } else {
-                shape = fp::Shape2D::make_box(sx * 0.5_r, sy * 0.5_r);
+            const orchard::Vec3 d = orchard::rotate(owner_rot, p.offset);
+            const orchard::Quat rw = orchard::normalize(owner_rot * p.rotation);
+            const float phi = angle_2d(rw);
+            const orchard::Quat rest = orchard::normalize(about_z(-phi) * rw);
+            const orchard::Vec3 s3{std::fabs(c.size.x * p.scale.x), std::fabs(c.size.y * p.scale.y), std::fabs(c.size.z * p.scale.z)};
+            const orchard::Vec3 ax = orchard::rotate(rest, orchard::Vec3{1.0f, 0.0f, 0.0f}), ay = orchard::rotate(rest, orchard::Vec3{0.0f, 1.0f, 0.0f}), az = orchard::rotate(rest, orchard::Vec3{0.0f, 0.0f, 1.0f});
+            if (flatten) {
+                const float ez = 0.5f * (std::fabs(ax.z) * s3.x + std::fabs(ay.z) * s3.y + std::fabs(az.z) * s3.z);
+                if (std::fabs(d.z) - ez > 0.5f) continue;
             }
-            Real density = std::max(0.0001_r, static_cast<Real>(c.density));
+            const bool upright = std::fabs(ay.y) > 0.999f && std::fabs(ax.x) > 0.999f;
+            const float ct = std::cos(-theta), st = std::sin(-theta);
+            const RVec2 at{static_cast<Real>(ct * d.x - st * d.y), static_cast<Real>(st * d.x + ct * d.y)};
+            const Real sx = std::max(0.001_r, static_cast<Real>(upright ? s3.x : std::fabs(ax.x) * s3.x + std::fabs(ay.x) * s3.y + std::fabs(az.x) * s3.z));
+            const Real sy = std::max(0.001_r, static_cast<Real>(upright ? s3.y : std::fabs(ax.y) * s3.x + std::fabs(ay.y) * s3.y + std::fabs(az.y) * s3.z));
+            const bool flat_scene_shape = !flatten && c.shape != orchard::ColliderShape::triangle;
+            if (c.shape == orchard::ColliderShape::sphere) {
+                shape = fp::Shape2D::make_circle(RVec2{0.0_r, 0.0_r}, static_cast<Real>(flatten ? std::max({s3.x, s3.y, s3.z}) : std::max(s3.x, s3.y)) * 0.5_r);
+            } else if (c.shape == orchard::ColliderShape::capsule && (upright || std::fabs(ay.y) > 0.98f)) {
+                const Real r = static_cast<Real>(flatten ? std::max(s3.x, s3.z) : s3.x) * 0.5_r;
+                const Real half = std::max(0.0_r, static_cast<Real>(s3.y) * 0.5_r - r);
+                shape = fp::Shape2D::make_capsule(RVec2{0.0_r, -half}, RVec2{0.0_r, half}, r);
+            } else if (c.shape == orchard::ColliderShape::capsule && std::fabs(ay.x) > 0.98f) {
+                const Real r = static_cast<Real>(std::max(s3.x, s3.z)) * 0.5_r;
+                const Real half = std::max(0.0_r, static_cast<Real>(s3.y) * 0.5_r - r);
+                shape = fp::Shape2D::make_capsule(RVec2{-half, 0.0_r}, RVec2{half, 0.0_r}, r);
+            } else if (flat_scene_shape || ((c.shape == orchard::ColliderShape::box || c.shape == orchard::ColliderShape::rounded_box) && upright)) {
+                shape = fp::Shape2D::make_box(sx * 0.5_r, sy * 0.5_r);
+            } else {
+                std::vector<orchard::Vec2> flat;
+                for (const orchard::Vec3& q : outline_points(c, s3)) {
+                    const orchard::Vec3 r = orchard::rotate(rest, q);
+                    flat.push_back({r.x, r.y});
+                }
+                const std::vector<orchard::Vec2> h = hull_2d(std::move(flat));
+                float area = 0.0f;
+                for (std::size_t i = 0; i < h.size(); ++i) area += h[i].x * h[(i + 1) % h.size()].y - h[(i + 1) % h.size()].x * h[i].y;
+                if (h.size() >= 3 && std::fabs(area) > 1e-6f) {
+                    std::vector<RVec2> pts;
+                    for (const orchard::Vec2& q : h) pts.push_back(RVec2{static_cast<Real>(q.x), static_cast<Real>(q.y)});
+                    shape = fp::Shape2D::make_polygon(pts.data(), pts.size());
+                } else {
+                    shape = fp::Shape2D::make_box(sx * 0.5_r, sy * 0.5_r);
+                }
+            }
+            Real density = std::max(0.0001_r, static_cast<Real>(c.density)) * (flatten ? static_cast<Real>(orchard::collider_density_unit(orchard::Dimension::three_d)) : 1.0_r);
             if (c.locked(orchard::collider_lock_mass) && c.mass > 0.0f) {
-                const Real area = fp::compute_shape_area(shape);
-                if (area > 0.0_r) density = static_cast<Real>(c.mass) / area;
+                if (flatten) {
+                    const float volume = orchard::collider_volume(c, p.scale, orchard::Dimension::three_d);
+                    if (volume > 0.0f) density = std::max(0.0001_r, static_cast<Real>(c.mass / volume));
+                } else {
+                    const Real area = fp::compute_shape_area(shape);
+                    if (area > 0.0_r) density = static_cast<Real>(c.mass) / area;
+                }
             }
             fp::Material mat(fp::MassSpec::from_density(density), c.friction, c.restitution);
             mat.friction_combine = to_fizmo(c.friction_combine);
             mat.restitution_combine = to_fizmo(c.bounce_combine);
-            body.add_collider(shape, mat, fp::Transform2D(RVec2{p.offset.x, p.offset.y}, angle_z(p.rotation)), fp::CollisionFilter{}, c.sensor);
+            body.add_collider(shape, mat, fp::Transform2D(at, phi - theta), fp::CollisionFilter{}, c.sensor);
             ++colliders;
+            ++kept;
+        }
+        if (kept == 0) {
+            sim2->remove_body(body);
+            return;
         }
         body.set_gravity_scale(b.gravity_scale);
         body.set_linear_damping(b.linear_damping);
@@ -1013,7 +1208,7 @@ struct World::Impl {
                 const RVec2 p = body->position();
                 const orchard::Vec3 old = world_position(*scene, e);
                 const orchard::Quat old_rot = world_rotation(*scene, e);
-                const float keep_tilt = angle_z(old_rot);
+                const float keep_tilt = angle_2d(old_rot);
                 orchard::Quat rot = about_z(static_cast<float>(body->angle())) * conjugate(about_z(keep_tilt)) * old_rot;
                 store(e, orchard::Vec3{static_cast<float>(p.x), static_cast<float>(p.y), old.z}, orchard::normalize(rot));
             }
@@ -1267,6 +1462,54 @@ struct World::Impl {
         refresh_contacts();
     }
 };
+
+FlatOutline flat_outline(const orchard::Scene& scene, orchard::Entity e, const orchard::Collider& c) {
+    FlatOutline out;
+    if (!scene.alive(e)) return out;
+    const orchard::Entity owner = scene.body_owner(e);
+    const orchard::Vec3 owner_pos = world_position(scene, scene.alive(owner) ? owner : e);
+    const orchard::Vec3 pos = world_position(scene, e);
+    const orchard::Quat rot = world_rotation(scene, e);
+    const orchard::Vec3 scale = world_scale(scene, e);
+    const orchard::Vec3 center = pos + orchard::rotate(rot, c.offset * scale);
+    const float phi = angle_2d(rot);
+    const orchard::Quat rest = orchard::normalize(about_z(-phi) * rot);
+    const orchard::Vec3 s3{std::fabs(c.size.x * scale.x), std::fabs(c.size.y * scale.y), std::fabs(c.size.z * scale.z)};
+    const orchard::Vec3 ax = orchard::rotate(rest, orchard::Vec3{1.0f, 0.0f, 0.0f}), ay = orchard::rotate(rest, orchard::Vec3{0.0f, 1.0f, 0.0f}), az = orchard::rotate(rest, orchard::Vec3{0.0f, 0.0f, 1.0f});
+    const float ez = 0.5f * (std::fabs(ax.z) * s3.x + std::fabs(ay.z) * s3.y + std::fabs(az.z) * s3.z);
+    out.in_plane = !(scene.dimension() == orchard::Dimension::three_d && std::fabs(center.z - owner_pos.z) - ez > 0.5f);
+    out.center = {center.x, center.y};
+    if (c.shape == orchard::ColliderShape::sphere) {
+        out.circle = true;
+        out.radius = std::max({s3.x, s3.y, s3.z}) * 0.5f;
+        return out;
+    }
+    std::vector<orchard::Vec2> flat;
+    if (c.shape == orchard::ColliderShape::capsule) {
+        const float r = std::max(s3.x, s3.z) * 0.5f, half = std::max(0.0f, s3.y * 0.5f - r);
+        const float al = std::sqrt(ay.x * ay.x + ay.y * ay.y);
+        const orchard::Vec2 dir = al > 1e-4f ? orchard::Vec2{ay.x / al, ay.y / al} : orchard::Vec2{0.0f, 1.0f};
+        const float reach = half * al;
+        const float base = std::atan2(dir.y, dir.x);
+        for (int k = 0; k <= 8; ++k) {
+            const float a = base - 1.5707963f + 3.1415926f * static_cast<float>(k) / 8.0f;
+            flat.push_back({dir.x * reach + r * std::cos(a), dir.y * reach + r * std::sin(a)});
+        }
+        for (int k = 0; k <= 8; ++k) {
+            const float a = base + 1.5707963f + 3.1415926f * static_cast<float>(k) / 8.0f;
+            flat.push_back({-dir.x * reach + r * std::cos(a), -dir.y * reach + r * std::sin(a)});
+        }
+    } else {
+        for (const orchard::Vec3& q : outline_points(c, s3)) {
+            const orchard::Vec3 r = orchard::rotate(rest, q);
+            flat.push_back({r.x, r.y});
+        }
+    }
+    const std::vector<orchard::Vec2> h = c.shape == orchard::ColliderShape::capsule ? flat : hull_2d(std::move(flat));
+    const float cp = std::cos(phi), sp = std::sin(phi);
+    for (const orchard::Vec2& q : h) out.points.push_back({center.x + cp * q.x - sp * q.y, center.y + sp * q.x + cp * q.y});
+    return out;
+}
 
 World::World(orchard::Dimension dimension, Settings settings) : m(std::make_unique<Impl>()) {
     m->dimension = dimension;
@@ -1534,6 +1777,7 @@ int World::step(float dt) {
     m->accumulator += std::max(0.0_r, static_cast<Real>(dt));
     int steps = 0;
     while (m->accumulator >= m->settings.fixed_dt && steps < m->settings.max_steps) {
+        m->remember_poses();
         m->step_once();
         m->accumulator -= m->settings.fixed_dt;
         ++steps;
@@ -1664,7 +1908,48 @@ void World::torque(orchard::Entity e, orchard::Vec3 v) {
 }
 
 void World::moved(orchard::Entity e) {
+    Impl::Pose before, after;
+    const bool had = m->body_pose(e.id(), before);
     m->place(e);
+    auto it = m->previous.find(e.id());
+    if (it == m->previous.end()) return;
+    if (!had || !m->body_pose(e.id(), after)) {
+        m->previous.erase(it);
+        return;
+    }
+    it->second.position = it->second.position + (after.position - before.position);
+    it->second.rotation = orchard::normalize(after.rotation * conjugate(before.rotation) * it->second.rotation);
+}
+
+float World::interpolation() const {
+    const Real f = m->settings.fixed_dt;
+    return f > 0.0_r ? static_cast<float>(std::clamp(m->accumulator / f, 0.0_r, 1.0_r)) : 1.0f;
+}
+
+bool World::render_pose(orchard::Entity e, orchard::Vec3& position, orchard::Quat& rotation) const {
+    if (!m->scene || !m->scene->alive(e)) return false;
+    auto it = m->previous.find(e.id());
+    Impl::Pose now;
+    if (it == m->previous.end() || !m->body_pose(e.id(), now)) return false;
+    const float a = interpolation();
+    const orchard::Vec3 lerped = it->second.position + (now.position - it->second.position) * a;
+    if (m->dimension == orchard::Dimension::two_d) {
+        position = {lerped.x, lerped.y, world_position(*m->scene, e).z};
+        const float turn = angle_2d(now.rotation) - angle_2d(it->second.rotation);
+        const float back = std::remainder(turn, 6.2831853f) * (a - 1.0f);
+        rotation = orchard::normalize(about_z(back) * world_rotation(*m->scene, e));
+        return true;
+    }
+    position = lerped;
+    if (m->walkers.count(e.id())) {
+        rotation = world_rotation(*m->scene, e);
+        return true;
+    }
+    orchard::Quat q0 = it->second.rotation;
+    const orchard::Quat& q1 = now.rotation;
+    if (q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w < 0.0f) q0 = {-q0.x, -q0.y, -q0.z, -q0.w};
+    rotation = orchard::normalize(orchard::Quat{q0.x + (q1.x - q0.x) * a, q0.y + (q1.y - q0.y) * a, q0.z + (q1.z - q0.z) * a, q0.w + (q1.w - q0.w) * a});
+    return true;
 }
 
 void World::added(orchard::Entity e) {

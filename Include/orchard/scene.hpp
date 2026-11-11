@@ -523,6 +523,14 @@ struct Emitter {
     std::string part;
     std::string soft = "auto";
     float soft_distance = 0.0f;
+    Vec3 color_mid{1.0f, 1.0f, 1.0f};
+    float color_mid_at = -1.0f;
+    float fade_in = 0.0f;
+    float grow = 0.0f;
+    float spin = 0.0f;
+    float variation = 0.0f;
+    float start_delay = 0.0f;
+    bool flat = false;
 
     static std::optional<Emitter> named(const std::string& preset);
     static const std::vector<std::string>& presets();
@@ -533,8 +541,10 @@ const char* to_string(CameraControl v);
 std::optional<CameraControl> parse_camera_control(const std::string& text);
 
 struct Camera {
+    float sprint() const { return sprint_speed > 0.0f ? sprint_speed : move_speed * 3.0f; }
     CameraControl control = CameraControl::none;
     float move_speed = 5.0f;
+    float sprint_speed = 0.0f;
     float look_speed = 0.25f;
     float eye_height = 1.7f;
     float jump_speed = 5.0f;
@@ -551,6 +561,7 @@ struct Model {
     std::string source;
     bool visible = true;
     bool cast_shadows = true;
+    std::string style;
 };
 
 struct AnimationEvent {
@@ -572,6 +583,28 @@ struct Animator {
 
 bool is_model_file(const std::string& path);
 
+enum class DeathAction { nothing, destroy, explode, shatter, respawn };
+const char* to_string(DeathAction v);
+std::optional<DeathAction> parse_death_action(const std::string& text);
+const std::vector<DeathAction>& death_actions();
+const char* death_action_label(DeathAction v);
+
+struct Health {
+    float value = 100.0f;
+    float max = 100.0f;
+    float regen = 0.0f;
+    float regen_delay = 3.0f;
+    bool invulnerable = false;
+    float impact_damage = 0.0f;
+    bool flammable = false;
+    float burn_damage = 10.0f;
+    DeathAction on_death = DeathAction::nothing;
+    float explode_radius = 5.0f;
+    float explode_force = 20000.0f;
+    float explode_damage = 120.0f;
+    float respawn_delay = 2.0f;
+};
+
 enum class HumanoidKind { basic, head_and_body, full_body, detailed };
 const char* to_string(HumanoidKind v);
 std::optional<HumanoidKind> parse_humanoid_kind(const std::string& text);
@@ -580,6 +613,14 @@ const char* humanoid_label(HumanoidKind v);
 
 class Scene;
 Entity add_humanoid(Scene& scene, HumanoidKind kind, Entity parent = Entity{}, const std::string& name = "Character", float height = 1.8f);
+void add_humanoid_parts(Scene& scene, Entity root, HumanoidKind kind, float height = 1.8f);
+std::optional<HumanoidKind> humanoid_kind_of(const Scene& scene, Entity root);
+bool set_humanoid_colliders(Scene& scene, Entity root, HumanoidKind kind, float height = 1.8f);
+const std::vector<std::string>& character_styles();
+const char* character_style_label(const std::string& style);
+std::string character_model_path(const std::string& style);
+std::string character_style(const Scene& scene, Entity root);
+bool set_character_style(Scene& scene, Entity root, const std::string& style);
 
 class Scene {
 public:
@@ -648,6 +689,15 @@ public:
     const Model* model(Entity e) const;
     Model& add_model(Entity e);
     bool remove_model(Entity e);
+    Health* health(Entity e);
+    const Health* health(Entity e) const;
+    Health& add_health(Entity e);
+    bool remove_health(Entity e);
+    const std::vector<std::string>& tags(Entity e) const;
+    bool add_tag(Entity e, const std::string& tag);
+    bool remove_tag(Entity e, const std::string& tag);
+    bool has_tag(Entity e, const std::string& tag) const;
+    std::vector<Entity> tagged(const std::string& tag) const;
     Animator* animator(Entity e);
     const Animator* animator(Entity e) const;
     Animator& add_animator(Entity e);
@@ -694,6 +744,8 @@ private:
         std::optional<Model> model;
         std::optional<Animator> animator;
         std::optional<Terrain> terrain;
+        std::optional<Health> health;
+        std::vector<std::string> tags;
         std::string bone;
         std::string instance_of;
     };

@@ -2,6 +2,7 @@
 #define ORCHARD_SCRIPTING_HPP
 
 #include "axes.hpp"
+#include "gameplay.hpp"
 #include "project.hpp"
 #include "scene.hpp"
 
@@ -174,6 +175,8 @@ public:
     std::string next_animation_event(Entity e);
     void push_animation_event(Entity e, const std::string& name);
     void set_animation_status(Entity e, double time, double length, bool playing);
+    Gameplay& gameplay() { return m_gameplay; }
+    const Gameplay& gameplay() const { return m_gameplay; }
 
     static ScriptHooks find_hooks(const std::string& source);
     static std::string with_hooks(const std::string& source, const ScriptHooks& hooks);
@@ -212,6 +215,7 @@ private:
     std::map<std::uint64_t, std::vector<std::string>> m_animation_events;
     std::string m_event_text;
     std::vector<std::size_t> m_pending_starts;
+    Gameplay m_gameplay;
     int m_call_depth = 0;
     std::set<std::string> m_keys;
     std::map<std::string, ScriptBuildResult> m_built;

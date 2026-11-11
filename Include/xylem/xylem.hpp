@@ -6,6 +6,7 @@
 #include <orchard/scene.hpp>
 #include <orchard/scripting.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -90,6 +91,13 @@ struct Settings {
         return s;
     }
 
+    static Settings flattened(Settings s) {
+        const float g = std::sqrt(s.gravity.x * s.gravity.x + s.gravity.y * s.gravity.y + s.gravity.z * s.gravity.z);
+        s.gravity = orchard::Vec3{0.0f, -g, 0.0f};
+        s.up = orchard::Vec3{0.0f, 1.0f, 0.0f};
+        return s;
+    }
+
     Settings& with_quality(orchard::PhysicsQuality q) {
         physics = orchard::PhysicsSettings::preset(q);
         return *this;
@@ -145,6 +153,16 @@ bool models_supported();
 std::shared_ptr<const ModelGeometry> load_model_geometry(const std::string& path, bool z_up, std::string* error = nullptr);
 void clear_model_cache();
 
+struct FlatOutline {
+    bool in_plane = true;
+    bool circle = false;
+    orchard::Vec2 center{};
+    float radius = 0.0f;
+    std::vector<orchard::Vec2> points;
+};
+
+FlatOutline flat_outline(const orchard::Scene& scene, orchard::Entity e, const orchard::Collider& c);
+
 class World : public orchard::ScriptPhysics {
 public:
     explicit World(orchard::Dimension dimension = orchard::Dimension::three_d, Settings settings = Settings());
@@ -187,6 +205,8 @@ public:
     orchard::Entity raycast(orchard::Vec3 origin, orchard::Vec3 direction, float max_distance, orchard::Vec3* point, orchard::Vec3* normal, float* distance) const override;
     orchard::Entity raycast_ignoring(orchard::Entity ignore, orchard::Vec3 origin, orchard::Vec3 direction, float max_distance, orchard::Vec3* point = nullptr, orchard::Vec3* normal = nullptr, float* distance = nullptr) const;
     CharacterState move_character(orchard::Entity e, const CharacterMove& move, float dt);
+    float interpolation() const;
+    bool render_pose(orchard::Entity e, orchard::Vec3& position, orchard::Quat& rotation) const;
     void release_character(orchard::Entity e);
     std::vector<orchard::Entity> overlap_sphere(orchard::Vec3 center, float radius) const override;
     void set_layers(orchard::Entity e, std::uint64_t layer, std::uint64_t mask) override;

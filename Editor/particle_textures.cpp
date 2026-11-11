@@ -627,6 +627,116 @@ ParticlePixels make_shockwave() {
 
 } // namespace
 
+ParticlePixels make_soft_smoke() {
+    const int cs = 128;
+    Sheet s(cs * 4, cs * 4);
+    for (int k = 0; k < 16; ++k) {
+        const std::uint32_t ns = 4211u + static_cast<std::uint32_t>(k) * 613u;
+        const float z = static_cast<float>(k) * 2.71f;
+        s.cell(k % 4, k / 4, cs, cs, 1, [&](float u, float v) {
+            const float wx = fbm(u * 1.4f, v * 1.4f, z, 3, ns);
+            const float wy = fbm(u * 1.4f + 4.1f, v * 1.4f - 2.6f, z, 3, ns + 1u);
+            const float qx = u + 0.28f * wx, qy = v + 0.28f * wy;
+            const float r = std::sqrt(qx * qx + qy * qy);
+            const float body = std::exp(-2.6f * r * r);
+            const float cloud = 0.5f + 0.5f * fbm(qx * 2.2f, qy * 2.2f, z + 1.0f, 5, ns + 2u);
+            const float d = body * (0.45f + 0.75f * cloud) - 0.12f;
+            const float a = clamp01(d * 1.35f) * edge_window(u, v, 0.62f);
+            const float shade = 0.78f + 0.22f * clamp01(0.5f + 0.5f * v + 0.3f * (cloud - 0.5f));
+            return gray(shade, a * 0.9f);
+        });
+    }
+    return s.bytes();
+}
+
+ParticlePixels make_steam_wisp() {
+    const int cs = 128;
+    Sheet s(cs * 4, cs * 4);
+    for (int k = 0; k < 16; ++k) {
+        const std::uint32_t ns = 9001u + static_cast<std::uint32_t>(k) * 421u;
+        const float z = static_cast<float>(k) * 1.93f;
+        s.cell(k % 4, k / 4, cs, cs, 1, [&](float u, float v) {
+            const float bend = 0.35f * fbm(v * 1.2f, z, 0.0f, 3, ns);
+            const float qx = (u - bend) * 1.6f;
+            const float qy = v * 0.75f;
+            const float streak = 0.5f + 0.5f * fbm(qx * 3.5f, qy * 1.4f, z + 3.0f, 5, ns + 7u);
+            const float body = std::exp(-1.8f * (qx * qx + qy * qy));
+            const float d = body * (0.3f + 0.9f * streak * streak) - 0.1f;
+            const float a = clamp01(d * 1.2f) * edge_window(u, v, 0.6f);
+            return gray(0.97f, a * 0.75f);
+        });
+    }
+    return s.bytes();
+}
+
+ParticlePixels make_flame() {
+    const int cs = 128;
+    Sheet s(cs * 4, cs * 4);
+    for (int k = 0; k < 16; ++k) {
+        const std::uint32_t ns = 1301u + static_cast<std::uint32_t>(k) * 97u;
+        const float z = static_cast<float>(k) * 3.3f;
+        const float lean = (static_cast<float>(k % 5) - 2.0f) * 0.05f;
+        s.cell(k % 4, k / 4, cs, cs, 1, [&](float u, float v) {
+            const float up = (v + 1.0f) * 0.5f;
+            const float wob = fbm(u * 1.8f, v * 2.4f, z, 4, ns) * (0.12f + 0.3f * up);
+            const float qx = u - wob - lean * up;
+            const float base = -0.75f;
+            const float h = 1.55f;
+            const float t = clamp01((v - base) / h);
+            const float width = 0.42f * std::pow(1.0f - t, 0.75f) * (0.75f + 0.5f * std::sqrt(t)) + 0.01f;
+            float dist = std::fabs(qx) / width;
+            if (v < base) dist = std::sqrt(qx * qx + (v - base) * (v - base) * 4.0f) / 0.42f;
+            const float tongues = fbm(u * 3.0f, v * 2.2f, z + 5.0f, 5, ns + 3u);
+            const float d = (1.0f - dist) + tongues * (0.25f + 0.55f * t) - 0.08f;
+            if (d <= 0.0f) return heat_ramp(0.0f, 0.0f);
+            const float heat = clamp01(d * 0.9f + 0.25f * (1.0f - t) - 0.05f);
+            const float a = smooth(0.0f, 0.3f, d) * smooth(1.0f, 0.82f, std::sqrt(u * u + v * v));
+            return heat_ramp(heat, a);
+        });
+    }
+    return s.bytes();
+}
+
+ParticlePixels make_flash() {
+    Sheet s(128, 128);
+    s.cell(0, 0, 128, 128, 2, [](float u, float v) {
+        const float r = std::sqrt(u * u + v * v);
+        const float ang = std::atan2(v, u);
+        const float rays = std::pow(std::fabs(std::cos(ang * 3.0f)), 24.0f) + 0.6f * std::pow(std::fabs(std::cos(ang * 3.0f + 0.52f)), 40.0f);
+        const float core = std::exp(-14.0f * r * r);
+        const float halo = std::exp(-3.5f * r * r) * 0.45f;
+        const float streak = rays * std::exp(-2.2f * r) * 0.9f;
+        const float a = clamp01(core + halo + streak) * edge_window(u, v, 0.75f);
+        const float hot = clamp01(core * 1.3f);
+        return Rgba{1.0f, mixf(0.86f, 1.0f, hot), mixf(0.6f, 0.95f, hot), a};
+    });
+    return s.bytes();
+}
+
+ParticlePixels make_scorch() {
+    const int cs = 128;
+    Sheet s(cs * 2, cs * 2);
+    for (int k = 0; k < 4; ++k) {
+        const std::uint32_t seed = 301u + static_cast<std::uint32_t>(k) * 17u;
+        const float z = static_cast<float>(k) * 3.1f;
+        s.cell(k % 2, k / 2, cs, cs, 2, [&](float u, float v) {
+            const float r = std::sqrt(u * u + v * v);
+            const float ang = std::atan2(v, u);
+            const float ragged = fbm(std::cos(ang) * 2.2f, std::sin(ang) * 2.2f, z, 4, seed);
+            const float rays = std::pow(clamp01(fbm(std::cos(ang) * 7.0f, std::sin(ang) * 7.0f, z + 9.0f, 2, seed + 3u) * 1.6f - 0.3f), 3.0f);
+            const float reach = 0.6f + 0.2f * ragged + 0.16f * rays;
+            const float body = smooth(reach, reach * 0.35f, r);
+            const float soot = 0.55f + 0.45f * fbm(u * 6.0f, v * 6.0f, z + 4.0f, 4, seed + 7u);
+            const float speck = clamp01(fbm(u * 22.0f, v * 22.0f, z, 2, seed + 11u) * 2.2f - 1.1f) * smooth(0.95f, 0.5f, r);
+            const float core = std::exp(-r * r * 5.0f);
+            const float a = clamp01(body * soot * (0.75f + 0.25f * core) + speck * 0.5f) * edge_window(u, v, 0.85f);
+            const float shade = mixf(0.9f, 0.6f, core);
+            return Rgba{shade, shade * 0.97f, shade * 0.94f, a};
+        });
+    }
+    return s.bytes();
+}
+
 ParticlePixels generate_builtin_particle_texture(std::string_view name) {
     if (name == "builtin:glow") return make_glow();
     if (name == "builtin:smoke") return make_smoke();
@@ -642,6 +752,11 @@ ParticlePixels generate_builtin_particle_texture(std::string_view name) {
     if (name == "builtin:debris") return make_debris();
     if (name == "builtin:dust") return make_dust();
     if (name == "builtin:shockwave") return make_shockwave();
+    if (name == "builtin:smoke-soft") return make_soft_smoke();
+    if (name == "builtin:steam-wisp") return make_steam_wisp();
+    if (name == "builtin:flame") return make_flame();
+    if (name == "builtin:flash") return make_flash();
+    if (name == "builtin:scorch") return make_scorch();
     return ParticlePixels{};
 }
 

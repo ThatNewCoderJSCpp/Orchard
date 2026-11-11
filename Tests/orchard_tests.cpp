@@ -1030,6 +1030,27 @@ void test_particle_presets() {
         const char* fallback = orchard::editor::builtin_particle_texture_for_preset(name);
         check(fallback && e->texture == fallback, "particle preset " + name + " texture matches its fallback");
     }
+    {
+        orchard::Emitter smoke = *orchard::Emitter::named("smoke");
+        check(orchard::editor::particle_look_of(smoke) == "better", "the smoke preset uses the better look");
+        check(orchard::editor::set_particle_look(smoke, "simple") && smoke.texture == "builtin:smoke", "the simple look goes back to the older smoke puffs");
+        check(orchard::editor::particle_look_of(smoke) == "simple", "and reads back as simple");
+        check(orchard::editor::set_particle_look(smoke, "plain") && smoke.texture == "builtin:glow", "the plain look uses soft dots");
+        check(orchard::editor::set_particle_look(smoke, "better") && smoke.texture == "builtin:smoke-soft", "and better comes back from plain");
+        orchard::Emitter boom = *orchard::Emitter::named("explosion");
+        orchard::editor::set_particle_look(boom, "simple");
+        check(boom.blend == orchard::ParticleBlend::additive && orchard::editor::particle_look_of(boom) == "simple", "the simple explosion adds light like it used to");
+        orchard::Emitter fire = *orchard::Emitter::named("fire");
+        check(orchard::editor::particle_look_options(orchard::editor::particle_look_for(fire.texture, fire.preset)).size() == 3, "fire offers plain, simple and better looks");
+        orchard::Emitter mark = *orchard::Emitter::named("scorch");
+        check(mark.flat && orchard::editor::is_builtin_particle_texture(mark.texture), "the scorch preset lies flat");
+        orchard::Scene sc(orchard::Dimension::three_d);
+        const orchard::Entity me = sc.create("Mark");
+        sc.add_emitter(me) = mark;
+        std::string error;
+        const std::optional<orchard::Scene> back = orchard::Scene::load(sc.save(), &error);
+        check(back && back->emitter(back->find("Mark")) && back->emitter(back->find("Mark"))->flat, "a flat emitter saves and loads");
+    }
     for (const orchard::editor::BuiltinParticleTexture& t : orchard::editor::builtin_particle_textures())
         check(t.columns >= 1 && t.rows >= 1 && std::string(t.name).rfind("builtin:", 0) == 0 && t.label && *t.label, std::string("built-in particle texture ") + t.name);
     float means[5][3] = {};
@@ -1471,7 +1492,28 @@ void test_triangles() {
     for (orchard::TriangleRule r : orchard::triangle_rules()) check(orchard::parse_triangle_rule(orchard::to_string(r)) == r, std::string("triangle rule round trip ") + orchard::to_string(r));
 }
 
+void test_character_looks() {
+    for (orchard::Dimension dim : {orchard::Dimension::three_d, orchard::Dimension::two_d}) {
+        orchard::Scene s(dim);
+        const orchard::Entity e = orchard::add_humanoid(s, orchard::HumanoidKind::full_body, {}, "Guy");
+        const orchard::Entity cam = s.create("Camera", e);
+        s.add_camera(cam);
+        check(orchard::humanoid_kind_of(s, e) == orchard::HumanoidKind::full_body, "a full body character is recognized");
+        for (orchard::HumanoidKind hk : orchard::humanoid_kinds()) {
+            check(orchard::set_humanoid_colliders(s, e, hk) && orchard::humanoid_kind_of(s, e) == hk, std::string("its colliders swap to ") + orchard::to_string(hk));
+            check(s.alive(cam) && s.parent(cam) == e, std::string("swapping colliders keeps its camera (") + orchard::to_string(hk) + ")");
+        }
+        check(orchard::set_character_style(s, e, "robot") && orchard::character_style(s, e) == "robot" && s.model(e) && s.model(e)->source == orchard::character_model_path("robot"), "a character can look like a robot");
+        check(!orchard::set_character_style(s, e, "dragon"), "an unknown look is refused");
+        const auto back = orchard::Scene::load(s.save());
+        check(back && orchard::character_style(*back, back->find("Guy")) == "robot", "the look is saved");
+        check(orchard::set_character_style(s, e, "") && !s.model(e), "taking the look off removes the mesh");
+    }
+    check(orchard::character_styles().size() == 3, "there are three character looks");
+}
+
 int main() {
+    test_character_looks();
     test_triangles();
     test_terrain();
     test_math();

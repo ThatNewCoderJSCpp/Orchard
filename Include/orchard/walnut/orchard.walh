@@ -57,6 +57,45 @@ extern "C++" from "<orchard/script/script_api.hpp>" {
         static function hit(long int: which) -> short float;
         static function overlap_sphere(short float: x, short float: y, short float: z, short float: radius) -> long int;
         static function overlap_at(long int: index) -> NativeEntity;
+        static function health(const NativeEntity&: e) -> short float;
+        static function max_health(const NativeEntity&: e) -> short float;
+        static function has_health(const NativeEntity&: e) -> bool;
+        static function set_health(const NativeEntity&: e, short float: value) -> void;
+        static function set_max_health(const NativeEntity&: e, short float: value) -> void;
+        static function add_health(const NativeEntity&: e, short float: amount) -> short float;
+        static function heal(const NativeEntity&: e, short float: amount) -> short float;
+        static function damage(const NativeEntity&: e, short float: amount) -> short float;
+        static function damage_from(const NativeEntity&: e, short float: amount, const NativeEntity&: attacker) -> short float;
+        static function kill(const NativeEntity&: e) -> bool;
+        static function is_dead(const NativeEntity&: e) -> bool;
+        static function revive(const NativeEntity&: e) -> bool;
+        static function revive_with(const NativeEntity&: e, short float: health) -> bool;
+        static function set_invulnerable(const NativeEntity&: e, bool: on) -> void;
+        static function damage_taken(const NativeEntity&: e) -> short float;
+        static function died(const NativeEntity&: e) -> bool;
+        static function last_attacker(const NativeEntity&: e) -> NativeEntity;
+        static function ignite(const NativeEntity&: e, short float: seconds) -> void;
+        static function extinguish(const NativeEntity&: e) -> void;
+        static function is_burning(const NativeEntity&: e) -> bool;
+        static function explode(short float: x, short float: y, short float: z, short float: radius, short float: force, short float: damage) -> long int;
+        static function explode_by(const NativeEntity&: attacker, short float: x, short float: y, short float: z, short float: radius, short float: force, short float: damage) -> long int;
+        static function push_away(short float: x, short float: y, short float: z, short float: radius, short float: force) -> long int;
+        static function play_effect(const string&: effect, short float: x, short float: y, short float: z, short float: scale) -> NativeEntity;
+        static function attach_effect(const string&: effect, const NativeEntity&: parent, short float: scale) -> NativeEntity;
+        static function add_tag(const NativeEntity&: e, const string&: tag) -> void;
+        static function remove_tag(const NativeEntity&: e, const string&: tag) -> void;
+        static function has_tag(const NativeEntity&: e, const string&: tag) -> bool;
+        static function tagged_count(const string&: tag) -> long int;
+        static function tagged_at(const string&: tag, long int: i) -> NativeEntity;
+        static function nearest_tagged(const string&: tag, const NativeEntity&: from) -> NativeEntity;
+        static function distance(const NativeEntity&: a, const NativeEntity&: b) -> short float;
+        static function teleport(const NativeEntity&: e, short float: x, short float: y, short float: z) -> void;
+        static function look_at(const NativeEntity&: e, short float: x, short float: y, short float: z) -> void;
+        static function random(short float: low, short float: high) -> short float;
+        static function random_int(long int: low, long int: high) -> long int;
+        static function clamp(short float: v, short float: low, short float: high) -> short float;
+        static function lerp(short float: a, short float: b, short float: t) -> short float;
+        static function move_towards(short float: current, short float: target, short float: max_step) -> short float;
     } end class NativeWorld
 } end extern
 
@@ -465,5 +504,171 @@ function on_tick(function() -> void: fn) -> void {
 function on_stop(function() -> void: fn) -> void {
     NativeWorld::on_stop(fn);
 } end function on_stop
+
+function health(const Entity&: e) -> short float {
+    return NativeWorld::health(e.raw);
+} end function health
+
+function max_health(const Entity&: e) -> short float {
+    return NativeWorld::max_health(e.raw);
+} end function max_health
+
+function has_health(const Entity&: e) -> bool {
+    return NativeWorld::has_health(e.raw);
+} end function has_health
+
+function set_health(const Entity&: e, short float: value) -> void {
+    NativeWorld::set_health(e.raw, value);
+} end function set_health
+
+function set_max_health(const Entity&: e, short float: value) -> void {
+    NativeWorld::set_max_health(e.raw, value);
+} end function set_max_health
+
+function add_health(const Entity&: e, short float: amount) -> short float {
+    return NativeWorld::add_health(e.raw, amount);
+} end function add_health
+
+function heal(const Entity&: e, short float: amount) -> short float {
+    return NativeWorld::heal(e.raw, amount);
+} end function heal
+
+function damage(const Entity&: e, short float: amount) -> short float {
+    return NativeWorld::damage(e.raw, amount);
+} end function damage
+
+function damage_from(const Entity&: e, short float: amount, const Entity&: attacker) -> short float {
+    return NativeWorld::damage_from(e.raw, amount, attacker.raw);
+} end function damage_from
+
+function kill(const Entity&: e) -> bool {
+    return NativeWorld::kill(e.raw);
+} end function kill
+
+function is_dead(const Entity&: e) -> bool {
+    return NativeWorld::is_dead(e.raw);
+} end function is_dead
+
+function revive(const Entity&: e) -> bool {
+    return NativeWorld::revive(e.raw);
+} end function revive
+
+function revive_with(const Entity&: e, short float: health) -> bool {
+    return NativeWorld::revive_with(e.raw, health);
+} end function revive_with
+
+function set_invulnerable(const Entity&: e, bool: on) -> void {
+    NativeWorld::set_invulnerable(e.raw, on);
+} end function set_invulnerable
+
+function damage_taken(const Entity&: e) -> short float {
+    return NativeWorld::damage_taken(e.raw);
+} end function damage_taken
+
+function died(const Entity&: e) -> bool {
+    return NativeWorld::died(e.raw);
+} end function died
+
+function last_attacker(const Entity&: e) -> Entity {
+    Entity: out;
+    out.raw = NativeWorld::last_attacker(e.raw);
+    return out;
+} end function last_attacker
+
+function ignite(const Entity&: e, short float: seconds) -> void {
+    NativeWorld::ignite(e.raw, seconds);
+} end function ignite
+
+function extinguish(const Entity&: e) -> void {
+    NativeWorld::extinguish(e.raw);
+} end function extinguish
+
+function is_burning(const Entity&: e) -> bool {
+    return NativeWorld::is_burning(e.raw);
+} end function is_burning
+
+function explode(short float: x, short float: y, short float: z, short float: radius, short float: force, short float: damage) -> long int {
+    return NativeWorld::explode(x, y, z, radius, force, damage);
+} end function explode
+
+function explode_by(const Entity&: attacker, short float: x, short float: y, short float: z, short float: radius, short float: force, short float: damage) -> long int {
+    return NativeWorld::explode_by(attacker.raw, x, y, z, radius, force, damage);
+} end function explode_by
+
+function push_away(short float: x, short float: y, short float: z, short float: radius, short float: force) -> long int {
+    return NativeWorld::push_away(x, y, z, radius, force);
+} end function push_away
+
+function play_effect(const string&: effect, short float: x, short float: y, short float: z, short float: scale) -> Entity {
+    Entity: out;
+    out.raw = NativeWorld::play_effect(effect, x, y, z, scale);
+    return out;
+} end function play_effect
+
+function attach_effect(const string&: effect, const Entity&: parent, short float: scale) -> Entity {
+    Entity: out;
+    out.raw = NativeWorld::attach_effect(effect, parent.raw, scale);
+    return out;
+} end function attach_effect
+
+function add_tag(const Entity&: e, const string&: tag) -> void {
+    NativeWorld::add_tag(e.raw, tag);
+} end function add_tag
+
+function remove_tag(const Entity&: e, const string&: tag) -> void {
+    NativeWorld::remove_tag(e.raw, tag);
+} end function remove_tag
+
+function has_tag(const Entity&: e, const string&: tag) -> bool {
+    return NativeWorld::has_tag(e.raw, tag);
+} end function has_tag
+
+function tagged_count(const string&: tag) -> long int {
+    return NativeWorld::tagged_count(tag);
+} end function tagged_count
+
+function tagged_at(const string&: tag, long int: i) -> Entity {
+    Entity: out;
+    out.raw = NativeWorld::tagged_at(tag, i);
+    return out;
+} end function tagged_at
+
+function nearest_tagged(const string&: tag, const Entity&: from) -> Entity {
+    Entity: out;
+    out.raw = NativeWorld::nearest_tagged(tag, from.raw);
+    return out;
+} end function nearest_tagged
+
+function distance(const Entity&: a, const Entity&: b) -> short float {
+    return NativeWorld::distance(a.raw, b.raw);
+} end function distance
+
+function teleport(const Entity&: e, short float: x, short float: y, short float: z) -> void {
+    NativeWorld::teleport(e.raw, x, y, z);
+} end function teleport
+
+function look_at(const Entity&: e, short float: x, short float: y, short float: z) -> void {
+    NativeWorld::look_at(e.raw, x, y, z);
+} end function look_at
+
+function random(short float: low, short float: high) -> short float {
+    return NativeWorld::random(low, high);
+} end function random
+
+function random_int(long int: low, long int: high) -> long int {
+    return NativeWorld::random_int(low, high);
+} end function random_int
+
+function clamp(short float: v, short float: low, short float: high) -> short float {
+    return NativeWorld::clamp(v, low, high);
+} end function clamp
+
+function lerp(short float: a, short float: b, short float: t) -> short float {
+    return NativeWorld::lerp(a, b, t);
+} end function lerp
+
+function move_towards(short float: current, short float: target, short float: max_step) -> short float {
+    return NativeWorld::move_towards(current, target, max_step);
+} end function move_towards
 
 export this

@@ -141,6 +141,31 @@ void apply_builtin(fp::EmitterSettings& s, const BuiltinParticleTexture& b, floa
     const float r = s.size_over_life.evaluate(1.0f);
     const std::string_view name = b.name;
     auto mixf = [](float x, float y, float t) { return x + (y - x) * t; };
+    if (name == "builtin:smoke-soft" || name == "builtin:steam-wisp") {
+        s.alpha_over_life = fp::LifeCurve::constant(0.0f);
+        s.alpha_over_life.add(0.15f, a0).add(0.5f, mixf(a0, a1, 0.45f)).add(1.0f, a1);
+        s.size_over_life = fp::LifeCurve::constant(1.0f);
+        s.size_over_life.add(0.25f, 1.0f + (r - 1.0f) * 0.5f).add(1.0f, r);
+        s.spin_over_life = fp::LifeCurve::linear(1.0f, 0.3f);
+        s.soft = true;
+        s.soft_distance = 0.8f;
+        return;
+    }
+    if (name == "builtin:flame") {
+        s.alpha_over_life = fp::LifeCurve::constant(0.0f);
+        s.alpha_over_life.add(0.1f, a0).add(0.6f, mixf(a0, a1, 0.3f)).add(1.0f, a1);
+        s.size_over_life = fp::LifeCurve::constant(0.6f);
+        s.size_over_life.add(0.25f, 1.0f).add(1.0f, r);
+        s.soft = true;
+        s.soft_distance = 0.25f;
+        s.pivot_y = 0.38f * up_sign;
+        return;
+    }
+    if (name == "builtin:flash") {
+        s.alpha_over_life = fp::LifeCurve::constant(a0);
+        s.alpha_over_life.add(0.25f, mixf(a0, a1, 0.3f)).add(1.0f, a1);
+        return;
+    }
     if (name == "builtin:smoke" || name == "builtin:steam" || name == "builtin:dust") {
         s.alpha_over_life = fp::LifeCurve::constant(0.0f);
         s.alpha_over_life.add(name == "builtin:dust" ? 0.25f : 0.1f, a0).add(0.5f, mixf(a0, a1, 0.4f)).add(1.0f, a1);
@@ -254,6 +279,8 @@ fp::EmitterSettings particle_settings(const Emitter& e, bool flat, Vec3 up, int 
     s.wind = fp::Float3(e.wind.x, e.wind.y, e.wind.z);
     s.turbulence = std::max(0.0f, e.turbulence);
     s.render_mode = e.stretch > 0.01f ? fp::RenderMode::Stretched : fp::RenderMode::Billboard;
+    const bool decal = e.flat && !flat && up.y > 0.9f;
+    if (decal) s.render_mode = fp::RenderMode::Horizontal;
     s.stretch = std::max(0.0f, e.stretch);
     s.blend = additive ? fp::ParticleBlend::Additive : fp::ParticleBlend::Alpha;
     s.lit = e.lit;
@@ -272,6 +299,45 @@ fp::EmitterSettings particle_settings(const Emitter& e, bool flat, Vec3 up, int 
         s.soft_distance = std::clamp(std::max({s.soft_distance, base, size * 0.45f}), 0.05f, 4.0f);
         if (e.soft_distance > 0.0f) s.soft_distance = e.soft_distance;
     }
+    if (e.color_mid_at >= 0.0f) {
+        const float at = std::clamp(e.color_mid_at, 0.02f, 0.98f);
+        s.color_over_life = fp::LifeGradient::constant(fp::ColorF(e.color.x, e.color.y, e.color.z, 1.0f));
+        s.color_over_life.add(at, fp::ColorF(e.color_mid.x, e.color_mid.y, e.color_mid.z, 1.0f)).add(1.0f, fp::ColorF(e.color_end.x, e.color_end.y, e.color_end.z, 1.0f));
+    }
+    if (e.fade_in > 0.0f) {
+        const float a0 = std::clamp(e.alpha * boost, 0.0f, 1.0f), a1 = std::clamp(e.alpha_end * boost, 0.0f, 1.0f);
+        const float in = std::clamp(e.fade_in, 0.01f, 0.9f);
+        s.alpha_over_life = fp::LifeCurve::constant(0.0f);
+        s.alpha_over_life.add(in, a0).add(in + (1.0f - in) * 0.45f, a0 + (a1 - a0) * 0.35f).add(1.0f, a1);
+    }
+    if (e.grow > 0.0f) {
+        const float end = safe_ratio(e.size_end, size);
+        const float k = 1.0f + 5.0f * std::clamp(e.grow, 0.0f, 1.0f);
+        s.size_over_life = fp::LifeCurve::constant(1.0f);
+        for (int i = 1; i <= 6; ++i) {
+            const float t = static_cast<float>(i) / 6.0f;
+            s.size_over_life.add(t, 1.0f + (end - 1.0f) * (1.0f - std::pow(1.0f - t, k)));
+        }
+    }
+    if (e.spin > 0.0f && s.render_mode == fp::RenderMode::Billboard) {
+        s.rotation = fp::RangeF(0.0f, 360.0f);
+        s.spin = fp::RangeF(-e.spin, e.spin);
+    }
+    if (e.variation > 0.0f) {
+        const float lo = 1.0f - std::clamp(e.variation, 0.0f, 1.0f);
+        s.color = fp::ColorF(1.0f, 1.0f, 1.0f, 1.0f);
+        s.color_alt = fp::ColorF(lo, lo, lo, 1.0f);
+    }
+    if (decal) {
+        const float a0 = std::clamp(e.alpha, 0.0f, 1.0f), a1 = std::clamp(e.alpha_end, 0.0f, 1.0f);
+        s.alpha_over_life = fp::LifeCurve::constant(0.0f);
+        s.alpha_over_life.add(0.002f, a0).add(0.9f, a0 + (a1 - a0) * 0.9f).add(1.0f, 0.0f);
+        s.rotation = fp::RangeF(0.0f, 360.0f);
+        s.spin = fp::RangeF(0.0f, 0.0f);
+        s.soft = false;
+        s.near_fade = 0.0f;
+    }
+    s.start_delay = std::max(0.0f, e.start_delay);
     s.collide = e.collide;
     s.bounce = std::clamp(e.bounce, 0.0f, 1.0f);
     s.friction = std::max(0.0f, e.friction);
@@ -464,7 +530,14 @@ void ParticleView::sync(const Scene& scene, Vec3 up, bool running) {
             std::string filter;
             for (char ch : pe->part) filter += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             float total = 0.0f;
-            for (Entity c : scene.subtree(e)) {
+            Entity source = e;
+            auto has_parts = [&scene](Entity at) {
+                for (Entity c : scene.subtree(at))
+                    if (const std::vector<Collider>* cs = scene.colliders(c); cs && !cs->empty()) return true;
+                return false;
+            };
+            while (!has_parts(source) && scene.alive(scene.parent(source))) source = scene.parent(source);
+            for (Entity c : scene.subtree(source)) {
                 const std::vector<Collider>* cs = scene.colliders(c);
                 if (!cs) continue;
                 if (!filter.empty()) {

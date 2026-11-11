@@ -98,10 +98,124 @@ void blob(MeshData& m, V center, V radius, std::array<float, 4> col, std::uint32
     }
 }
 
+using C4 = std::array<float, 4>;
+
+void box(MeshData& m, V c, V h, C4 col) {
+    const V p[8] = {{c.x - h.x, c.y - h.y, c.z - h.z}, {c.x + h.x, c.y - h.y, c.z - h.z}, {c.x + h.x, c.y + h.y, c.z - h.z}, {c.x - h.x, c.y + h.y, c.z - h.z},
+                    {c.x - h.x, c.y - h.y, c.z + h.z}, {c.x + h.x, c.y - h.y, c.z + h.z}, {c.x + h.x, c.y + h.y, c.z + h.z}, {c.x - h.x, c.y + h.y, c.z + h.z}};
+    const int f[6][4] = {{4, 5, 6, 7}, {1, 0, 3, 2}, {5, 1, 2, 6}, {0, 4, 7, 3}, {7, 6, 2, 3}, {0, 1, 5, 4}};
+    for (const auto& q : f) {
+        triangle(m, p[q[0]], p[q[1]], p[q[2]], col);
+        triangle(m, p[q[0]], p[q[2]], p[q[3]], col);
+    }
+}
+
+void ellipsoid(MeshData& m, V c, V r, C4 col, int rings = 8, int sides = 14) {
+    blob(m, c, r, col, 0u, 0.0f, rings, sides);
+}
+
+void rod(MeshData& m, V a, V b, float radius, C4 col, int sides = 10) {
+    const V axis = unit(sub(b, a));
+    V side = std::fabs(axis.y) < 0.9f ? unit(cross(axis, V{0.0f, 1.0f, 0.0f})) : unit(cross(axis, V{1.0f, 0.0f, 0.0f}));
+    const V other = cross(axis, side);
+    std::vector<V> lo, hi;
+    for (int i = 0; i < sides; ++i) {
+        const float t = two_pi * static_cast<float>(i) / static_cast<float>(sides);
+        const V o{(side.x * std::cos(t) + other.x * std::sin(t)) * radius, (side.y * std::cos(t) + other.y * std::sin(t)) * radius, (side.z * std::cos(t) + other.z * std::sin(t)) * radius};
+        lo.push_back({a.x + o.x, a.y + o.y, a.z + o.z});
+        hi.push_back({b.x + o.x, b.y + o.y, b.z + o.z});
+    }
+    for (int i = 0; i < sides; ++i) {
+        const auto k = static_cast<std::size_t>((i + 1) % sides), j = static_cast<std::size_t>(i);
+        triangle(m, lo[j], lo[k], hi[k], col);
+        triangle(m, lo[j], hi[k], hi[j], col);
+        triangle(m, a, lo[k], lo[j], col);
+        triangle(m, b, hi[j], hi[k], col);
+    }
+}
+
+void pixel_person(MeshData& m) {
+    const C4 skin{0.93f, 0.74f, 0.58f, 1.0f}, hair{0.33f, 0.2f, 0.11f, 1.0f}, shirt{0.2f, 0.52f, 0.72f, 1.0f}, sleeve{0.16f, 0.44f, 0.62f, 1.0f};
+    const C4 pants{0.2f, 0.24f, 0.42f, 1.0f}, shoes{0.18f, 0.12f, 0.08f, 1.0f}, eye{0.08f, 0.08f, 0.1f, 1.0f}, white{0.97f, 0.97f, 0.97f, 1.0f}, mouth{0.62f, 0.32f, 0.3f, 1.0f}, belt{0.25f, 0.17f, 0.1f, 1.0f};
+    for (float x : {-0.1f, 0.1f}) {
+        box(m, {x, 0.47f, 0.0f}, {0.085f, 0.39f, 0.09f}, pants);
+        box(m, {x, 0.045f, 0.03f}, {0.09f, 0.045f, 0.13f}, shoes);
+    }
+    box(m, {0.0f, 1.15f, 0.0f}, {0.2f, 0.27f, 0.11f}, shirt);
+    box(m, {0.0f, 0.9f, 0.0f}, {0.205f, 0.03f, 0.115f}, belt);
+    for (float x : {-0.27f, 0.27f}) {
+        box(m, {x, 1.12f, 0.0f}, {0.065f, 0.3f, 0.07f}, sleeve);
+        box(m, {x, 0.77f, 0.0f}, {0.06f, 0.06f, 0.065f}, skin);
+    }
+    box(m, {0.0f, 1.45f, 0.0f}, {0.07f, 0.04f, 0.07f}, skin);
+    box(m, {0.0f, 1.63f, 0.0f}, {0.15f, 0.15f, 0.15f}, skin);
+    box(m, {0.0f, 1.79f, -0.01f}, {0.16f, 0.025f, 0.16f}, hair);
+    box(m, {0.0f, 1.66f, -0.15f}, {0.155f, 0.13f, 0.02f}, hair);
+    for (float x : {-0.155f, 0.155f}) box(m, {x, 1.7f, -0.03f}, {0.01f, 0.08f, 0.12f}, hair);
+    for (float x : {-0.06f, 0.06f}) {
+        box(m, {x, 1.66f, 0.152f}, {0.035f, 0.025f, 0.004f}, white);
+        box(m, {x + (x < 0.0f ? 0.012f : -0.012f), 1.66f, 0.156f}, {0.018f, 0.025f, 0.004f}, eye);
+    }
+    box(m, {0.0f, 1.56f, 0.152f}, {0.05f, 0.012f, 0.004f}, mouth);
+}
+
+void mannequin(MeshData& m) {
+    const C4 body{0.78f, 0.78f, 0.8f, 1.0f}, joint{0.42f, 0.44f, 0.48f, 1.0f}, face{0.7f, 0.7f, 0.73f, 1.0f};
+    ellipsoid(m, {0.0f, 1.65f, 0.0f}, {0.1f, 0.125f, 0.115f}, body, 10, 16);
+    ellipsoid(m, {0.0f, 1.62f, 0.07f}, {0.06f, 0.05f, 0.05f}, face, 6, 10);
+    rod(m, {0.0f, 1.44f, 0.0f}, {0.0f, 1.54f, 0.0f}, 0.045f, joint);
+    ellipsoid(m, {0.0f, 1.28f, 0.0f}, {0.19f, 0.17f, 0.12f}, body, 10, 16);
+    ellipsoid(m, {0.0f, 1.07f, 0.0f}, {0.14f, 0.1f, 0.09f}, joint, 8, 14);
+    ellipsoid(m, {0.0f, 0.93f, 0.0f}, {0.17f, 0.1f, 0.11f}, body, 8, 14);
+    for (float x : {-1.0f, 1.0f}) {
+        ellipsoid(m, {0.22f * x, 1.4f, 0.0f}, {0.06f, 0.06f, 0.06f}, joint, 6, 10);
+        ellipsoid(m, {0.25f * x, 1.22f, 0.0f}, {0.055f, 0.15f, 0.055f}, body, 8, 12);
+        ellipsoid(m, {0.25f * x, 1.06f, 0.0f}, {0.042f, 0.042f, 0.042f}, joint, 6, 10);
+        ellipsoid(m, {0.25f * x, 0.92f, 0.0f}, {0.045f, 0.13f, 0.045f}, body, 8, 12);
+        ellipsoid(m, {0.25f * x, 0.75f, 0.01f}, {0.035f, 0.06f, 0.05f}, joint, 6, 10);
+        ellipsoid(m, {0.1f * x, 0.67f, 0.0f}, {0.075f, 0.21f, 0.075f}, body, 8, 12);
+        ellipsoid(m, {0.1f * x, 0.47f, 0.01f}, {0.055f, 0.05f, 0.055f}, joint, 6, 10);
+        ellipsoid(m, {0.1f * x, 0.27f, 0.0f}, {0.058f, 0.2f, 0.058f}, body, 8, 12);
+        ellipsoid(m, {0.1f * x, 0.045f, 0.05f}, {0.055f, 0.045f, 0.12f}, joint, 6, 12);
+    }
+}
+
+void robot(MeshData& m) {
+    const C4 shell{0.58f, 0.62f, 0.68f, 1.0f}, dark{0.18f, 0.19f, 0.22f, 1.0f}, visor{0.04f, 0.05f, 0.07f, 1.0f}, glow{0.35f, 0.95f, 1.0f, 1.0f}, accent{0.95f, 0.55f, 0.15f, 1.0f};
+    ellipsoid(m, {0.0f, 1.6f, 0.0f}, {0.19f, 0.17f, 0.17f}, shell, 10, 18);
+    ellipsoid(m, {0.0f, 1.6f, 0.06f}, {0.155f, 0.1f, 0.12f}, visor, 8, 16);
+    for (float x : {-0.06f, 0.06f}) ellipsoid(m, {x, 1.62f, 0.172f}, {0.03f, 0.04f, 0.012f}, glow, 6, 10);
+    rod(m, {0.0f, 1.76f, 0.0f}, {0.0f, 1.86f, 0.0f}, 0.012f, dark, 6);
+    ellipsoid(m, {0.0f, 1.87f, 0.0f}, {0.025f, 0.025f, 0.025f}, accent, 5, 8);
+    for (float x : {-0.19f, 0.19f}) ellipsoid(m, {x, 1.6f, 0.0f}, {0.025f, 0.06f, 0.06f}, dark, 6, 10);
+    rod(m, {0.0f, 1.38f, 0.0f}, {0.0f, 1.45f, 0.0f}, 0.04f, dark);
+    ellipsoid(m, {0.0f, 1.2f, 0.0f}, {0.17f, 0.2f, 0.12f}, shell, 10, 16);
+    ellipsoid(m, {0.0f, 1.24f, 0.1f}, {0.06f, 0.06f, 0.03f}, glow, 6, 10);
+    ellipsoid(m, {0.0f, 0.95f, 0.0f}, {0.13f, 0.07f, 0.09f}, dark, 6, 14);
+    for (float x : {-1.0f, 1.0f}) {
+        ellipsoid(m, {0.21f * x, 1.34f, 0.0f}, {0.055f, 0.055f, 0.055f}, dark, 6, 10);
+        rod(m, {0.23f * x, 1.32f, 0.0f}, {0.25f * x, 1.06f, 0.0f}, 0.035f, shell);
+        ellipsoid(m, {0.25f * x, 1.05f, 0.0f}, {0.04f, 0.04f, 0.04f}, dark, 6, 10);
+        rod(m, {0.25f * x, 1.04f, 0.0f}, {0.25f * x, 0.8f, 0.0f}, 0.032f, shell);
+        box(m, {0.25f * x, 0.75f, 0.0f}, {0.035f, 0.05f, 0.045f}, dark);
+        ellipsoid(m, {0.1f * x, 0.89f, 0.0f}, {0.055f, 0.055f, 0.055f}, dark, 6, 10);
+        rod(m, {0.1f * x, 0.88f, 0.0f}, {0.1f * x, 0.5f, 0.0f}, 0.05f, shell);
+        ellipsoid(m, {0.1f * x, 0.48f, 0.0f}, {0.05f, 0.05f, 0.05f}, dark, 6, 10);
+        rod(m, {0.1f * x, 0.47f, 0.0f}, {0.1f * x, 0.1f, 0.0f}, 0.045f, shell);
+        box(m, {0.1f * x, 0.05f, 0.04f}, {0.065f, 0.05f, 0.12f}, dark);
+    }
+}
+
 MeshData build(const std::string& name) {
     MeshData m;
     const std::array<float, 4> bark{0.36f, 0.24f, 0.14f, 1.0f};
-    if (name == "pine") {
+    if (name == "character-pixel") {
+        pixel_person(m);
+    } else if (name == "character-mannequin") {
+        mannequin(m);
+    } else if (name == "character-robot") {
+        robot(m);
+    } else if (name == "pine") {
         cone(m, 0.0f, 1.2f, 0.18f, 0.14f, 7, bark, 11u, 0.1f);
         cone(m, 0.9f, 3.0f, 1.25f, 0.0f, 9, {0.12f, 0.32f, 0.16f, 1.0f}, 21u, 0.25f);
         cone(m, 2.0f, 4.1f, 1.0f, 0.0f, 9, {0.14f, 0.36f, 0.18f, 1.0f}, 31u, 0.25f);
@@ -131,7 +245,7 @@ void put(std::string& bin, const std::vector<T>& v) {
 } // namespace
 
 const std::vector<std::string>& builtin_model_names() {
-    static const std::vector<std::string> all = {"tree", "pine", "bush", "rock"};
+    static const std::vector<std::string> all = {"tree", "pine", "bush", "rock", "character-pixel", "character-mannequin", "character-robot"};
     return all;
 }
 

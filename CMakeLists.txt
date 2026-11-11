@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(orchard VERSION 1.3.2 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
+project(orchard VERSION 1.4.0 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -46,6 +46,8 @@ configure_file(cmake/version.hpp.in "${CMAKE_BINARY_DIR}/generated/orchard/versi
 add_library(orchard_heartwood STATIC
     Source/orchard/math.cpp
     Source/orchard/scene.cpp
+    Source/orchard/effects.cpp
+    Source/orchard/gameplay.cpp
     Source/orchard/terrain.cpp
     Source/orchard/project.cpp
     Source/orchard/graph.cpp

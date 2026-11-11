@@ -35,6 +35,8 @@ final class Native {
     static native boolean hasBody(long entity);
     static native boolean keyDown(String key);
     static native boolean touching(long entity, long other);
+    static native double game(int op, long entity, long other, double[] args, String text);
+    static native long gameEntity(int op, long entity, long other, double[] args, String text);
 
     static Vec3 vec(long entity, int which) {
         double[] v = new double[3];

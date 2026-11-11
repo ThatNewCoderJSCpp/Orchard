@@ -131,6 +131,50 @@ namespace Orchard
         public static int PushFluid(double x, double y, double radius, double vx, double vy) => Native.Fluid(2, x, y, radius, vx, vy, 0);
         public static int SplashFluid(double x, double y, double radius, double strength) => Native.Fluid(3, x, y, radius, strength, 0, 0);
         public static int PaintSand(double x, double y, double radius, int cell) => Native.Fluid(4, x, y, radius, 0, 0, cell);
+        static double G(int op, Entity e, Entity other, string text, params double[] args) => Native.Game(op, e?.Id ?? 0, other?.Id ?? 0, text, args);
+        static Entity GE(int op, Entity e, Entity other, string text, params double[] args) => new Entity(Native.GameEntity(op, e?.Id ?? 0, other?.Id ?? 0, text, args));
+        public static double Health(Entity e) => G(0, e, null, null);
+        public static double MaxHealth(Entity e) => G(1, e, null, null);
+        public static bool HasHealth(Entity e) => G(24, e, null, null) != 0.0;
+        public static void SetHealth(Entity e, double value) => G(2, e, null, null, value);
+        public static void SetMaxHealth(Entity e, double value) => G(3, e, null, null, value);
+        public static double AddHealth(Entity e, double amount) => G(4, e, null, null, amount);
+        public static double Heal(Entity e, double amount) => AddHealth(e, amount);
+        public static double Damage(Entity e, double amount, Entity attacker = null) => G(5, e, attacker, null, amount);
+        public static bool Kill(Entity e) => G(6, e, null, null) != 0.0;
+        public static bool IsDead(Entity e) => G(7, e, null, null) != 0.0;
+        public static bool Revive(Entity e, double health = -1.0) => G(8, e, null, null, health) != 0.0;
+        public static void SetInvulnerable(Entity e, bool on) => G(9, e, null, null, on ? 1.0 : 0.0);
+        public static double DamageTaken(Entity e) => G(10, e, null, null);
+        public static bool Died(Entity e) => G(11, e, null, null) != 0.0;
+        public static Entity LastAttacker(Entity e) => GE(100, e, null, null);
+        public static void Ignite(Entity e, double seconds = 10.0) => G(12, e, null, null, seconds);
+        public static void Extinguish(Entity e) => G(13, e, null, null);
+        public static bool IsBurning(Entity e) => G(14, e, null, null) != 0.0;
+        public static int Explode(Vec3 at, double radius = 5.0, double force = 20000.0, double damage = 100.0, Entity attacker = null) => (int)G(15, attacker, null, null, at.X, at.Y, at.Z, radius, force, damage, 1.0);
+        public static int PushAway(Vec3 at, double radius, double force) => (int)G(15, null, null, null, at.X, at.Y, at.Z, radius, force, 0.0, 0.0);
+        public static Entity PlayEffect(string effect, Vec3 at, double scale = 1.0) => GE(101, null, null, effect, at.X, at.Y, at.Z, scale);
+        public static Entity AttachEffect(string effect, Entity parent, double scale = 1.0) => GE(101, parent, null, effect, 0.0, 0.0, 0.0, scale);
+        public static void AddTag(Entity e, string tag) => G(16, e, null, tag);
+        public static void RemoveTag(Entity e, string tag) => G(17, e, null, tag);
+        public static bool HasTag(Entity e, string tag) => G(18, e, null, tag) != 0.0;
+        public static System.Collections.Generic.List<Entity> FindTagged(string tag)
+        {
+            var list = new System.Collections.Generic.List<Entity>();
+            int n = (int)G(19, null, null, tag);
+            for (int i = 0; i < n; ++i) list.Add(GE(102, null, null, tag, i));
+            return list;
+        }
+        public static Entity NearestTagged(string tag, Entity from) => GE(103, from, null, tag);
+        public static double Distance(Entity a, Entity b) => G(20, a, b, null);
+        public static void Teleport(Entity e, Vec3 to) => G(21, e, null, null, to.X, to.Y, to.Z);
+        public static void LookAt(Entity e, Vec3 target) => G(22, e, null, null, target.X, target.Y, target.Z);
+        public static void LookAt(Entity e, Entity target) => LookAt(e, target.WorldPosition);
+        public static double Random(double low, double high) => G(23, null, null, null, low, high);
+        public static int RandomInt(int low, int high) { int r = (int)System.Math.Floor(Random(low, high + 1.0)); return r > high ? high : r; }
+        public static double Clamp(double v, double low, double high) => v < low ? low : (v > high ? high : v);
+        public static double Lerp(double a, double b, double t) => a + (b - a) * t;
+        public static double MoveTowards(double current, double target, double maxStep) { double d = target - current; return d > maxStep ? current + maxStep : (d < -maxStep ? current - maxStep : target); }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -162,6 +206,8 @@ namespace Orchard
         public delegate* unmanaged<int, double, double, double, double, double, double, double, int, int> fluid_brush;
         public delegate* unmanaged<ulong, int, byte*, double, double> animation;
         public delegate* unmanaged<ulong, byte*> animation_event;
+        public delegate* unmanaged<int, ulong, ulong, double*, int, byte*, double> game;
+        public delegate* unmanaged<int, ulong, ulong, double*, int, byte*, ulong> game_entity;
     }
 
     internal static unsafe class Native
@@ -225,6 +271,22 @@ namespace Orchard
         {
             if (!Has((int)Marshal.OffsetOf<HostApi>("animation_event"), sizeof(nint)) || Host->animation_event == null) return "";
             return Text(Host->animation_event(e));
+        }
+
+        public static double Game(int op, ulong e, ulong other, string text, params double[] args)
+        {
+            if (!Has((int)Marshal.OffsetOf<HostApi>("game"), sizeof(nint)) || Host->game == null) return 0.0;
+            args ??= System.Array.Empty<double>();
+            fixed (double* a = args)
+            fixed (byte* t = Utf8(text)) return Host->game(op, e, other, args.Length > 0 ? a : null, args.Length, t);
+        }
+
+        public static ulong GameEntity(int op, ulong e, ulong other, string text, params double[] args)
+        {
+            if (!Has((int)Marshal.OffsetOf<HostApi>("game_entity"), sizeof(nint)) || Host->game_entity == null) return 0;
+            args ??= System.Array.Empty<double>();
+            fixed (double* a = args)
+            fixed (byte* t = Utf8(text)) return Host->game_entity(op, e, other, args.Length > 0 ? a : null, args.Length, t);
         }
 
         public static int Fluid(int brush, double x, double y, double radius, double vx, double vy, int material)

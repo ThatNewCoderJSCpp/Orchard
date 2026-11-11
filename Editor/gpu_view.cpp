@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <utility>
 #include <vector>
@@ -170,6 +171,73 @@ void prism_edges(fg::Renderer& r, const Mat4& world, const Collider& c, Color co
     }
 }
 
+struct SpriteState {
+    float last_x = 0.0f;
+    float phase = 0.0f;
+    float facing = 1.0f;
+    bool seen = false;
+};
+
+void draw_character_sprite(fg::Renderer& r, const Scene& scene, Entity e, const std::function<fg::RenderPoint(Vec3)>& px, float dt, SpriteState& st) {
+    static const char* const standing[22] = {
+        "   HHHH   ", "  HHHHHH  ", "  HHSSSS  ", "  HSSSES  ", "  HSSSSS  ", "   SSSS   ", "    SS    ", "   TTTT   ", "  TTTTTT  ", "  TTAATT  ", "  TTAATT  ",
+        "  TTAATT  ", "  TTSSTT  ", "   PPPP   ", "   PPPP   ", "   PPPP   ", "   PPPP   ", "   PPPP   ", "   PPPP   ", "   PPPP   ", "   BBBBB  ", "   BBBBB  "};
+    static const char* const walking[6] = {"  PP  PP  ", "  PP  PP  ", " PP    PP ", " PP    PP ", "BBB    BBB", "BBB    BBB"};
+    const Model* md = scene.model(e);
+    if (!md) return;
+    struct Pal {
+        char key;
+        Color c;
+    };
+    std::vector<Pal> pal;
+    if (md->style == "mannequin") {
+        pal = {{'H', Color(196, 198, 204)}, {'S', Color(196, 198, 204)}, {'E', Color(110, 114, 122)}, {'T', Color(206, 207, 212)}, {'A', Color(150, 154, 162)}, {'P', Color(186, 188, 194)}, {'B', Color(110, 114, 122)}};
+    } else if (md->style == "robot") {
+        pal = {{'H', Color(70, 74, 82)}, {'S', Color(148, 158, 172)}, {'E', Color(90, 240, 255)}, {'T', Color(148, 158, 172)}, {'A', Color(52, 54, 60)}, {'P', Color(120, 128, 140)}, {'B', Color(46, 48, 54)}};
+    } else {
+        pal = {{'H', Color(84, 52, 28)}, {'S', Color(236, 188, 148)}, {'E', Color(20, 20, 26)}, {'T', Color(52, 132, 184)}, {'A', Color(40, 112, 158)}, {'P', Color(52, 60, 108)}, {'B', Color(46, 30, 20)}};
+    }
+    const Mat4 w = scene.world_matrix(e);
+    const vector3d o = point(w, {0.0f, 0.0f, 0.0f});
+    const Vec3 up = mul_direction(w, Vec3{0.0f, 1.0f, 0.0f});
+    const Vec3 face = mul_direction(w, Vec3{0.0f, 0.0f, 1.0f});
+    if (!st.seen) {
+        st.last_x = static_cast<float>(o.x);
+        st.seen = true;
+    }
+    const float speed = dt > 0.0f ? std::fabs(static_cast<float>(o.x) - st.last_x) / dt : 0.0f;
+    if (static_cast<float>(o.x) - st.last_x > 1e-3f) st.facing = 1.0f;
+    else if (static_cast<float>(o.x) - st.last_x < -1e-3f) st.facing = -1.0f;
+    else if (std::fabs(face.x) > 0.3f) st.facing = face.x > 0.0f ? 1.0f : -1.0f;
+    st.last_x = static_cast<float>(o.x);
+    if (speed > 0.3f) st.phase += dt * std::clamp(speed * 2.5f, 3.0f, 14.0f);
+    else st.phase = 0.0f;
+    const bool stride = speed > 0.3f && static_cast<int>(st.phase) % 2 == 1;
+    const float ul = std::max(1e-4f, std::sqrt(up.x * up.x + up.y * up.y));
+    const float tall = std::max(0.2f, length(up)) * 1.8f;
+    const Vec2 u{up.x / ul, up.y / ul};
+    const Vec2 side{u.y * st.facing, -u.x * st.facing};
+    const float cell = tall / 22.0f;
+    for (int row = 0; row < 22; ++row) {
+        const char* line = row >= 16 && stride ? walking[row - 16] : standing[row];
+        for (int col = 0; col < 10; ++col) {
+            const char ch = line[col];
+            if (ch == ' ') continue;
+            int end = col + 1;
+            while (end < 10 && line[end] == ch) ++end;
+            Color c(0, 0, 0);
+            for (const Pal& pp : pal)
+                if (pp.key == ch) c = pp.c;
+            const float x0 = (static_cast<float>(col) - 5.0f) * cell, x1 = (static_cast<float>(end) - 5.0f) * cell;
+            col = end - 1;
+            const float y1 = (22.0f - static_cast<float>(row)) * cell, y0 = y1 - cell;
+            auto at = [&](float x, float y) { return px({static_cast<float>(o.x) + side.x * x + u.x * y, static_cast<float>(o.y) + side.y * x + u.y * y, 0.0f}); };
+            const fg::RenderPoint q[4] = {at(x0, y0), at(x1, y0), at(x1, y1), at(x0, y1)};
+            r.draw_polygon(q, 4, fg::Paint::fill(c));
+        }
+    }
+}
+
 void box_edges(fg::Renderer& r, const Mat4& m, Color color, float width, bool depth) {
     vector3d p[8];
     for (int i = 0; i < 8; ++i) p[i] = point(m, {(i & 1) ? 0.5f : -0.5f, (i & 2) ? 0.5f : -0.5f, (i & 4) ? 0.5f : -0.5f});
@@ -308,6 +376,7 @@ struct GpuView::Meshes {
     std::vector<fg::Mesh3D> fluid_meshes;
     std::map<std::array<int, 5>, fg::Mesh3D> sections;
     std::map<std::array<int, 6>, fg::Mesh3D> prisms;
+    std::map<std::uint64_t, SpriteState> sprites;
     fg::TextureLibrary textures;
     std::map<std::uint64_t, std::shared_ptr<fizmo::images::BitmapImage>> fluid_images;
     std::map<std::uint64_t, fg::Texture> fluid_textures;
@@ -1559,10 +1628,59 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
         r.draw_circle(cx, cy, rad, fg::Paint::stroke(edge, width));
         line(pc2, pe, edge, width);
     };
+    const bool flattened = scene.dimension() == Dimension::three_d;
+    auto styled_owner = [&scene](Entity e) {
+        for (Entity at = e; scene.alive(at); at = scene.parent(at))
+            if (const Model* md = scene.model(at))
+                if (md->visible && !md->style.empty()) return at;
+        return Entity{};
+    };
+    auto outline = [&](const xylem::FlatOutline& fo, Color fill, Color edge, unsigned width) {
+        if (fo.circle) {
+            std::vector<fg::RenderPoint> pts;
+            for (int k = 0; k < 28; ++k) {
+                const float a = 6.2831853f * static_cast<float>(k) / 28.0f;
+                pts.push_back(px({fo.center.x + fo.radius * std::cos(a), fo.center.y + fo.radius * std::sin(a), 0.0f}));
+            }
+            if (fill.alpha() > 0) r.draw_polygon(pts.data(), pts.size(), fg::Paint::fill(fill));
+            r.draw_polyline(pts.data(), pts.size(), fg::Paint::stroke(edge, width), true);
+            return;
+        }
+        if (fo.points.size() < 2) return;
+        std::vector<fg::RenderPoint> pts;
+        for (const Vec2& q : fo.points) pts.push_back(px({q.x, q.y, 0.0f}));
+        if (fill.alpha() > 0 && pts.size() >= 3) r.draw_polygon(pts.data(), pts.size(), fg::Paint::fill(fill));
+        r.draw_polyline(pts.data(), pts.size(), fg::Paint::stroke(edge, width), true);
+    };
     for (Entity e : scene.entities()) {
         const Mat4 world = scene.world_matrix(e);
         const bool sel = e == selected && !playing;
         const std::vector<Collider>* cs = scene.colliders(e);
+        const Entity styled = styled_owner(e);
+        if (styled == e) draw_character_sprite(r, scene, e, px, static_cast<float>(f.dt), m_meshes->sprites[e.id()]);
+        if (scene.alive(styled) && cs && !cs->empty()) {
+            const bool show = !playing && scene.alive(selected) && (selected == e || selected == styled || styled_owner(selected) == styled);
+            if (show) {
+                for (const Collider& c : *cs) {
+                    const xylem::FlatOutline fo = xylem::flat_outline(scene, e, c);
+                    if (fo.in_plane) outline(fo, Color(0, 0, 0, 0), with_alpha(selected_color, 170), 1u);
+                }
+            }
+            continue;
+        }
+        if (flattened && cs && !cs->empty()) {
+            for (const Collider& c : *cs) {
+                const Color col = body_color(scene, e, c);
+                const xylem::FlatOutline fo = xylem::flat_outline(scene, e, c);
+                if (!fo.in_plane) {
+                    if (!playing) outline(fo, Color(0, 0, 0, 0), with_alpha(sel ? selected_color : col, 60), 1u);
+                    continue;
+                }
+                const Color fill = c.sensor || !c.enabled ? Color(0, 0, 0, 0) : with_alpha(col, 120);
+                outline(fo, fill, sel ? selected_color : col, sel ? 2u : 1u);
+            }
+            continue;
+        }
         if (cs && !cs->empty()) {
             for (const Collider& c : *cs) {
                 const Color col = body_color(scene, e, c);

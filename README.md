@@ -150,6 +150,26 @@ end
 
 C# and Java scripts subclass `Script` (the class named like the file is used); C, C++, Lua and Walnut use `on_start(self)`, `on_tick(self, dt)` and `on_stop(self)`, and any of them can leave out their parameters. The APIs have the same pieces with each language's usual names: position, rotation (degrees), scale, velocity, spin, world position, translate, rotate, impulse/force/torque, `has_body`, `touching`, collision layers (`set_layers`), ray casts and sphere overlaps, name, parent, destroy, find, spawn, `instantiate` (spawn a copy of an entity template), particle control (`play_particles`, `stop_particles`, `burst_particles`, `clear_particles`), log, warn, time, dt, `is_2d` and `key_down`.
 
+They also have the gameplay helpers you'd find in Unity, Unreal, GMod or Roblox (C++/C/Lua/Walnut names shown; C# and Java use `SetHealth`/`setHealth` and so on):
+
+| Group | Functions |
+|---|---|
+| Health | `health`, `max_health`, `has_health`, `set_health`, `set_max_health`, `add_health` / `heal`, `damage` (with an optional attacker), `kill`, `is_dead`, `revive`, `set_invulnerable`, `damage_taken` (this tick), `died` (true the tick it died), `last_attacker` |
+| Fire and blasts | `ignite` (seconds), `extinguish`, `is_burning`, `explode` (point, radius, push, damage, attacker), `push_away` (a blast with no damage or effect) |
+| Effects | `play_effect` (name, point, scale), `attach_effect` (name, entity, scale) |
+| Tags | `add_tag`, `remove_tag`, `has_tag`, `find_tagged`, `nearest_tagged` |
+| Moving and maths | `distance`, `teleport`, `look_at` (a point or an entity), `random`, `random_int`, `clamp`, `lerp`, `move_towards` |
+
+Lua has them on `orchard.` (and the entity ones as methods too, e.g. `self:damage(10)`); C has them as `orchard_health(e)` and so on.
+
+```lua
+function on_tick(self, dt)
+    if self:died() then orchard.play_effect("explosion", self:world_position()) end
+    local enemy = orchard.nearest_tagged("enemy", self)
+    if enemy and orchard.distance(self, enemy) < 2 then orchard.damage(enemy, 20 * dt, self) end
+end
+```
+
 Other languages can be added from C++ with `ScriptRuntime::add_language`: a `ScriptLanguage` says which extensions it handles, how to build a file and how to load the result as a `ScriptModule` with `hooks()` and `call()`. The built-in ones are written that way.
 
 ### Walnut
@@ -226,7 +246,7 @@ A **sphere section** collider is a hemisphere, dome, wedge, bowl or shell: set t
 
 When you press Play, the view looks through the scene's game camera: the active entity with a **Camera** component (highest `priority` wins), or else the first entity named "Camera". Moving or turning that entity, from a script or from physics, moves what you see; Stop puts the editor view back. A camera looks along -Z with +Y up (in your project's axes) at rotation 0. The component has `fov`, near and far clip, and for 2D `view_height` (how many metres tall the view is). Right-click → **Cameras** → **Camera (from this view)** makes one where the editor view is, and the inspector's **Move it to where the view is now** lines up an existing one. New 3D projects come with `Scripts/fly_camera.wal`: put it on the camera for W A S D to move, Q / E (or Space) down and up, the arrow keys to turn and Shift to go faster. `key_down` names aren't case-sensitive and accept `up`/`down`/`left`/`right` and `shift`/`ctrl`/`alt`.
 
-For no script at all, use a **player camera**: right-click → **Cameras** → **Walking camera**, or tick **Player view** on any camera. Play looks through the one player camera (ticking it unticks the others). Its **Built-in controls** are `walk` (W A S D, the mouse or arrow keys to look, Space to jump, it stops at walls and stands `eye` metres above the ground), `fly` (no gravity, Q / E down and up) or `none` (your script moves it). `speed`, `look` (mouse sensitivity), `eye`, `jump` (jump speed) and `mouse` (drag to look) are in the inspector.
+For no script at all, use a **player camera**: right-click → **Cameras** → **Walking camera**, or tick **Player view** on any camera. Play looks through the one player camera (ticking it unticks the others). Its **Built-in controls** are `walk` (W A S D, the mouse or arrow keys to look, Space to jump, it stops at walls and stands `eye` metres above the ground), `fly` (no gravity, Q / E down and up) or `none` (your script moves it). `speed`, `sprint` (how fast Shift goes; 0 means three times `speed`), `look` (mouse sensitivity), `eye`, `jump` (jump speed) and `mouse` (drag to look) are in the inspector.
 
 ### Physical player
 
@@ -237,11 +257,24 @@ A walking player camera on its own is a ghost with feet: it stops at walls and s
 
 With a body under it, Walk drives the body instead of moving the camera: W A S D sets the body's velocity (with quick acceleration on the ground and less in the air), Space jumps when it's standing on something that isn't too steep, and gravity, collisions, pushes and moving things all act on it. It turns off gravity while it stands on a slope so it doesn't slide. Looking left and right turns the body with you (it never tips), so the camera stays at its eyes. It rides 5 cm above the highest ground under its feet, so the feet and toes of a Full body or Detailed player don't catch on bumps and terrain triangles. Running off the top of a ramp, over a seam between two floor pieces or into a small lip doesn't fling it up: only Space (or a really big push, over 8 m/s) lifts it off the ground. The body can also be the camera itself: tick **Rigid body** on the player camera and add a capsule with its offset half a body-height down (e.g. size `0.6, 1.8, 0.6`, offset `0, -0.8, 0` for a 1.7 m eye height), and lock its rotation.
 
+Physics runs at a fixed tick rate, so a fast player (sprinting with Shift, say) used to look like it stuttered when frames and physics ticks didn't line up. Moving bodies are now drawn smoothly between physics ticks (`world.render_pose(e, position, rotation)` and `world.interpolation()` in C++). The physics itself isn't changed, so this works at any speed.
+
 C++ games use the same controller: `world.move_character(entity, xylem::CharacterMove{wish_velocity, jump})` once a frame returns whether it's grounded, what it's standing on and the ground's normal (`jump_speed`, `ground_accel`, `air_accel`, `max_slope`, `ground_probe`, `upright` and `ride_height` are in `CharacterMove`; `ride_height` above 0 keeps the body that far above the highest ground under its whole footprint instead of pressing it onto the ground). `world.raycast_ignoring(entity, ...)` casts a ray that skips that entity's own body.
 
 ### Characters
 
-Right-click → **Character colliders** makes a ready-made collider set for players and bots, as a rigid body that can't tip over:
+Right-click → **Characters** (or **Physical player** for one you control) makes a ready-made character for players and bots, as a rigid body that can't tip over. First pick how it looks, then its colliders; the two are separate, so any look works with any collider set:
+
+| Look | In 3D | In 2D |
+|---|---|---|
+| **Pixel person** | a blocky person built from boxes, with a pixel face (like People Playground) | a pixel-art person |
+| **Mannequin** | a smooth grey test dummy with darker joints (like the Unity and Unreal ones) | a grey pixel dummy |
+| **Robot avatar** | a robot with a big round head, a dark visor, glowing eyes and an antenna (like VRChat's) | a pixel robot with a glowing eye |
+| **Colliders only** | just the colliders | just the colliders |
+
+The 3D looks are meshes written to `Assets/Models/Characters/` (they're rewritten if you delete them, and you can replace them with your own). In 2D the pixel sprite faces the way the character moves and takes steps while walking. A character with a look hides its colliders; select it to see their outlines. The **Character** section of Edit properties changes the look or swaps the colliders later (a physical player stays 75 kg with no friction). C++: `orchard::set_character_style(scene, e, "robot")`, `orchard::set_humanoid_colliders(scene, e, orchard::HumanoidKind::detailed)` and `orchard::humanoid_kind_of(scene, e)`.
+
+The collider sets:
 
 | Kind | Colliders | For |
 |---|---|---|
@@ -285,11 +318,21 @@ Texture layers paint the ground by height and slope (grass on the flat, dirt on 
 
 In Play the terrain is one heightfield collider that follows the hills exactly, so players, bodies, fluids and raycasts all stand on the real ground. An imported map or building model gets the **exact shape** collider (Model > Collision), so you walk on its floors and stairs.
 
+### Health, fire and explosions
+
+Tick **Has health** in the inspector (under **Health and tags**) to let something be hurt. It has a health value and a max, can heal over time after a delay, can be invulnerable, can be hurt by hard hits (`impact`: speed changes over 7 m/s hurt, more the harder), and can be **flammable**: fire from explosions or `ignite` burns it, does damage every second and spreads to flammable things nearby. **When health runs out** it does nothing, disappears, explodes (blast radius, push and damage: other explosive things in range go off too), shatters or respawns where it started after a delay. Right-click → **Physics object** has an **Explosive barrel** and a **Wooden crate** ready to go. **Tags** (comma separated) let scripts find groups of things.
+
 ### Particles
 
-Any entity can have a **particle emitter**: sparks, smoke, fire, explosion, dust, rain, snow, magic, debris, bubbles, steam and embers are presets, and every setting can be changed: rate, bursts, lifetime, speed, direction and spread, the shape they come from (point, sphere, hemisphere, cone, box, circle, line), gravity (below 0 rises), drag, wind, swirl, size, colour and see-through over their life, glow, stretch along movement, additive or covering blend, lit or not, bouncing off things, a texture with flipbook frames, and a second emitter to start when one dies (fire that leaves smoke). Scripts start, stop and burst them.
+Any entity can have a **particle emitter**: sparks, smoke, fire, flames, explosion, fireball, flash, shockwave, dust, dust burst, rain, snow, magic, debris, bubbles, steam, steam jet, embers, spark shower, zap, splash and dark smoke are presets (and the old puffy smoke and steam are kept as smoke puffs and steam puffs), and every setting can be changed: rate, bursts, lifetime, speed, direction and spread, the shape they come from (point, sphere, hemisphere, cone, box, circle, line), gravity (below 0 rises), drag, wind, swirl, size, colour and see-through over their life, glow, stretch along movement, additive or covering blend, lit or not, bouncing off things, a texture with flipbook frames, and a second emitter to start when one dies (fire that leaves smoke). Colour can go through a middle colour (white, then orange, then dark red), particles can fade in, grow quickly then slow down (`grow`), spin, vary in colour and size (`variation`), and wait before starting (`delay`). Scripts start, stop and burst them.
 
-Every preset has a **built-in texture**, generated when the editor starts: billowy smoke and steam puffs, an animated flame flipbook, a fireball, spark streaks, embers, rain streaks, snowflakes, magic stars, bubbles, rock debris, dust and a shockwave ring. They rotate and animate over each particle's life. Pick another built-in or any image from Assets in the emitter's **Texture**; for an image, `frames` is the number of flipbook frames (a strip or a grid of square frames).
+**Effects** are several emitters (and a light) put together, like GMod's: right-click → **Particles** → **Effects**, or `play_effect` from a script. Explosion (small and big too: a flash, fireball, flames, black smoke, sparks, debris, embers, a shockwave and dust, with a light that fades), fire, campfire, inferno, torch, burning (fire over all of an entity's colliders), steam vent, welding sparks, electric zap, smoke grenade, muzzle flash, impact and splash. One-shot effects clean themselves up when a script plays them.
+
+Every emitter has a **Look**: **Plain** (soft dots, the cheapest), **Simple** (the look particles had before: puffy smoke and steam, the animated fire flipbook, an explosion that adds light) or **Better** (soft smoke, thin steam wisps, flame tongues, an explosion that covers what's behind it so it stays orange against a bright sky). Select an effect's group entity to switch all its emitters at once.
+
+Explosions leave a **scorch mark** like GMod's: a black burn on the floor under the blast (it skips the thing that blew up and anything moving, and only marks floors, not walls). Fires leave a smaller one under them. Marks last five minutes and then fade. It's a `scorch` preset with **Lies flat on the ground** ticked, so it can also be used on its own: `play_effect("scorch", point)` or right-click → Particles → Effects → Scorch mark. Things that burn also slowly char darker.
+
+Every preset has a **built-in texture**, generated when the editor starts: soft smoke without lumps, thin steam wisps, flame tongues, a bright flash, billowy smoke and steam puffs, an animated flame flipbook, a fireball, spark streaks, embers, rain streaks, snowflakes, magic stars, bubbles, rock debris, dust and a shockwave ring. They rotate and animate over each particle's life. Pick another built-in or any image from Assets in the emitter's **Texture**; for an image, `frames` is the number of flipbook frames (a strip or a grid of square frames).
 
 An emitter's shape can also be **the water's surface** (on a fluid, or on anything with a fluid inside it: steam rises from the whole pool, not one point) or **its colliders**: particles come from every collider of the entity and its children, shared out by size. Put part names in `part` (comma separated, e.g. `head, left hand`) to use only those.
 
@@ -416,11 +459,24 @@ lighting {
 The **outliner** on the left lists everything in the scene. By default it's split into sections: Rigid Bodies, Containers (walls, floors and anything with a body that never moves, or colliders with no body), Triggers, Lights, Cameras, Scripted, Groups and Empty. Only top-level things go in the sections; anything with children or several parts has a ▸ to unfold it, so a detailed character is one row under Rigid Bodies that opens to its head, torso, limbs, organs and bones, and a Pool opens to its water and its five wall colliders. Selecting something inside a folded row unfolds its parents. **Scene tree** shows everything under one THIS SCENE folder in parent/child order, and **A to Z** is one flat list. Typing in the filter searches inside folded rows too and shows what each match is in. You can fold sections away, expand or collapse everything, sort by name, show empty sections, and move it to the right with the ⇄ button. Its settings are saved per project in `.orchard/editor.prefs`.
 
 - **Left click** something (in the outliner or the viewport) to select it and see its details under the outliner: angles in degrees, world position, scale, mass, speed and spin while playing, its light (with a color swatch, intensity, cone, effect), its material, whether it gives off light, and whether its top is in shadow, which lights reach it and how much light lands there.
-- **Right click** it for a menu: edit properties, rename, look at it, make it a rigid body or a container, add a collider, make it give off light, make it strobe, give it a material, add a child, delete. Right-clicking empty space adds things, sorted into pages: **Physical player**, **Physics object** (box, ball, capsule, rounded box, triangles by rule, cylinder, cone, hemisphere, dome, bowl), **Terrain**, **Character colliders**, **Particles** (every preset), **Water**, **Lights** (every type), **Cameras** and **Floors and zones**. Each page has **‹ Back**.
+- **Right click** it for a menu: edit properties, rename, look at it, make it a rigid body or a container, add a collider, make it give off light, make it strobe, give it a material, add a child, delete. Right-clicking empty space adds things, sorted into pages: **Physical player**, **Physics object** (box, ball, capsule, rounded box, triangles by rule, cylinder, cone, hemisphere, dome, bowl), **Terrain**, **Characters** (pick a look, then colliders), **Particles** (every preset), **Water**, **Lights** (every type), **Cameras** and **Floors and zones**. Each page has **‹ Back**.
 - **Project** under the outliner shows the project's files as folders (Scenes, Scripts, Graphs, Entities, Assets...). Click a folder to fold it (remembered per project), a script or graph to open it, a model to place it; right-click a file for more. **Import...** copies models and images into Assets, and ▾ folds the whole list away. The bottom panel has Entities, Script and Console.
 - **Edit properties** (also double-click, or Edit... under the details) opens one window with everything: name, position, angles and scale, script, physics and every body flag, each collider, the light with a color swatch, its strobe and effects, and the material.
 - **Move** (G), **Rotate** (R) and **Scale** (T) tools: drag an arrow to move along it, a ring to turn around that axis (Shift snaps to 15°), or a handle to stretch along that axis (the middle resizes evenly). Sliders and number boxes update the scene as you drag or type.
 - **Scripts and graphs** open in tabs beside the scene: click one under Project. A script tab is a code editor (Ctrl+S saves); **Open in my editor** runs the command you type there (`code`, `kate`, `gedit`, ... with `{file}` where the file name goes, saved per project), and right-clicking a file has **Edit in Orchard** and **Open in my editor**. A graph tab is a node editor: drag from a pin to connect, right-click to add nodes, click a value to edit it, **Show Walnut** for the code it turns into.
+
+## 2D
+
+A 2D project is 2D from the start. A 3D scene can also be played in 2D: switch the view to **2D** and press Play, and Orchard plays it as a side view on the X/Y plane:
+
+- **Physics** runs in 2D. Every body keeps its X and Y; Z is ignored, so things at different depths can bump into each other. Gravity points down whatever the project's axes.
+- **Shapes** become their side outline: boxes stay boxes, spheres become circles, capsules stay capsules, and cylinders, cones, triangles, domes, bowls and hulls become the polygon you see from the side (up to 8 corners). A body turned left or right (like a player facing the camera) stays upright.
+- **Walls in front and behind** are left out: a collider more than 0.5 m in front of or behind its own body's middle doesn't count, so a pool's front and back walls don't fill the pool. The 2D view draws them faintly while editing and not at all while playing.
+- **Water** turns into 2D water with the same fill and material, so it shows up and things float or sink in it. Densities keep their 3D meaning (× water), and a collider with a locked mass gets the density it has in 3D.
+- **Terrain** becomes its ground line where it crosses Z = 0 (unrotated, Y-up terrain).
+- **The player**: A and D (or the arrow keys) walk, Space or W jumps, Shift runs. A physical player turns to face the way it walks; a walking camera with no body stays on the ground and stops at walls; a flying camera moves with W A S D. The view follows the game camera.
+
+Things added from the right-click menu while the view is 2D go where the 2D view is looking.
 
 ## The viewport
 

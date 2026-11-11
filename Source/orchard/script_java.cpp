@@ -91,6 +91,24 @@ jint JNICALL n_fluid(JNIEnv*, jclass, jint brush, jdouble x, jdouble y, jdouble 
     if (!ORCHARD_HOST_HAS(&host(), fluid_brush)) return 0;
     return host().fluid_brush(brush, x, y, 0.0, radius, vx, vy, 0.0, material);
 }
+jdouble JNICALL n_game(JNIEnv* env, jclass, jint op, jlong e, jlong other, jdoubleArray args, jstring text) {
+    if (!ORCHARD_HOST_HAS(&host(), game)) return 0.0;
+    double values[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    jsize count = args ? env->GetArrayLength(args) : 0;
+    if (count > 8) count = 8;
+    if (count > 0) env->GetDoubleArrayRegion(args, 0, count, values);
+    const std::string s = text ? utf(env, text) : std::string();
+    return host().game(op, static_cast<orchard_entity>(e), static_cast<orchard_entity>(other), values, static_cast<int>(count), s.c_str());
+}
+jlong JNICALL n_game_entity(JNIEnv* env, jclass, jint op, jlong e, jlong other, jdoubleArray args, jstring text) {
+    if (!ORCHARD_HOST_HAS(&host(), game_entity)) return 0;
+    double values[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    jsize count = args ? env->GetArrayLength(args) : 0;
+    if (count > 8) count = 8;
+    if (count > 0) env->GetDoubleArrayRegion(args, 0, count, values);
+    const std::string s = text ? utf(env, text) : std::string();
+    return static_cast<jlong>(host().game_entity(op, static_cast<orchard_entity>(e), static_cast<orchard_entity>(other), values, static_cast<int>(count), s.c_str()));
+}
 jboolean JNICALL n_exists(JNIEnv*, jclass, jlong e) { return host().exists(static_cast<orchard_entity>(e)) ? JNI_TRUE : JNI_FALSE; }
 void JNICALL n_destroy(JNIEnv*, jclass, jlong e) { host().destroy(static_cast<orchard_entity>(e)); }
 jstring JNICALL n_name(JNIEnv* env, jclass, jlong e) {
@@ -228,6 +246,8 @@ JNIEnv* start_jvm(const ScriptToolchain& tools, const std::string& api_dir, std:
         {const_cast<char*>("hasBody"), const_cast<char*>("(J)Z"), reinterpret_cast<void*>(&n_has_body)},
         {const_cast<char*>("keyDown"), const_cast<char*>("(Ljava/lang/String;)Z"), reinterpret_cast<void*>(&n_key_down)},
         {const_cast<char*>("touching"), const_cast<char*>("(JJ)Z"), reinterpret_cast<void*>(&n_touching)},
+        {const_cast<char*>("game"), const_cast<char*>("(IJJ[DLjava/lang/String;)D"), reinterpret_cast<void*>(&n_game)},
+        {const_cast<char*>("gameEntity"), const_cast<char*>("(IJJ[DLjava/lang/String;)J"), reinterpret_cast<void*>(&n_game_entity)},
     };
     if (env->RegisterNatives(native, methods, static_cast<jint>(sizeof(methods) / sizeof(methods[0]))) != JNI_OK) {
         if (error) *error = "couldn't connect Orchard's Java API: " + take_exception(env);

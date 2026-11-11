@@ -426,6 +426,72 @@ const char* host_animation_event(orchard_entity e) {
     return last.c_str();
 }
 
+double host_game(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text) {
+    if (!g_runtime) return 0.0;
+    Gameplay& g = rt().gameplay();
+    Scene* s = rt().scene();
+    const Entity e = entity_of(entity), o = entity_of(other);
+    auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
+    const std::string tag = text ? std::string(text) : std::string();
+    switch (op) {
+    case ORCHARD_GAME_HEALTH: return g.health(e);
+    case ORCHARD_GAME_MAX_HEALTH: return g.max_health(e);
+    case ORCHARD_GAME_SET_HEALTH: return g.set_health(e, static_cast<float>(arg(0, 0.0))) ? 1.0 : 0.0;
+    case ORCHARD_GAME_SET_MAX_HEALTH: return g.set_max_health(e, static_cast<float>(arg(0, 100.0))) ? 1.0 : 0.0;
+    case ORCHARD_GAME_HEAL: return g.heal(e, static_cast<float>(arg(0, 0.0)));
+    case ORCHARD_GAME_DAMAGE: return g.damage(e, static_cast<float>(arg(0, 0.0)), o);
+    case ORCHARD_GAME_KILL: return g.kill(e, o) ? 1.0 : 0.0;
+    case ORCHARD_GAME_IS_DEAD: return g.dead(e) ? 1.0 : 0.0;
+    case ORCHARD_GAME_REVIVE: return g.revive(e, static_cast<float>(arg(0, -1.0))) ? 1.0 : 0.0;
+    case ORCHARD_GAME_SET_INVULNERABLE: return g.set_invulnerable(e, arg(0, 1.0) != 0.0) ? 1.0 : 0.0;
+    case ORCHARD_GAME_DAMAGE_TAKEN: return g.damage_taken(e);
+    case ORCHARD_GAME_DIED: return g.died(e) ? 1.0 : 0.0;
+    case ORCHARD_GAME_IGNITE: return g.ignite(e, static_cast<float>(arg(0, 10.0))) ? 1.0 : 0.0;
+    case ORCHARD_GAME_EXTINGUISH: return g.extinguish(e) ? 1.0 : 0.0;
+    case ORCHARD_GAME_IS_BURNING: return g.burning(e) ? 1.0 : 0.0;
+    case ORCHARD_GAME_EXPLODE:
+        return g.explode(Vec3{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))}, static_cast<float>(arg(3, 5.0)), static_cast<float>(arg(4, 20000.0)), static_cast<float>(arg(5, 100.0)), e, arg(6, 1.0) != 0.0);
+    case ORCHARD_GAME_ADD_TAG: return s && s->add_tag(e, tag) ? 1.0 : 0.0;
+    case ORCHARD_GAME_REMOVE_TAG: return s && s->remove_tag(e, tag) ? 1.0 : 0.0;
+    case ORCHARD_GAME_HAS_TAG: return s && s->has_tag(e, tag) ? 1.0 : 0.0;
+    case ORCHARD_GAME_TAGGED_COUNT: return s ? static_cast<double>(s->tagged(tag).size()) : 0.0;
+    case ORCHARD_GAME_DISTANCE: return g.distance(e, o);
+    case ORCHARD_GAME_TELEPORT: return g.teleport(e, Vec3{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))}) ? 1.0 : 0.0;
+    case ORCHARD_GAME_LOOK_AT: return g.look_at(e, Vec3{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))}) ? 1.0 : 0.0;
+    case ORCHARD_GAME_RANDOM: return g.random(arg(0, 0.0), arg(1, 1.0));
+    case ORCHARD_GAME_HAS_HEALTH: return s && s->alive(g.holder(e)) ? 1.0 : 0.0;
+    default: return 0.0;
+    }
+}
+
+orchard_entity host_game_entity(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text) {
+    if (!g_runtime) return 0;
+    Gameplay& g = rt().gameplay();
+    Scene* s = rt().scene();
+    const Entity e = entity_of(entity);
+    static_cast<void>(other);
+    auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
+    const std::string name = text ? std::string(text) : std::string();
+    switch (op) {
+    case ORCHARD_GAME_LAST_ATTACKER: return id_of(g.last_attacker(e));
+    case ORCHARD_GAME_PLAY_EFFECT: {
+        const Vec3 at{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))};
+        return id_of(g.effect(name, at, static_cast<float>(arg(3, 1.0)), e));
+    }
+    case ORCHARD_GAME_TAGGED_AT: {
+        if (!s) return 0;
+        const std::vector<Entity> all = s->tagged(name);
+        const long long i = static_cast<long long>(arg(0, 0.0));
+        return i >= 0 && i < static_cast<long long>(all.size()) ? id_of(all[static_cast<std::size_t>(i)]) : 0;
+    }
+    case ORCHARD_GAME_NEAREST_TAGGED: {
+        const Vec3 from = s && s->alive(e) ? g.position(e) : Vec3{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))};
+        return id_of(g.nearest_tagged(name, from, e));
+    }
+    default: return 0;
+    }
+}
+
 } // namespace
 
 void set_current_runtime(ScriptRuntime* runtime) {
@@ -461,6 +527,8 @@ const orchard_host_api& host_table() {
         t.fluid_brush = &host_fluid_brush;
         t.animation = &host_animation;
         t.animation_event = &host_animation_event;
+        t.game = &host_game;
+        t.game_entity = &host_game_entity;
         return t;
     }();
     return table;
@@ -1387,6 +1455,7 @@ bool ScriptRuntime::start(const Project& project, Scene& scene) {
         m_instances.push_back(Instance{e, m, false});
     }
     m_running = true;
+    m_gameplay.start(&scene, m_physics);
     set_current_runtime(this);
     const std::size_t starting = m_instances.size();
     for (std::size_t i = 0; i < starting; ++i) call_at(i, ORCHARD_HOOK_START, 0.0);
@@ -1398,6 +1467,7 @@ void ScriptRuntime::tick(double dt) {
     set_current_runtime(this);
     m_time += dt;
     for (std::size_t i = 0; i < m_instances.size(); ++i) call_at(i, ORCHARD_HOOK_TICK, dt);
+    if (m_gameplay.running()) m_gameplay.tick(dt, m_time);
 }
 
 void ScriptRuntime::stop() {
@@ -1406,6 +1476,7 @@ void ScriptRuntime::stop() {
     for (std::size_t i = 0; i < m_instances.size(); ++i) call_at(i, ORCHARD_HOOK_STOP, 0.0);
     m_instances.clear();
     m_running = false;
+    m_gameplay.stop();
     unload_all();
     m_scene = nullptr;
     m_project = nullptr;

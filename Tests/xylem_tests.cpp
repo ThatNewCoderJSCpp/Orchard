@@ -1,4 +1,6 @@
 #include <xylem/xylem.hpp>
+#include <orchard/effects.hpp>
+#include <orchard/gameplay.hpp>
 
 #include <cmath>
 #include <cstdlib>
@@ -588,10 +590,282 @@ void test_triangle_prism_lands() {
     }
 }
 
+void test_flattened_play() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity g = s.create("Ground");
+    s.add_body(g).type = orchard::BodyType::fixed;
+    s.add_collider(g)->size = {40.0f, 1.0f, 40.0f};
+    s.transform(g)->position = {0.0f, -0.5f, 0.0f};
+    const orchard::Entity pool = s.create("Pool");
+    orchard::Fluid& w = s.add_fluid(pool);
+    w.size = {6.0f, 2.0f, 6.0f};
+    w.fill = 0.6f;
+    s.transform(pool)->position = {8.0f, 1.0f, 0.0f};
+    s.add_body(pool).type = orchard::BodyType::fixed;
+    const float t = 0.2f;
+    const orchard::Vec3 walls[5][2] = {{{6.0f + 2.0f * t, t, 6.0f + 2.0f * t}, {0.0f, -1.0f - t * 0.5f, 0.0f}}, {{t, 2.0f, 6.0f}, {3.0f + t * 0.5f, 0.0f, 0.0f}}, {{t, 2.0f, 6.0f}, {-3.0f - t * 0.5f, 0.0f, 0.0f}}, {{6.0f + 2.0f * t, 2.0f, t}, {0.0f, 0.0f, 3.0f + t * 0.5f}}, {{6.0f + 2.0f * t, 2.0f, t}, {0.0f, 0.0f, -3.0f - t * 0.5f}}};
+    for (const auto& wl : walls) {
+        orchard::Collider* c = s.add_collider(pool);
+        c->size = wl[0];
+        c->offset = wl[1];
+    }
+    const orchard::Entity cube = s.create("Cube");
+    s.add_body(cube);
+    s.add_collider(cube)->size = {1.0f, 1.0f, 1.0f};
+    s.transform(cube)->position = {-4.0f, 6.0f, 0.0f};
+    const orchard::Entity ball = s.create("Ball");
+    s.add_body(ball);
+    orchard::Collider* bc = s.add_collider(ball, orchard::ColliderShape::sphere);
+    bc->density = 0.5f;
+    s.transform(ball)->position = {8.0f, 4.0f, 0.5f};
+    const orchard::Entity cone = s.create("Cone");
+    s.add_body(cone);
+    s.add_collider(cone, orchard::ColliderShape::cone)->size = {1.0f, 1.0f, 1.0f};
+    s.transform(cone)->position = {-10.0f, 2.0f, 0.0f};
+    const orchard::Entity p = orchard::add_humanoid(s, orchard::HumanoidKind::detailed, {}, "Player");
+    orchard::Body& b = *s.body(p);
+    b.set(orchard::body_lock_rotation_x, true);
+    b.set(orchard::body_lock_rotation_y, true);
+    b.set(orchard::body_lock_rotation_z, true);
+    b.set(orchard::body_sleep, false);
+    s.transform(p)->position = {0.0f, 0.2f, 0.0f};
+    s.transform(p)->rotation = orchard::Quat{0.0f, 1.0f, 0.0f, 0.0f};
+    xylem::World world(orchard::Dimension::two_d, xylem::Settings::flattened(xylem::Settings{}));
+    world.build(s);
+    check(world.fluid_count() == 1, "2D play of a 3D scene keeps its water");
+    float cube_v = 0.0f;
+    for (int i = 0; i < 60 * 4; ++i) {
+        xylem::CharacterMove mv;
+        mv.ride_height = 0.05f;
+        const float at = static_cast<float>(i) / 60.0f;
+        mv.wish = orchard::Vec3{at > 1.0f && at < 2.0f ? 3.0f : 0.0f, 0.0f, 0.0f};
+        world.move_character(p, mv, 1.0f / 60.0f);
+        world.step(1.0f / 60.0f);
+        if (i == 50) cube_v = world.velocity(cube).y;
+    }
+    std::vector<xylem::FluidDraw> draws;
+    world.fluid_draws(draws);
+    check(draws.size() == 1 && draws[0].flat, "2D play draws the water flat");
+    check(cube_v < -7.0f, "a cube in 2D play falls freely (" + str(cube_v) + " m/s after 0.83 s)");
+    const float by = s.transform(ball)->position.y;
+    check(by > 0.6f && by < 1.6f, "a half-density ball floats in the pool in 2D play, so the pool's front and back walls don't fill it (y = " + str(by) + ")");
+    const orchard::Vec3 up = orchard::rotate(s.transform(p)->rotation, orchard::Vec3{0.0f, 1.0f, 0.0f});
+    const float px = s.transform(p)->position.x;
+    check(up.y > 0.99f && px > 2.0f && px < 4.0f, "a player turned to face the view stays upright and walks along X in 2D play (x = " + str(px) + ")");
+    check(s.transform(cone)->position.y < 1.0f && s.transform(cone)->position.y > 0.2f, "a cone lands on its base in 2D play (y = " + str(s.transform(cone)->position.y) + ")");
+    const xylem::FlatOutline front = xylem::flat_outline(s, pool, (*s.colliders(pool))[3]);
+    const xylem::FlatOutline side = xylem::flat_outline(s, pool, (*s.colliders(pool))[1]);
+    check(!front.in_plane && side.in_plane, "the pool's front wall is left out of 2D play and its side walls kept");
+}
+
+orchard::Entity add_box(orchard::Scene& s, const char* name, orchard::Vec3 at, bool dynamic = true) {
+    const orchard::Entity e = s.create(name);
+    s.transform(e)->position = at;
+    s.add_body(e).type = dynamic ? orchard::BodyType::dynamic : orchard::BodyType::fixed;
+    s.add_collider(e)->size = {1.0f, 1.0f, 1.0f};
+    return e;
+}
+
+void test_gameplay_health() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    add_box(s, "Ground", {0.0f, -0.5f, 0.0f}, false);
+    (*s.colliders(s.find("Ground")))[0].size = {40.0f, 1.0f, 40.0f};
+    const orchard::Entity a = add_box(s, "A", {0.0f, 0.5f, 0.0f});
+    s.add_health(a);
+    xylem::World w(orchard::Dimension::three_d);
+    w.build(s);
+    orchard::Gameplay g;
+    g.start(&s, &w);
+    check(g.damage(a, 30.0f) == 70.0f, "damage takes health away (" + str(g.health(a)) + ")");
+    check(g.heal(a, 50.0f) == 100.0f, "healing stops at max health");
+    g.set_invulnerable(a, true);
+    g.damage(a, 50.0f);
+    check(g.health(a) == 100.0f, "invulnerable things take no damage");
+    g.set_invulnerable(a, false);
+    g.tick(0.016, 0.016);
+    s.health(a)->on_death = orchard::DeathAction::respawn;
+    s.health(a)->respawn_delay = 0.5f;
+    s.transform(a)->position = {5.0f, 3.0f, 0.0f};
+    w.moved(a);
+    g.damage(a, 500.0f);
+    check(g.dead(a) && g.health(a) == 0.0f, "too much damage kills");
+    g.tick(0.016, 0.032);
+    check(g.died(a), "died() is true on the tick after death");
+    double t = 0.032;
+    for (int i = 0; i < 60; ++i) {
+        t += 1.0 / 60.0;
+        w.step(1.0f / 60.0f);
+        g.tick(1.0 / 60.0, t);
+    }
+    check(!g.dead(a) && g.health(a) == 100.0f, "a respawning thing comes back with full health");
+    check(std::fabs(s.transform(a)->position.x) < 0.5f, "and comes back where it started (x = " + str(s.transform(a)->position.x) + ")");
+    const orchard::Entity b = add_box(s, "B", {3.0f, 0.5f, 0.0f});
+    check(g.set_health(b, 40.0f) && s.health(b) && g.health(b) == 40.0f, "set_health gives health to a thing that had none");
+    s.add_tag(b, "enemy");
+    check(g.nearest_tagged("enemy", orchard::Vec3{}) == b, "nearest_tagged finds a tagged thing");
+}
+
+void test_gameplay_explosions() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity ground = add_box(s, "Ground", {0.0f, -0.5f, 0.0f}, false);
+    (*s.colliders(ground))[0].size = {60.0f, 1.0f, 60.0f};
+    const orchard::Entity near = add_box(s, "Near", {2.0f, 0.5f, 0.0f});
+    s.add_health(near);
+    const orchard::Entity barrel = add_box(s, "Barrel", {-3.0f, 0.5f, 0.0f});
+    orchard::Health& bh = s.add_health(barrel);
+    bh.value = bh.max = 10.0f;
+    bh.on_death = orchard::DeathAction::explode;
+    bh.explode_radius = 5.0f;
+    bh.explode_damage = 80.0f;
+    const orchard::Entity far = add_box(s, "Far", {-7.0f, 0.5f, 0.0f});
+    s.add_health(far);
+    xylem::World w(orchard::Dimension::three_d);
+    w.build(s);
+    orchard::Gameplay g;
+    g.start(&s, &w);
+    const int hit = g.explode({0.0f, 0.5f, 0.0f}, 4.0f, 20000.0f, 60.0f);
+    check(hit >= 2, "an explosion reaches the things around it (" + str(static_cast<float>(hit)) + ")");
+    check(g.health(near) < 100.0f && g.health(near) > 0.0f, "an explosion hurts less with distance (" + str(g.health(near)) + ")");
+    check(w.velocity(near).x > 1.0f, "an explosion pushes things away (" + str(w.velocity(near).x) + " m/s)");
+    double t = 0.0;
+    for (int i = 0; i < 30; ++i) {
+        t += 1.0 / 60.0;
+        w.step(1.0f / 60.0f);
+        g.tick(1.0 / 60.0, t);
+    }
+    check(!s.alive(barrel), "an explosive barrel goes off when its health runs out");
+    check(g.health(far) < 100.0f, "and its blast hurts things the first explosion didn't reach (" + str(g.health(far)) + ")");
+    bool effects = false;
+    for (orchard::Entity e : s.entities())
+        if (s.emitter(e)) effects = true;
+    check(effects, "explosions leave particle effects in the scene");
+    int marks = 0;
+    for (orchard::Entity e : s.entities())
+        if (s.name(e) == "Scorch" && s.emitter(e) && s.emitter(e)->flat) {
+            ++marks;
+            const float y = orchard::mul_point(s.world_matrix(e), orchard::Vec3{}).y;
+            check(std::fabs(y - 0.02f) < 0.05f, "a scorch mark lies on the ground (y = " + str(y) + ")");
+        }
+    check(marks >= 2, "each explosion leaves a scorch mark on the ground (" + str(static_cast<float>(marks)) + ")");
+}
+
+void test_gameplay_fire() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity crate = add_box(s, "Crate", {0.0f, 0.5f, 0.0f}, false);
+    orchard::Health& h = s.add_health(crate);
+    h.flammable = true;
+    h.burn_damage = 10.0f;
+    xylem::World w(orchard::Dimension::three_d);
+    w.build(s);
+    orchard::Gameplay g;
+    g.start(&s, &w);
+    g.ignite(crate, 3.0f);
+    double t = 0.0;
+    for (int i = 0; i < 60; ++i) {
+        t += 1.0 / 60.0;
+        g.tick(1.0 / 60.0, t);
+    }
+    check(g.burning(crate) && g.health(crate) < 95.0f && g.health(crate) > 80.0f, "burning hurts over time (" + str(g.health(crate)) + " after 1 s)");
+    g.extinguish(crate);
+    const float after = g.health(crate);
+    for (int i = 0; i < 60; ++i) {
+        t += 1.0 / 60.0;
+        g.tick(1.0 / 60.0, t);
+    }
+    check(!g.burning(crate) && g.health(crate) == after, "extinguish puts the fire out");
+    const orchard::Material* m = s.material(crate);
+    check(m && m->color.x < 0.75f, "burning chars things darker (" + str(m ? m->color.x : 1.0f) + ")");
+}
+
+void test_effects() {
+    for (const std::string& name : orchard::effect_names()) {
+        orchard::Scene s(orchard::Dimension::three_d);
+        const orchard::Entity fx = orchard::add_effect(s, name);
+        int emitters = 0;
+        for (orchard::Entity e : s.subtree(fx))
+            if (s.emitter(e)) ++emitters;
+        check(s.alive(fx) && emitters > 0, "effect " + name + " adds particle emitters (" + str(static_cast<float>(emitters)) + ")");
+        std::string error;
+        const std::optional<orchard::Scene> back = orchard::Scene::load(s.save(), &error);
+        check(back && back->entities().size() == s.entities().size(), "effect " + name + " saves and loads: " + error);
+    }
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity e = s.create("Barrel");
+    orchard::Health& h = s.add_health(e);
+    h.value = 42.0f;
+    h.flammable = true;
+    h.on_death = orchard::DeathAction::explode;
+    s.add_tag(e, "barrel");
+    s.add_tag(e, "red");
+    std::string error;
+    const std::optional<orchard::Scene> back = orchard::Scene::load(s.save(), &error);
+    const orchard::Entity be = back ? back->find("Barrel") : orchard::Entity{};
+    const orchard::Health* bh = back && back->alive(be) ? back->health(be) : nullptr;
+    check(bh && bh->value == 42.0f && bh->flammable && bh->on_death == orchard::DeathAction::explode, "health saves and loads");
+    check(back && back->has_tag(be, "barrel") && back->has_tag(be, "red"), "tags save and load");
+}
+
+void test_sprinting() {
+    for (float speed : {15.0f, 30.0f, 45.0f}) {
+        orchard::Scene s(orchard::Dimension::three_d);
+        for (int i = 0; i < 40; ++i) {
+            const orchard::Entity tile = s.create("Tile");
+            s.transform(tile)->position = {-40.0f + 4.0f * static_cast<float>(i), -0.5f, 0.0f};
+            s.add_body(tile).type = orchard::BodyType::fixed;
+            s.add_collider(tile)->size = {4.0f, 1.0f, 8.0f};
+        }
+        const orchard::Entity p = orchard::add_humanoid(s, orchard::HumanoidKind::detailed, {}, "Player");
+        orchard::Body& b = *s.body(p);
+        b.set(orchard::body_sleep, false);
+        b.continuous = orchard::BodyContinuous::on;
+        s.transform(p)->position = {-38.0f, 0.1f, 0.0f};
+        xylem::World w(orchard::Dimension::three_d);
+        w.build(s);
+        float lo = 1e9f, hi = -1e9f;
+        int air = 0;
+        for (int i = 0; i < 60 * 2; ++i) {
+            xylem::CharacterMove mv;
+            mv.ride_height = 0.05f;
+            mv.wish = {speed, 0.0f, 0.0f};
+            const xylem::CharacterState st = w.move_character(p, mv, 1.0f / 60.0f);
+            w.step(1.0f / 60.0f);
+            if (i > 40) {
+                lo = std::min(lo, s.transform(p)->position.y);
+                hi = std::max(hi, s.transform(p)->position.y);
+                if (!st.grounded) ++air;
+            }
+        }
+        check(hi - lo < 0.05f && air == 0, "sprinting at " + str(speed) + " m/s stays smooth on the ground (bob " + str(hi - lo) + " m, " + str(static_cast<float>(air)) + " frames in the air)");
+    }
+}
+
+void test_render_smoothing() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity e = s.create("Ball");
+    s.transform(e)->position = {0.0f, 10.0f, 0.0f};
+    s.add_body(e);
+    s.add_collider(e, orchard::ColliderShape::sphere);
+    xylem::World w(orchard::Dimension::three_d);
+    w.build(s);
+    w.set_velocity(e, {12.0f, 0.0f, 0.0f});
+    w.step(1.0f / 60.0f);
+    const float x1 = s.transform(e)->position.x;
+    w.step(0.5f / 60.0f);
+    orchard::Vec3 pos;
+    orchard::Quat rot;
+    check(w.render_pose(e, pos, rot), "a moving body has a smoothed pose to draw");
+    const float x0 = x1 - 12.0f / 60.0f;
+    check(std::fabs(w.interpolation() - 0.5f) < 0.01f && pos.x > x0 + 0.05f && pos.x < x1 - 0.05f, "the drawn pose sits between physics steps (" + str(pos.x) + " between " + str(x0) + " and " + str(x1) + ")");
+    w.step(0.5f / 60.0f);
+    w.render_pose(e, pos, rot);
+    check(std::fabs(pos.x - x1) < 0.02f, "and moves on smoothly after the next step (" + str(pos.x) + ")");
+}
+
 int main() {
     test_running_stays_down();
     test_detailed_player_walks_hills();
     test_triangle_prism_lands();
+    test_flattened_play();
     test_balls_settle();
     test_start_motion();
     test_mass_and_locks();
@@ -605,6 +879,12 @@ int main() {
     test_layers_and_flags();
     test_friction_mix();
     test_quality();
+    test_gameplay_health();
+    test_gameplay_explosions();
+    test_gameplay_fire();
+    test_effects();
+    test_sprinting();
+    test_render_smoothing();
     std::cout << (checks - failures) << "/" << checks << " checks passed\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -61,6 +61,37 @@ extern "C" {
 #define ORCHARD_SAND_WOOD 11
 #define ORCHARD_SAND_ACID 12
 
+#define ORCHARD_GAME_HEALTH 0
+#define ORCHARD_GAME_MAX_HEALTH 1
+#define ORCHARD_GAME_SET_HEALTH 2
+#define ORCHARD_GAME_SET_MAX_HEALTH 3
+#define ORCHARD_GAME_HEAL 4
+#define ORCHARD_GAME_DAMAGE 5
+#define ORCHARD_GAME_KILL 6
+#define ORCHARD_GAME_IS_DEAD 7
+#define ORCHARD_GAME_REVIVE 8
+#define ORCHARD_GAME_SET_INVULNERABLE 9
+#define ORCHARD_GAME_DAMAGE_TAKEN 10
+#define ORCHARD_GAME_DIED 11
+#define ORCHARD_GAME_IGNITE 12
+#define ORCHARD_GAME_EXTINGUISH 13
+#define ORCHARD_GAME_IS_BURNING 14
+#define ORCHARD_GAME_EXPLODE 15
+#define ORCHARD_GAME_ADD_TAG 16
+#define ORCHARD_GAME_REMOVE_TAG 17
+#define ORCHARD_GAME_HAS_TAG 18
+#define ORCHARD_GAME_TAGGED_COUNT 19
+#define ORCHARD_GAME_DISTANCE 20
+#define ORCHARD_GAME_TELEPORT 21
+#define ORCHARD_GAME_LOOK_AT 22
+#define ORCHARD_GAME_RANDOM 23
+#define ORCHARD_GAME_HAS_HEALTH 24
+
+#define ORCHARD_GAME_LAST_ATTACKER 100
+#define ORCHARD_GAME_PLAY_EFFECT 101
+#define ORCHARD_GAME_TAGGED_AT 102
+#define ORCHARD_GAME_NEAREST_TAGGED 103
+
 typedef unsigned long long orchard_entity;
 
 typedef struct orchard_host_api {
@@ -90,6 +121,8 @@ typedef struct orchard_host_api {
     int (*fluid_brush)(int brush, double x, double y, double z, double radius, double vx, double vy, double vz, int material);
     double (*animation)(orchard_entity entity, int action, const char* clip, double value);
     const char* (*animation_event)(orchard_entity entity);
+    double (*game)(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text);
+    orchard_entity (*game_entity)(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text);
 } orchard_host_api;
 
 #define ORCHARD_HOST_HAS(host, member) ((host) && (host)->size >= offsetof(orchard_host_api, member) + sizeof((host)->member) && (host)->member)
