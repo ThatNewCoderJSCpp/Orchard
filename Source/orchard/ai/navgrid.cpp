@@ -253,7 +253,7 @@ struct NavGrid::Impl {
         }
     }
 
-    bool locate(Vec3 p, std::uint64_t& out, float search) const {
+    bool locate(Vec3 p, std::uint64_t& out, float search, float above = 0.0f) const {
         const int ix = index(p.x), iz = s.flat_2d ? 0 : index(p.z);
         const int r = std::max(0, static_cast<int>(std::ceil(search / s.cell)));
         double best = std::numeric_limits<double>::infinity();
@@ -266,7 +266,7 @@ struct NavGrid::Impl {
                     if (!c) continue;
                     for (std::size_t j = 0; j < c->surfaces.size(); ++j) {
                         const float dy = p.y - c->surfaces[j].y;
-                        if (dy < -0.75f || dy > 2.5f + search) continue;
+                        if (dy < -0.75f || dy > 2.5f + search + above) continue;
                         if (!walkable(ix + dx, iz + dz, static_cast<int>(j))) continue;
                         const float hx = center(ix + dx) - p.x, hz = s.flat_2d ? 0.0f : center(iz + dz) - p.z;
                         const double score = std::sqrt(static_cast<double>(hx * hx + hz * hz)) + std::fabs(dy) * 1.5;
@@ -524,12 +524,21 @@ NavPath NavGrid::find_path_to_any(Vec3 from, const std::vector<Vec3>& goals, con
     std::uint64_t start = 0;
     if (!ready() || goals.empty() || !m->locate(from, start, 2.0f)) return out;
     std::vector<std::uint64_t> refs;
+    std::vector<Vec3> points;
     for (const Vec3& g : goals) {
         std::uint64_t r = 0;
-        if (m->locate(g, r, 3.0f)) refs.push_back(r);
+        if (m->locate(g, r, 3.0f)) {
+            refs.push_back(r);
+            points.push_back(g);
+        } else if (m->locate(g, r, 3.0f, 60.0f)) {
+            refs.push_back(r);
+            points.push_back(m->pos(r));
+        }
     }
     if (refs.empty() && !options.partial) return out;
-    out = m->search(start, refs, goals, options);
+    NavPathOptions o = options;
+    if (refs.empty()) o.max_expand = std::min<std::size_t>(o.max_expand, 2000);
+    out = m->search(start, refs, refs.empty() ? goals : points, o);
     m->finish(out, goals.size() == 1 ? goals.front() : (out.points.empty() ? from : out.points.back().position), options);
     return out;
 }

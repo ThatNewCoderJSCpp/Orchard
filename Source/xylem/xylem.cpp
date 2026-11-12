@@ -651,7 +651,13 @@ struct World::Impl {
         Real gravity_scale = 1.0_r;
         bool grounded = false;
         Real jump_lock = 0.0_r;
+        Real pushed = 0.0_r;
+        orchard::Vec3 normal{0.0f, 1.0f, 0.0f};
     };
+
+    void mark_pushed(orchard::Entity e) {
+        if (auto it = walkers.find(e.id()); it != walkers.end()) it->second.pushed = 0.35_r;
+    }
     std::unordered_map<std::uint64_t, Walker> walkers;
 
     std::string resolve(const std::string& file) const {
@@ -1675,6 +1681,12 @@ float World::fluid_depth(orchard::Vec3 point) const {
     return m->fluids ? static_cast<float>(m->fluids->depth_at(v3(point))) : 0.0f;
 }
 
+float World::mass(orchard::Entity e) const {
+    if (auto it = m->bodies2.find(e.id()); it != m->bodies2.end()) return static_cast<float>(it->second->mass());
+    if (auto it = m->bodies3.find(e.id()); it != m->bodies3.end()) return static_cast<float>(it->second->mass());
+    return 0.0f;
+}
+
 orchard::Vec3 World::fluid_velocity(orchard::Vec3 point) const {
     if (m->fluids2) {
         const RVec2 v = m->fluids2->velocity_at(RVec2{static_cast<Real>(point.x), static_cast<Real>(point.y)});
@@ -1873,6 +1885,7 @@ orchard::Vec3 World::velocity(orchard::Entity e) const {
 }
 
 void World::set_velocity(orchard::Entity e, orchard::Vec3 v) {
+    m->mark_pushed(e);
     if (auto it = m->bodies2.find(e.id()); it != m->bodies2.end()) it->second->set_linear_velocity(RVec2{v.x, v.y});
     if (auto it = m->bodies3.find(e.id()); it != m->bodies3.end()) it->second->set_linear_velocity(v3(v));
 }
@@ -1889,6 +1902,7 @@ void World::set_spin(orchard::Entity e, orchard::Vec3 v) {
 }
 
 void World::impulse(orchard::Entity e, orchard::Vec3 v) {
+    m->mark_pushed(e);
     if (auto it = m->bodies2.find(e.id()); it != m->bodies2.end()) {
         it->second->wake();
         it->second->apply_linear_impulse(RVec2{v.x, v.y});
@@ -1900,6 +1914,7 @@ void World::impulse(orchard::Entity e, orchard::Vec3 v) {
 }
 
 void World::force(orchard::Entity e, orchard::Vec3 v) {
+    m->mark_pushed(e);
     if (auto it = m->bodies2.find(e.id()); it != m->bodies2.end()) it->second->apply_force(RVec2{v.x, v.y});
     if (auto it = m->bodies3.find(e.id()); it != m->bodies3.end()) it->second->apply_force(v3(v));
 }
@@ -2165,7 +2180,10 @@ CharacterState World::move_character(orchard::Entity e, const CharacterMove& mov
         }
     }
     const float min_up = std::cos(std::clamp(move.max_slope, 0.0f, 89.0f) * static_cast<float>(deg_to_rad));
-    const float reach = feet + std::max(0.01f, move.ground_probe);
+    const float wish_speed = orchard::length(flatten(move.wish, up));
+    const float max_tan = std::tan(std::clamp(move.max_slope, 0.0f, 80.0f) * static_cast<float>(deg_to_rad));
+    const float step_down = w.grounded && w.jump_lock <= 0.0_r && !move.jump ? std::min(1.0f, wish_speed * dt * max_tan) : 0.0f;
+    const float reach = feet + std::max(0.01f, move.ground_probe) + step_down;
     float best = 1e30f;
     float best_inner = 1e30f;
     orchard::Vec3 best_normal = up;
@@ -2201,9 +2219,12 @@ CharacterState World::move_character(orchard::Entity e, const CharacterMove& mov
     orchard::Vec3 v = velocity(e);
     float vu = orchard::dot(v, up);
     w.jump_lock = std::max(0.0_r, w.jump_lock - static_cast<Real>(dt));
+    const bool pushed = w.pushed > 0.0_r;
+    w.pushed = std::max(0.0_r, w.pushed - static_cast<Real>(dt));
     const float launch = std::max(8.0f, move.jump_speed * 1.6f);
-    bool grounded = touching_ground && w.jump_lock <= 0.0_r && vu <= launch;
-    if (!grounded && w.grounded && w.jump_lock <= 0.0_r && vu > 0.0f && vu <= launch) {
+    const float away = orchard::dot(v, touching_ground ? best_normal : w.normal);
+    bool grounded = touching_ground && w.jump_lock <= 0.0_r && (!pushed || away <= launch);
+    if (!grounded && w.grounded && w.jump_lock <= 0.0_r && vu > 0.0f && (!pushed || orchard::dot(v, w.normal) <= launch)) {
         v = v - up * vu;
         vu = 0.0f;
     }
@@ -2217,14 +2238,30 @@ CharacterState World::move_character(orchard::Entity e, const CharacterMove& mov
         grounded = false;
         st.jumped = true;
     } else if (grounded) {
-        const orchard::Vec3 n = best_normal;
+        orchard::Vec3 n = best_normal;
         const float speed = orchard::length(wish);
+        float ground = best;
+        if (speed * dt > 0.05f) {
+            const orchard::Vec3 dir = wish * (1.0f / speed);
+            const float front = 0.45f * (m->dimension == orchard::Dimension::two_d ? width_a : std::max(width_a, width_b));
+            for (int k = 1; k <= 2; ++k) {
+                orchard::Vec3 hn;
+                float hd = -1.0f;
+                raycast_ignoring(e, center + dir * (front + speed * dt * static_cast<float>(k)), up * -1.0f, reach + speed * dt, nullptr, &hn, &hd);
+                if (hd < 1e-3f) continue;
+                const orchard::Vec3 nn = orchard::normalize(hn);
+                if (orchard::dot(nn, up) < min_up) continue;
+                ground = std::min(ground, hd);
+                if (orchard::dot(nn, dir) < orchard::dot(n, dir)) n = nn;
+            }
+        }
         orchard::Vec3 along = flatten(wish, n);
         if (orchard::length(along) > 1e-5f) along = orchard::normalize(along) * speed;
         const orchard::Vec3 tangent = approach(flatten(v, n), along, move.ground_accel * dt);
-        const float hover = std::max(0.0f, move.ride_height);
-        const float gap = best - feet - hover;
-        const float snap = hover > 0.0f ? std::clamp(gap / std::max(dt, 1e-3f) * 0.5f, -3.0f, 4.0f) : std::clamp(gap / std::max(dt, 1e-3f), 0.0f, 4.0f) + 0.05f;
+        const float hover = move.ride_height > 0.0f ? move.ride_height + speed * dt * 0.3f : 0.0f;
+        const float gap = ground - feet - hover;
+        const float lift = std::max(3.0f, speed * 0.35f);
+        const float snap = hover > 0.0f ? std::clamp(gap / std::max(dt, 1e-3f) * 0.5f, -lift, 4.0f) : std::clamp(gap / std::max(dt, 1e-3f), 0.0f, 4.0f) + 0.05f;
         v = tangent - n * snap;
     } else {
         const orchard::Vec3 h = flatten(v, up);
@@ -2232,6 +2269,7 @@ CharacterState World::move_character(orchard::Entity e, const CharacterMove& mov
     }
     if (m->dimension == orchard::Dimension::two_d) v.z = 0.0f;
     w.grounded = grounded;
+    w.normal = grounded ? best_normal : up;
 
     const Real scale = grounded ? 0.0_r : w.gravity_scale;
     if (auto it = m->bodies3.find(e.id()); it != m->bodies3.end()) {

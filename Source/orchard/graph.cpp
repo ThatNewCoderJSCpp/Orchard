@@ -2,10 +2,12 @@
 
 #include <orchard/ai/behavior_tree.hpp>
 #include <orchard/ai/expression.hpp>
+#include <orchard/gameplay.hpp>
 
 #include <algorithm>
 #include <cstdlib>
 #include <functional>
+#include <map>
 #include <sstream>
 
 namespace orchard {
@@ -331,6 +333,70 @@ std::vector<NodeType> make_types() {
     t.push_back({"secure_text", "Secure Random Text", "Random", {in("length", N, "16"), out("text", T)}, false});
     t.push_back({"secure_token", "Secure Token", "Random", {in("bytes", N, "32"), out("text", T)}, false});
     t.push_back({"secure_uuid", "Secure UUID", "Random", {out("text", T)}, false});
+    const std::string H = "Health & Survival";
+    t.push_back({"apply_damage", "Apply Damage", H, {in("in", X), in("target", T, ""), in("amount", N, "10"), in("type", T, "physical"), in("passive", B, "false"), in("duration", N, "5"), in("forever", B, "false"), in("interval", N, "1"), in("push_x", N, "0"), in("push_y", N, "0"), in("push_z", N, "0"), in("push_repeat", T, "once"), in("stagger", N, "-1"), out("then", X)}, false});
+    t.push_back({"stop_damage", "Stop Passive Damage", H, {in("in", X), in("target", T, ""), in("type", T, ""), out("then", X)}, false});
+    t.push_back({"apply_effect", "Apply Effect", H, {in("in", X), in("target", T, ""), in("effect", T, "poison"), in("duration", N, "10"), in("forever", B, "false"), in("strength", N, "1"), out("then", X)}, false});
+    t.push_back({"remove_effect", "Remove Effect", H, {in("in", X), in("target", T, ""), in("effect", T, "poison"), out("then", X)}, false});
+    t.push_back({"define_effect", "Define Effect", H, {in("in", X), in("effect", T, "venom"), in("setting", T, "damage"), in("value", T, "3"), out("then", X)}, false});
+    t.push_back({"has_effect", "Has Effect", H, {in("target", T, ""), in("effect", T, "poison"), out("result", B)}, false});
+    t.push_back({"effect_time_left", "Effect Time Left", H, {in("target", T, ""), in("effect", T, "poison"), out("seconds", N)}, false});
+    t.push_back({"stagger", "Stagger", H, {in("in", X), in("target", T, ""), in("seconds", N, "0.5"), out("then", X)}, false});
+    t.push_back({"is_staggered", "Is Staggered", H, {in("target", T, ""), out("result", B)}, false});
+    t.push_back({"heal", "Heal", H, {in("in", X), in("target", T, ""), in("amount", N, "10"), out("then", X)}, false});
+    t.push_back({"health", "Health", H, {in("target", T, ""), out("value", N)}, false});
+    t.push_back({"damage_taken", "Damage Taken This Tick", H, {in("target", T, ""), out("value", N)}, false});
+    t.push_back({"last_damage_type", "Last Damage Type", H, {in("target", T, ""), out("type", T)}, false});
+    t.push_back({"get_stat", "Get Stat", H, {in("target", T, ""), in("stat", T, "stamina"), out("value", N)}, false});
+    t.push_back({"set_stat", "Set Stat", H, {in("in", X), in("target", T, ""), in("stat", T, "stamina"), in("value", N, "100"), out("then", X)}, false});
+    t.push_back({"add_stat", "Change Stat", H, {in("in", X), in("target", T, ""), in("stat", T, "hunger"), in("amount", N, "-1"), out("then", X)}, false});
+    t.push_back({"eat", "Eat", H, {in("in", X), in("target", T, ""), in("food", N, "4"), in("saturation", N, "2"), out("then", X)}, false});
+    t.push_back({"drink", "Drink", H, {in("in", X), in("target", T, ""), in("amount", N, "25"), out("then", X)}, false});
+    t.push_back({"set_health_setting", "Set Health Setting", H, {in("in", X), in("target", T, ""), in("setting", T, "armor_mode"), in("value", T, "flat"), out("then", X)}, false});
+    t.push_back({"health_setting", "Health Setting", H, {in("target", T, ""), in("setting", T, "armor_formula"), out("value", T)}, false});
+    t.push_back({"convert_units", "Convert Units", "Math", {in("value", N, "1"), in("from", T, "kg"), in("to", T, "lb"), out("result", N)}, false});
+    t.push_back({"give_item", "Give Item", "Items", {in("in", X), in("target", T, ""), in("item", T, "bandage"), in("amount", N, "1"), out("then", X)}, false});
+    t.push_back({"take_item", "Take Item", "Items", {in("in", X), in("target", T, ""), in("item", T, "bandage"), in("amount", N, "1"), out("then", X)}, false});
+    t.push_back({"item_count", "Item Count", "Items", {in("target", T, ""), in("item", T, "bandage"), out("count", N)}, false});
+    t.push_back({"has_item", "Has Item", "Items", {in("target", T, ""), in("item", T, "bandage"), out("result", B)}, false});
+    t.push_back({"spawn_item", "Spawn Item Pickup", "Items", {in("in", X), in("item", T, "apple"), in("amount", N, "1"), in("x", N, "0"), in("y", N, "1"), in("z", N, "0"), in("look", T, "detailed"), out("then", X)}, false});
+    t.push_back({"drop_item", "Drop Item", "Items", {in("in", X), in("target", T, ""), in("list", T, "items"), in("index", N, "0"), in("amount", N, "-1"), out("then", X)}, false});
+    t.push_back({"pick_up_nearest", "Pick Up Nearest", "Items", {in("in", X), in("target", T, ""), in("radius", N, "2.5"), out("then", X)}, false});
+    t.push_back({"define_item", "Define Item", "Items", {in("in", X), in("item", T, "my_sword"), in("setting", T, "damage"), in("value", T, "30"), out("then", X)}, false});
+    t.push_back({"item_setting", "Item Setting", "Items", {in("item", T, "pistol_9mm"), in("setting", T, "damage"), out("value", T)}, false});
+    t.push_back({"equip_item", "Equip (Wear) Item", "Items", {in("in", X), in("target", T, ""), in("list", T, "items"), in("index", N, "0"), out("then", X)}, false});
+    t.push_back({"unequip_item", "Unequip Item", "Items", {in("in", X), in("target", T, ""), in("slot", T, "head"), out("then", X)}, false});
+    t.push_back({"hold_item", "Hold Item", "Items", {in("in", X), in("target", T, ""), in("hand", T, "mainhand"), in("list", T, "hotbar"), in("index", N, "0"), out("then", X)}, false});
+    t.push_back({"held_item", "Held Item", "Items", {in("target", T, ""), in("hand", T, "mainhand"), out("item", T)}, false});
+    t.push_back({"holster_item", "Holster Held Item", "Items", {in("in", X), in("target", T, ""), in("hand", T, "mainhand"), out("then", X)}, false});
+    t.push_back({"draw_item", "Draw From Holster", "Items", {in("in", X), in("target", T, ""), in("slot", T, "holster:0"), in("hand", T, "mainhand"), out("then", X)}, false});
+    t.push_back({"select_slot", "Select Hotbar Slot", "Items", {in("in", X), in("target", T, ""), in("index", N, "0"), out("then", X)}, false});
+    t.push_back({"use_item", "Use Item", "Items", {in("in", X), in("target", T, ""), in("list", T, "items"), in("index", N, "0"), out("then", X)}, false});
+    t.push_back({"move_item", "Move Item", "Items", {in("in", X), in("target", T, ""), in("list", T, "items"), in("index", N, "0"), in("to_list", T, "hotbar"), in("to_index", N, "0"), in("amount", N, "-1"), out("then", X)}, false});
+    t.push_back({"slot_item", "Item In Slot", "Items", {in("target", T, ""), in("list", T, "hotbar"), in("index", N, "0"), out("item", T)}, false});
+    t.push_back({"slot_amount", "Amount In Slot", "Items", {in("target", T, ""), in("list", T, "hotbar"), in("index", N, "0"), out("amount", N)}, false});
+    t.push_back({"set_inventory_setting", "Set Inventory Setting", "Items", {in("in", X), in("target", T, ""), in("setting", T, "preset"), in("value", T, "tarkov"), out("then", X)}, false});
+    t.push_back({"inventory_setting", "Inventory Setting", "Items", {in("target", T, ""), in("setting", T, "style"), out("value", T)}, false});
+    t.push_back({"use_held", "Use Held Item", "Weapons", {in("in", X), in("target", T, ""), in("pressed", B, "true"), in("held", B, "false"), out("then", X)}, false});
+    t.push_back({"release_held", "Release Held (bow/throw)", "Weapons", {in("in", X), in("target", T, ""), out("then", X)}, false});
+    t.push_back({"reload_weapon", "Reload", "Weapons", {in("in", X), in("target", T, ""), out("then", X)}, false});
+    t.push_back({"fire_weapon", "Fire Weapon", "Weapons", {in("in", X), in("target", T, ""), in("item", T, ""), in("ox", N, "0"), in("oy", N, "1.5"), in("oz", N, "0"), in("dx", N, "0"), in("dy", N, "0"), in("dz", N, "-1"), in("power", N, "1"), out("then", X)}, false});
+    t.push_back({"set_aim", "Set Aim", "Weapons", {in("in", X), in("target", T, ""), in("ox", N, "0"), in("oy", N, "1.5"), in("oz", N, "0"), in("dx", N, "0"), in("dy", N, "0"), in("dz", N, "-1"), out("then", X)}, false});
+    t.push_back({"set_stance", "Set Stance", "Weapons", {in("in", X), in("target", T, ""), in("stance", T, "crouch"), out("then", X)}, false});
+    t.push_back({"set_aiming", "Set Aiming (ADS)", "Weapons", {in("in", X), in("target", T, ""), in("on", B, "true"), out("then", X)}, false});
+    t.push_back({"set_blocking", "Set Blocking", "Weapons", {in("in", X), in("target", T, ""), in("on", B, "true"), out("then", X)}, false});
+    t.push_back({"set_ballistics", "Set Ballistics Mode", "Weapons", {in("in", X), in("mode", T, "travel"), out("then", X)}, false});
+    t.push_back({"worn_armor", "Worn Armor", "Weapons", {in("target", T, ""), in("damage_type", T, "physical"), out("value", N)}, false});
+    t.push_back({"start_weather", "Start Weather", "Weather", {in("in", X), in("preset", T, "rain"), in("duration", N, "60"), in("fade_in", N, "5"), in("fade_out", N, "5"), out("then", X)}, false});
+    t.push_back({"start_weather_at", "Start Local Weather", "Weather", {in("in", X), in("preset", T, "blizzard"), in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), in("radius", N, "30"), in("duration", N, "60"), in("fade_in", N, "5"), in("fade_out", N, "5"), out("then", X)}, false});
+    t.push_back({"stop_all_weather", "Stop All Weather", "Weather", {in("in", X), in("fade_out", N, "5"), out("then", X)}, false});
+    t.push_back({"set_climate", "Set Climate Setting", "Weather", {in("in", X), in("target", T, ""), in("setting", T, "temperature"), in("value", T, "-10"), out("then", X)}, false});
+    t.push_back({"temperature_at", "Temperature At", "Weather", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("celsius", N)}, false});
+    t.push_back({"wind_x_at", "Wind X At", "Weather", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("value", N)}, false});
+    t.push_back({"wind_z_at", "Wind Z At", "Weather", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("value", N)}, false});
+    t.push_back({"rain_at", "Rain At", "Weather", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("amount", N)}, false});
+    t.push_back({"snow_at", "Snow At", "Weather", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("amount", N)}, false});
+    t.push_back({"is_sheltered", "Is Sheltered", "Weather", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("result", B)}, false});
     add_brain_types(t);
     return t;
 }
@@ -366,6 +432,61 @@ std::string pad(int indent) {
 std::string where(const Node& n) {
     const NodeType* t = find_type(n.type);
     return (t ? t->title : n.type) + " (node " + std::to_string(n.id) + ")";
+}
+
+
+struct SimpleCall {
+    const char* fn;
+    bool target;
+    std::vector<const char*> args;
+};
+
+const std::map<std::string, SimpleCall>& simple_calls() {
+    static const std::map<std::string, SimpleCall> calls = {
+        {"give_item", {"give_item", true, {"item", "amount"}}},
+        {"take_item", {"take_item", true, {"item", "amount"}}},
+        {"item_count", {"item_count", true, {"item"}}},
+        {"has_item", {"item_count", true, {"item"}}},
+        {"spawn_item", {"spawn_item", false, {"item", "amount", "x", "y", "z", "look"}}},
+        {"drop_item", {"drop_item", true, {"list", "index", "amount"}}},
+        {"pick_up_nearest", {"@pickup", true, {"radius"}}},
+        {"define_item", {"define_item", false, {"item", "setting", "value"}}},
+        {"item_setting", {"item_setting", false, {"item", "setting"}}},
+        {"equip_item", {"equip_item", true, {"list", "index"}}},
+        {"unequip_item", {"unequip_item", true, {"slot"}}},
+        {"hold_item", {"hold_item", true, {"hand", "list", "index"}}},
+        {"held_item", {"held_item", true, {"hand"}}},
+        {"holster_item", {"holster_item", true, {"hand"}}},
+        {"draw_item", {"draw_item", true, {"slot", "hand"}}},
+        {"select_slot", {"select_slot", true, {"index"}}},
+        {"use_item", {"use_item", true, {"list", "index"}}},
+        {"move_item", {"@move", true, {"list", "index", "to_list", "to_index", "amount"}}},
+        {"slot_item", {"slot_item", true, {"list", "index"}}},
+        {"slot_amount", {"slot_amount", true, {"list", "index"}}},
+        {"set_inventory_setting", {"set_inventory_setting", true, {"setting", "value"}}},
+        {"inventory_setting", {"inventory_setting", true, {"setting"}}},
+        {"use_held", {"use_held", true, {"pressed", "held"}}},
+        {"release_held", {"release_held", true, {}}},
+        {"reload_weapon", {"reload_weapon", true, {}}},
+        {"fire_weapon", {"fire_weapon", true, {"item", "ox", "oy", "oz", "dx", "dy", "dz", "power"}}},
+        {"set_aim", {"set_aim", true, {"ox", "oy", "oz", "dx", "dy", "dz"}}},
+        {"set_stance", {"set_stance", true, {"stance"}}},
+        {"set_aiming", {"set_aiming", true, {"on"}}},
+        {"set_blocking", {"set_blocking", true, {"on"}}},
+        {"set_ballistics", {"set_ballistics", false, {"mode"}}},
+        {"worn_armor", {"worn_armor", true, {"damage_type"}}},
+        {"start_weather", {"start_weather", false, {"preset", "duration", "fade_in", "fade_out"}}},
+        {"start_weather_at", {"start_weather_at", false, {"preset", "x", "y", "z", "radius", "duration", "fade_in", "fade_out"}}},
+        {"stop_all_weather", {"stop_all_weather", false, {"fade_out"}}},
+        {"set_climate", {"set_climate", true, {"setting", "value"}}},
+        {"temperature_at", {"temperature_at", false, {"x", "y", "z"}}},
+        {"wind_x_at", {"wind_x_at", false, {"x", "y", "z"}}},
+        {"wind_z_at", {"wind_z_at", false, {"x", "y", "z"}}},
+        {"rain_at", {"rain_at", false, {"x", "y", "z"}}},
+        {"snow_at", {"snow_at", false, {"x", "y", "z"}}},
+        {"is_sheltered", {"is_sheltered", false, {"x", "y", "z"}}},
+    };
+    return calls;
 }
 
 } // namespace
@@ -528,6 +649,15 @@ std::string Graph::input(const Node& n, const PinDef& pin, int depth, std::vecto
     return std::string();
 }
 
+std::string Graph::who(const Node& n, int depth, std::vector<std::string>& errors) const {
+    if (!link_into(n.id, "target")) {
+        const auto v = n.values.find("target");
+        if (v == n.values.end() || v->second.empty()) return "entity";
+    }
+    const NodeType* t = find_type(n.type);
+    return "orchard::find(" + input(n, *t->pin("target", false), depth, errors) + ")";
+}
+
 std::string Graph::expression(int id, const std::string& pin, int depth, std::vector<std::string>& errors) const {
     const Node* n = node(id);
     if (!n) return "0.0";
@@ -540,6 +670,14 @@ std::string Graph::expression(int id, const std::string& pin, int depth, std::ve
     if (n->type == "on_tick" && pin == "dt") return "dt";
     if (n->type == "number" || n->type == "text" || n->type == "boolean") return arg("value");
     if (n->type == "self_name") return "entity.name()";
+    if (n->type == "has_item") return "(orchard::item_count(" + who(*n, depth, errors) + ", " + arg("item") + ") > 0.0)";
+    if (const auto sc = simple_calls().find(n->type); sc != simple_calls().end() && !t.pins.empty() && t.pins.front().name != "in") {
+        std::string call = std::string("orchard::") + sc->second.fn + "(";
+        bool first = true;
+        if (sc->second.target) { call += who(*n, depth, errors); first = false; }
+        for (const char* a : sc->second.args) { call += (first ? "" : ", ") + arg(a); first = false; }
+        return call + ")";
+    }
     if (n->type == "add") return "(" + arg("a") + " + " + arg("b") + ")";
     if (n->type == "subtract") return "(" + arg("a") + " - " + arg("b") + ")";
     if (n->type == "multiply") return "(" + arg("a") + " * " + arg("b") + ")";
@@ -573,6 +711,15 @@ std::string Graph::expression(int id, const std::string& pin, int depth, std::ve
     if (n->type == "secure_text") return "orchard::secure_random_text(" + arg("length") + ", \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789\")";
     if (n->type == "secure_token") return "orchard::secure_token(" + arg("bytes") + ")";
     if (n->type == "secure_uuid") return "orchard::secure_uuid()";
+    if (n->type == "has_effect") return "orchard::has_effect(" + who(*n, depth, errors) + ", " + arg("effect") + ")";
+    if (n->type == "effect_time_left") return "orchard::effect_time_left(" + who(*n, depth, errors) + ", " + arg("effect") + ")";
+    if (n->type == "is_staggered") return "(orchard::stagger_time_left(" + who(*n, depth, errors) + ") > 0.0)";
+    if (n->type == "health") return "orchard::health(" + who(*n, depth, errors) + ")";
+    if (n->type == "damage_taken") return "orchard::damage_taken(" + who(*n, depth, errors) + ")";
+    if (n->type == "last_damage_type") return "orchard::last_damage_type(" + who(*n, depth, errors) + ")";
+    if (n->type == "health_setting") return "orchard::health_setting(" + who(*n, depth, errors) + ", " + arg("setting") + ")";
+    if (n->type == "convert_units") return "orchard::convert_units(" + arg("value") + ", " + arg("from") + ", " + arg("to") + ")";
+    if (n->type == "get_stat") return "orchard::stat(" + who(*n, depth, errors) + ", " + arg("stat") + ")";
     errors.push_back(where(*n) + " has no value output '" + pin + "'");
     return "0.0";
 }
@@ -630,6 +777,62 @@ void Graph::statements(int id, const std::string& out_pin, int indent, int depth
             code += pad(indent) + "orchard::ai_finish_action(entity, " + arg("success") + ");\n";
         } else if (n->type == "ai_enable") {
             code += pad(indent) + "orchard::ai_enable(entity, " + arg("on") + ");\n";
+        } else if (n->type == "apply_damage") {
+            const std::string target = who(*n, depth, errors);
+            const std::string push = arg("push_x") + ", " + arg("push_y") + ", " + arg("push_z");
+            std::string repeat = "0.0";
+            if (link_into(n->id, "push_repeat")) {
+                errors.push_back(where(*n) + ": type the push repeat in (once, every pulse or continuous)");
+            } else {
+                const auto v = n->values.find("push_repeat");
+                const std::string text = v != n->values.end() ? v->second : "once";
+                if (const auto r = parse_push_repeat(text)) repeat = std::to_string(static_cast<int>(*r)) + ".0";
+                else errors.push_back(where(*n) + ": push repeat must be once, every pulse or continuous");
+            }
+            code += pad(indent) + "if (" + arg("passive") + ") then {\n";
+            code += pad(indent + 1) + "orchard::damage_over_time_from(" + target + ", entity, " + arg("amount") + ", " + arg("type") + ", " + arg("duration") + ", " + arg("interval") + ", " + arg("forever") + ", " + push + ", " + repeat + ", " + arg("stagger") + ", false, \"\");\n";
+            code += pad(indent) + "} else then {\n";
+            code += pad(indent + 1) + "orchard::apply_damage_from(" + target + ", entity, " + arg("amount") + ", " + arg("type") + ", " + push + ", " + arg("stagger") + ");\n";
+            code += pad(indent) + "}\n";
+        } else if (n->type == "stop_damage") {
+            code += pad(indent) + "orchard::stop_damage_over_time(" + who(*n, depth, errors) + ", " + arg("type") + ");\n";
+        } else if (n->type == "apply_effect") {
+            const std::string target = who(*n, depth, errors);
+            code += pad(indent) + "if (" + arg("forever") + ") then {\n";
+            code += pad(indent + 1) + "orchard::apply_effect_forever(" + target + ", " + arg("effect") + ", " + arg("strength") + ");\n";
+            code += pad(indent) + "} else then {\n";
+            code += pad(indent + 1) + "orchard::apply_effect_from(" + target + ", entity, " + arg("effect") + ", " + arg("duration") + ", " + arg("strength") + ");\n";
+            code += pad(indent) + "}\n";
+        } else if (n->type == "remove_effect") {
+            code += pad(indent) + "orchard::remove_effect(" + who(*n, depth, errors) + ", " + arg("effect") + ");\n";
+        } else if (n->type == "define_effect") {
+            code += pad(indent) + "orchard::define_effect(" + arg("effect") + ", " + arg("setting") + ", " + arg("value") + ");\n";
+        } else if (n->type == "stagger") {
+            code += pad(indent) + "orchard::stagger(" + who(*n, depth, errors) + ", " + arg("seconds") + ");\n";
+        } else if (n->type == "heal") {
+            code += pad(indent) + "orchard::heal(" + who(*n, depth, errors) + ", " + arg("amount") + ");\n";
+        } else if (n->type == "set_stat") {
+            code += pad(indent) + "orchard::set_stat(" + who(*n, depth, errors) + ", " + arg("stat") + ", " + arg("value") + ");\n";
+        } else if (n->type == "add_stat") {
+            code += pad(indent) + "orchard::add_stat(" + who(*n, depth, errors) + ", " + arg("stat") + ", " + arg("amount") + ");\n";
+        } else if (n->type == "eat") {
+            code += pad(indent) + "orchard::eat(" + who(*n, depth, errors) + ", " + arg("food") + ", " + arg("saturation") + ");\n";
+        } else if (n->type == "set_health_setting") {
+            code += pad(indent) + "orchard::set_health_setting(" + who(*n, depth, errors) + ", " + arg("setting") + ", " + arg("value") + ");\n";
+        } else if (n->type == "pick_up_nearest") {
+            const std::string target = who(*n, depth, errors);
+            code += pad(indent) + "orchard::pick_up(" + target + ", orchard::nearest_pickup(" + target + ", " + arg("radius") + "));\n";
+        } else if (n->type == "move_item") {
+            const std::string target = who(*n, depth, errors);
+            code += pad(indent) + "orchard::move_item(" + target + ", " + arg("list") + ", " + arg("index") + ", " + target + ", " + arg("to_list") + ", " + arg("to_index") + ", " + arg("amount") + ");\n";
+        } else if (const auto sc = simple_calls().find(n->type); sc != simple_calls().end()) {
+            std::string call = std::string("orchard::") + sc->second.fn + "(";
+            bool first = true;
+            if (sc->second.target) { call += who(*n, depth, errors); first = false; }
+            for (const char* a : sc->second.args) { call += (first ? "" : ", ") + arg(a); first = false; }
+            code += pad(indent) + call + ");\n";
+        } else if (n->type == "drink") {
+            code += pad(indent) + "orchard::drink(" + who(*n, depth, errors) + ", " + arg("amount") + ");\n";
         } else if (n->type == "branch") {
             code += pad(indent) + "if (" + arg("condition") + ") then {\n";
             statements(n->id, "true", indent + 1, depth + 1, code, errors);

@@ -1,10 +1,12 @@
 #ifndef ORCHARD_SCENE_HPP
 #define ORCHARD_SCENE_HPP
 
+#include "items.hpp"
 #include "math.hpp"
 #include "terrain.hpp"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -603,7 +605,132 @@ struct Health {
     float explode_force = 20000.0f;
     float explode_damage = 120.0f;
     float respawn_delay = 2.0f;
+    float armor = 0.0f;
+    std::string armor_mode = "diminishing";
+    float armor_constant = 100.0f;
+    float armor_cap = 0.9f;
+    float armor_min = 0.1f;
+    float armor_wear = 0.0f;
+    std::string armor_types = "physical,melee,blunt,slash,pierce,projectile,explosion";
+    std::string armor_formula;
+    float shield = 0.0f;
+    float max_shield = 0.0f;
+    float shield_regen = 0.0f;
+    float shield_delay = 3.0f;
+    float shield_absorb = 1.0f;
+    std::string shield_types;
+    std::string shield_formula;
+    std::map<std::string, float> resist;
+    float poise = 1.0f;
+    float stagger_scale = 1.0f;
+    std::string damage_formula;
+    std::string effect_formula;
 };
+
+const std::vector<std::string>& damage_types();
+const char* damage_type_label(const std::string& type);
+bool armor_blocks(const std::string& type);
+const std::vector<std::string>& armor_modes();
+const char* armor_mode_label(const std::string& mode);
+bool type_listed(const std::string& list, const std::string& type, bool empty_means_all);
+const std::vector<std::string>& health_settings();
+float* health_value(Health& h, const std::string& key);
+std::string* health_text(Health& h, const std::string& key);
+std::string resist_text(const std::map<std::string, float>& resist);
+std::map<std::string, float> parse_resist(const std::string& text);
+
+struct Survival {
+    bool stamina_on = true;
+    float stamina = 100.0f;
+    float max_stamina = 100.0f;
+    float stamina_regen = 20.0f;
+    float stamina_delay = 1.0f;
+    float sprint_cost = 15.0f;
+    float jump_cost = 10.0f;
+    float sprint_min = 15.0f;
+    bool hunger_on = false;
+    float hunger = 20.0f;
+    float max_hunger = 20.0f;
+    float saturation = 5.0f;
+    float exhaustion = 0.0f;
+    float idle_exhaustion = 0.005f;
+    float sprint_exhaustion = 0.1f;
+    float jump_exhaustion = 0.05f;
+    float heal_exhaustion = 6.0f;
+    float fed_level = 18.0f;
+    float fed_heal = 1.0f;
+    float starve_damage = 1.0f;
+    bool thirst_on = false;
+    float thirst = 100.0f;
+    float max_thirst = 100.0f;
+    float thirst_rate = 0.1f;
+    float sprint_thirst = 3.0f;
+    float dehydrate_damage = 1.0f;
+    bool breath_on = true;
+    float breath = 15.0f;
+    float max_breath = 15.0f;
+    float breath_recover = 5.0f;
+    float drown_damage = 10.0f;
+    float head_height = 1.6f;
+    bool temperature_on = false;
+    float temperature = 37.0f;
+    float insulation = 0.0f;
+    float ambient = 20.0f;
+    float comfort_low = 10.0f;
+    float comfort_high = 30.0f;
+    float exposure = 0.02f;
+    float cold_damage = 2.0f;
+    float heat_damage = 2.0f;
+    bool weight_on = false;
+    float carried = 0.0f;
+    float carry_limit = 40.0f;
+    bool count_items = true;
+    float light_load = 0.5f;
+    float heavy_speed = 0.5f;
+    float overload = 1.5f;
+    float sprint_load = 1.0f;
+    float load_stamina = 1.0f;
+    bool mana_on = false;
+    float mana = 100.0f;
+    float max_mana = 100.0f;
+    float mana_regen = 5.0f;
+};
+
+struct Climate {
+    bool global = false;
+    std::string shape = "box";
+    Vec3 size{30.0f, 20.0f, 30.0f};
+    float blend = 3.0f;
+    std::string preset = "custom";
+    float temperature = 20.0f;
+    bool relative = false;
+    float wind_speed = 0.0f;
+    Vec3 wind_dir{1.0f, 0.0f, 0.0f};
+    float gust = 0.0f;
+    float gust_rate = 0.3f;
+    float rain = 0.0f;
+    float snow = 0.0f;
+    float fog = 0.0f;
+    float humidity = 0.5f;
+    float lightning = 0.0f;
+    float delay = 0.0f;
+    float fade_in = 0.0f;
+    float duration = -1.0f;
+    float fade_out = 0.0f;
+    bool loop = false;
+    std::string after;
+    bool active = true;
+    int priority = 0;
+    bool visuals = true;
+};
+
+const std::vector<std::string>& climate_presets();
+bool apply_climate_preset(Climate& c, const std::string& preset);
+float* climate_value(Climate& c, const std::string& key);
+
+const std::vector<std::string>& survival_stats();
+float* survival_value(Survival& s, const std::string& key);
+bool* survival_switch(Survival& s, const std::string& key);
 
 struct Agent {
     std::string brain = "guard";
@@ -621,6 +748,13 @@ struct Agent {
     float reaction = 0.35f;
     float attack_range = 1.6f;
     float attack_damage = 10.0f;
+    float attack_knockback = 30.0f;
+    std::string damage_type = "melee";
+    std::string hit_effect;
+    float hit_effect_time = 5.0f;
+    float hit_effect_chance = 1.0f;
+    std::string damage_formula;
+    std::string knockback_formula;
     float attack_rate = 1.0f;
     bool ranged = false;
     float accuracy = 0.6f;
@@ -761,6 +895,24 @@ public:
     const Health* health(Entity e) const;
     Health& add_health(Entity e);
     bool remove_health(Entity e);
+    Inventory* inventory(Entity e);
+    const Inventory* inventory(Entity e) const;
+    Inventory& add_inventory(Entity e);
+    bool remove_inventory(Entity e);
+    Pickup* pickup(Entity e);
+    const Pickup* pickup(Entity e) const;
+    Pickup& add_pickup(Entity e);
+    bool remove_pickup(Entity e);
+    Climate* climate(Entity e);
+    const Climate* climate(Entity e) const;
+    Climate& add_climate(Entity e);
+    bool remove_climate(Entity e);
+    ItemCatalog& items() { return m_items; }
+    const ItemCatalog& items() const { return m_items; }
+    Survival* survival(Entity e);
+    const Survival* survival(Entity e) const;
+    Survival& add_survival(Entity e);
+    bool remove_survival(Entity e);
     Agent* agent(Entity e);
     const Agent* agent(Entity e) const;
     Agent& add_agent(Entity e);
@@ -825,6 +977,10 @@ private:
         std::optional<Animator> animator;
         std::optional<Terrain> terrain;
         std::optional<Health> health;
+        std::optional<Survival> survival;
+        std::optional<Inventory> inventory;
+        std::optional<Pickup> pickup;
+        std::optional<Climate> climate;
         std::optional<Agent> agent;
         std::optional<SoundSource> sound;
         std::optional<Solid> solid;
@@ -841,6 +997,7 @@ private:
     std::vector<Slot> m_slots;
     std::vector<std::uint32_t> m_free;
     std::size_t m_alive = 0;
+    ItemCatalog m_items;
 };
 
 } // namespace orchard

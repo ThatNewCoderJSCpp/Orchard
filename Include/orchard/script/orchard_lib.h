@@ -932,4 +932,509 @@ static inline const char* orchard_secure_uuid(void) {
     return orchard_lib_text(ORCHARD_GAME_SECURE_UUID, 0, 0, lib_a, 0, "");
 }
 
+static inline double orchard_apply_damage(orchard_entity target, double amount, const char* damage_type) {
+    double lib_a[1];
+    lib_a[0] = (double)(amount);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = damage_type; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_APPLY_DAMAGE, target, 0, lib_a, 1, lib_t);
+}
+static inline double orchard_apply_damage_from(orchard_entity target, orchard_entity attacker, double amount, const char* damage_type, double knock_x, double knock_y, double knock_z, double stagger_time) {
+    double lib_a[5];
+    lib_a[0] = (double)(amount);
+    lib_a[1] = (double)(knock_x);
+    lib_a[2] = (double)(knock_y);
+    lib_a[3] = (double)(knock_z);
+    lib_a[4] = (double)(stagger_time);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = damage_type; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_APPLY_DAMAGE_FROM, target, attacker, lib_a, 5, lib_t);
+}
+static inline void orchard_damage_over_time(orchard_entity target, double amount, const char* damage_type, double duration, double interval, int forever) {
+    double lib_a[4];
+    lib_a[0] = (double)(amount);
+    lib_a[1] = (double)(duration);
+    lib_a[2] = (double)(interval);
+    lib_a[3] = (double)(forever);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = damage_type; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    orchard_game(ORCHARD_GAME_DAMAGE_OVER_TIME, target, 0, lib_a, 4, lib_t);
+}
+static inline void orchard_damage_over_time_from(orchard_entity target, orchard_entity attacker, double amount, const char* damage_type, double duration, double interval, int forever, double knock_x, double knock_y, double knock_z, double push_repeat, double stagger_time, int stack, const char* damage_key) {
+    double lib_a[10];
+    lib_a[0] = (double)(amount);
+    lib_a[1] = (double)(duration);
+    lib_a[2] = (double)(interval);
+    lib_a[3] = (double)(forever);
+    lib_a[4] = (double)(knock_x);
+    lib_a[5] = (double)(knock_y);
+    lib_a[6] = (double)(knock_z);
+    lib_a[7] = (double)(push_repeat);
+    lib_a[8] = (double)(stagger_time);
+    lib_a[9] = (double)(stack);
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = damage_type; lib_p[1] = damage_key; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    orchard_game(ORCHARD_GAME_DAMAGE_OVER_TIME_FROM, target, attacker, lib_a, 10, lib_t);
+}
+static inline int orchard_stop_damage_over_time(orchard_entity target, const char* damage_key) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = damage_key; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_STOP_DAMAGE, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline long long orchard_damage_over_time_count(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return (long long)orchard_game(ORCHARD_GAME_DAMAGE_OVER_TIME_COUNT, target, 0, lib_a, 0, "");
+}
+static inline const char* orchard_last_damage_type(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return orchard_lib_text(ORCHARD_GAME_LAST_DAMAGE_TYPE, target, 0, lib_a, 0, "");
+}
+static inline int orchard_apply_effect(orchard_entity target, const char* effect_name, double duration, double strength) {
+    double lib_a[2];
+    lib_a[0] = (double)(duration);
+    lib_a[1] = (double)(strength);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = effect_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_APPLY_EFFECT, target, 0, lib_a, 2, lib_t) != 0.0;
+}
+static inline int orchard_apply_effect_forever(orchard_entity target, const char* effect_name, double strength) {
+    double lib_a[1];
+    lib_a[0] = (double)(strength);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = effect_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_APPLY_EFFECT_FOREVER, target, 0, lib_a, 1, lib_t) != 0.0;
+}
+static inline int orchard_apply_effect_from(orchard_entity target, orchard_entity source, const char* effect_name, double duration, double strength) {
+    double lib_a[2];
+    lib_a[0] = (double)(duration);
+    lib_a[1] = (double)(strength);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = effect_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_APPLY_EFFECT_FROM, target, source, lib_a, 2, lib_t) != 0.0;
+}
+static inline int orchard_remove_effect(orchard_entity target, const char* effect_name) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = effect_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_REMOVE_EFFECT, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline long long orchard_clear_effects(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return (long long)orchard_game(ORCHARD_GAME_CLEAR_EFFECTS, target, 0, lib_a, 0, "");
+}
+static inline int orchard_has_effect(orchard_entity target, const char* effect_name) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = effect_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_HAS_EFFECT, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline long long orchard_effect_stacks(orchard_entity target, const char* effect_name) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = effect_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return (long long)orchard_game(ORCHARD_GAME_EFFECT_STACKS, target, 0, lib_a, 0, lib_t);
+}
+static inline double orchard_effect_time_left(orchard_entity target, const char* effect_name) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = effect_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_EFFECT_TIME_LEFT, target, 0, lib_a, 0, lib_t);
+}
+static inline const char* orchard_effect_list(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return orchard_lib_text(ORCHARD_GAME_EFFECT_LIST, target, 0, lib_a, 0, "");
+}
+static inline int orchard_define_effect(const char* effect_name, const char* setting, const char* value) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[3]; lib_p[0] = effect_name; lib_p[1] = setting; lib_p[2] = value; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 3);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_DEFINE_EFFECT, 0, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline int orchard_stagger(orchard_entity target, double seconds) {
+    double lib_a[1];
+    lib_a[0] = (double)(seconds);
+    return orchard_game(ORCHARD_GAME_STAGGER, target, 0, lib_a, 1, "") != 0.0;
+}
+static inline double orchard_stagger_time_left(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_STAGGER_TIME_LEFT, target, 0, lib_a, 0, "");
+}
+static inline int orchard_is_stunned(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_IS_STUNNED, target, 0, lib_a, 0, "") != 0.0;
+}
+static inline double orchard_move_scale(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_MOVE_SCALE, target, 0, lib_a, 0, "");
+}
+static inline double orchard_stat(orchard_entity target, const char* stat_name) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = stat_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_STAT, target, 0, lib_a, 0, lib_t);
+}
+static inline int orchard_set_stat(orchard_entity target, const char* stat_name, double value) {
+    double lib_a[1];
+    lib_a[0] = (double)(value);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = stat_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_SET_STAT, target, 0, lib_a, 1, lib_t) != 0.0;
+}
+static inline double orchard_add_stat(orchard_entity target, const char* stat_name, double amount) {
+    double lib_a[1];
+    lib_a[0] = (double)(amount);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = stat_name; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_ADD_STAT, target, 0, lib_a, 1, lib_t);
+}
+static inline double orchard_eat(orchard_entity target, double food, double saturation) {
+    double lib_a[2];
+    lib_a[0] = (double)(food);
+    lib_a[1] = (double)(saturation);
+    return orchard_game(ORCHARD_GAME_EAT, target, 0, lib_a, 2, "");
+}
+static inline double orchard_drink(orchard_entity target, double amount) {
+    double lib_a[1];
+    lib_a[0] = (double)(amount);
+    return orchard_game(ORCHARD_GAME_DRINK, target, 0, lib_a, 1, "");
+}
+static inline int orchard_use_stamina(orchard_entity target, double amount) {
+    double lib_a[1];
+    lib_a[0] = (double)(amount);
+    return orchard_game(ORCHARD_GAME_USE_STAMINA, target, 0, lib_a, 1, "") != 0.0;
+}
+static inline double orchard_resistance(orchard_entity target, const char* damage_type) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = damage_type; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_RESISTANCE, target, 0, lib_a, 0, lib_t);
+}
+static inline int orchard_set_resistance(orchard_entity target, const char* damage_type, double value) {
+    double lib_a[1];
+    lib_a[0] = (double)(value);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = damage_type; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_SET_RESISTANCE, target, 0, lib_a, 1, lib_t) != 0.0;
+}
+static inline int orchard_set_damage_formula(orchard_entity target, const char* formula) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = formula; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_SET_DAMAGE_FORMULA, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline int orchard_set_effect_formula(orchard_entity target, const char* formula) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = formula; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_SET_EFFECT_FORMULA, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline int orchard_is_underwater(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_IS_UNDERWATER, target, 0, lib_a, 0, "") != 0.0;
+}
+
+static inline int orchard_set_health_setting(orchard_entity target, const char* setting, const char* value) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = setting; lib_p[1] = value; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_SET_HEALTH_SETTING, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline const char* orchard_health_setting(orchard_entity target, const char* setting) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = setting; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_lib_text(ORCHARD_GAME_HEALTH_SETTING, target, 0, lib_a, 0, lib_t);
+}
+static inline double orchard_convert_units(double value, const char* from_unit, const char* to_unit) {
+    double lib_a[1];
+    lib_a[0] = (double)(value);
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = from_unit; lib_p[1] = to_unit; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    return orchard_game(ORCHARD_GAME_CONVERT_UNITS, 0, 0, lib_a, 1, lib_t);
+}
+static inline double orchard_give_item(orchard_entity target, const char* item, double amount) {
+    double lib_a[1];
+    lib_a[0] = (double)(amount);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = item; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_GIVE_ITEM, target, 0, lib_a, 1, lib_t);
+}
+static inline double orchard_take_item(orchard_entity target, const char* item, double amount) {
+    double lib_a[1];
+    lib_a[0] = (double)(amount);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = item; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_TAKE_ITEM, target, 0, lib_a, 1, lib_t);
+}
+static inline double orchard_item_count(orchard_entity target, const char* item) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = item; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_ITEM_COUNT, target, 0, lib_a, 0, lib_t);
+}
+static inline orchard_entity orchard_spawn_item(const char* item, double amount, double x, double y, double z, const char* look) {
+    double lib_a[4];
+    lib_a[0] = (double)(amount);
+    lib_a[1] = (double)(x);
+    lib_a[2] = (double)(y);
+    lib_a[3] = (double)(z);
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = item; lib_p[1] = look; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    return orchard_lib_entity(ORCHARD_GAME_SPAWN_ITEM, 0, 0, lib_a, 4, lib_t);
+}
+static inline orchard_entity orchard_drop_item(orchard_entity target, const char* list, double index, double amount) {
+    double lib_a[2];
+    lib_a[0] = (double)(index);
+    lib_a[1] = (double)(amount);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = list; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_lib_entity(ORCHARD_GAME_DROP_ITEM, target, 0, lib_a, 2, lib_t);
+}
+static inline int orchard_pick_up(orchard_entity target, orchard_entity pickup) {
+    double lib_a[1];
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_PICK_UP, target, pickup, lib_a, 0, "") != 0.0;
+}
+static inline orchard_entity orchard_nearest_pickup(orchard_entity target, double radius) {
+    double lib_a[1];
+    lib_a[0] = (double)(radius);
+    return orchard_lib_entity(ORCHARD_GAME_NEAREST_PICKUP, target, 0, lib_a, 1, "");
+}
+static inline int orchard_define_item(const char* item, const char* setting, const char* value) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[3]; lib_p[0] = item; lib_p[1] = setting; lib_p[2] = value; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 3);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_DEFINE_ITEM, 0, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline const char* orchard_item_setting(const char* item, const char* setting) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = item; lib_p[1] = setting; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    (void)lib_a;
+    return orchard_lib_text(ORCHARD_GAME_ITEM_SETTING, 0, 0, lib_a, 0, lib_t);
+}
+static inline int orchard_equip_item(orchard_entity target, const char* list, double index) {
+    double lib_a[1];
+    lib_a[0] = (double)(index);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = list; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_EQUIP_ITEM, target, 0, lib_a, 1, lib_t) != 0.0;
+}
+static inline int orchard_unequip_item(orchard_entity target, const char* slot) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = slot; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_UNEQUIP_ITEM, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline int orchard_hold_item(orchard_entity target, const char* hand, const char* list, double index) {
+    double lib_a[1];
+    lib_a[0] = (double)(index);
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = hand; lib_p[1] = list; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    return orchard_game(ORCHARD_GAME_HOLD_ITEM, target, 0, lib_a, 1, lib_t) != 0.0;
+}
+static inline const char* orchard_held_item(orchard_entity target, const char* hand) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = hand; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_lib_text(ORCHARD_GAME_HELD_ITEM, target, 0, lib_a, 0, lib_t);
+}
+static inline int orchard_holster_item(orchard_entity target, const char* hand) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = hand; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_HOLSTER_ITEM, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline int orchard_draw_item(orchard_entity target, const char* slot, const char* hand) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = slot; lib_p[1] = hand; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_DRAW_ITEM, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline int orchard_select_slot(orchard_entity target, double index) {
+    double lib_a[1];
+    lib_a[0] = (double)(index);
+    return orchard_game(ORCHARD_GAME_SELECT_SLOT, target, 0, lib_a, 1, "") != 0.0;
+}
+static inline int orchard_use_item(orchard_entity target, const char* list, double index) {
+    double lib_a[1];
+    lib_a[0] = (double)(index);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = list; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_USE_ITEM, target, 0, lib_a, 1, lib_t) != 0.0;
+}
+static inline int orchard_use_held(orchard_entity target, int pressed, int held) {
+    double lib_a[2];
+    lib_a[0] = (double)(pressed);
+    lib_a[1] = (double)(held);
+    return orchard_game(ORCHARD_GAME_USE_HELD, target, 0, lib_a, 2, "") != 0.0;
+}
+static inline int orchard_release_held(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_RELEASE_HELD, target, 0, lib_a, 0, "") != 0.0;
+}
+static inline int orchard_reload_weapon(orchard_entity target) {
+    double lib_a[1];
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_RELOAD_WEAPON, target, 0, lib_a, 0, "") != 0.0;
+}
+static inline int orchard_move_item(orchard_entity target, const char* list, double index, orchard_entity to, const char* to_list, double to_index, double amount) {
+    double lib_a[3];
+    lib_a[0] = (double)(index);
+    lib_a[1] = (double)(to_index);
+    lib_a[2] = (double)(amount);
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = list; lib_p[1] = to_list; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    return orchard_game(ORCHARD_GAME_MOVE_ITEM, target, to, lib_a, 3, lib_t) != 0.0;
+}
+static inline const char* orchard_inventory_setting(orchard_entity target, const char* setting) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = setting; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_lib_text(ORCHARD_GAME_INVENTORY_SETTING, target, 0, lib_a, 0, lib_t);
+}
+static inline int orchard_set_inventory_setting(orchard_entity target, const char* setting, const char* value) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = setting; lib_p[1] = value; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_SET_INVENTORY_SETTING, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline const char* orchard_slot_item(orchard_entity target, const char* list, double index) {
+    double lib_a[1];
+    lib_a[0] = (double)(index);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = list; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_lib_text(ORCHARD_GAME_SLOT_ITEM, target, 0, lib_a, 1, lib_t);
+}
+static inline double orchard_slot_amount(orchard_entity target, const char* list, double index) {
+    double lib_a[1];
+    lib_a[0] = (double)(index);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = list; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_game(ORCHARD_GAME_SLOT_AMOUNT, target, 0, lib_a, 1, lib_t);
+}
+static inline void orchard_set_aim(orchard_entity target, double ox, double oy, double oz, double dx, double dy, double dz) {
+    double lib_a[6];
+    lib_a[0] = (double)(ox);
+    lib_a[1] = (double)(oy);
+    lib_a[2] = (double)(oz);
+    lib_a[3] = (double)(dx);
+    lib_a[4] = (double)(dy);
+    lib_a[5] = (double)(dz);
+    orchard_game(ORCHARD_GAME_SET_AIM, target, 0, lib_a, 6, "");
+}
+static inline int orchard_set_stance(orchard_entity target, const char* stance) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = stance; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_SET_STANCE, target, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline void orchard_set_aiming(orchard_entity target, int on) {
+    double lib_a[1];
+    lib_a[0] = (double)(on);
+    orchard_game(ORCHARD_GAME_SET_AIMING, target, 0, lib_a, 1, "");
+}
+static inline void orchard_set_blocking(orchard_entity target, int on) {
+    double lib_a[1];
+    lib_a[0] = (double)(on);
+    orchard_game(ORCHARD_GAME_SET_BLOCKING, target, 0, lib_a, 1, "");
+}
+static inline long long orchard_fire_weapon(orchard_entity target, const char* item, double ox, double oy, double oz, double dx, double dy, double dz, double power) {
+    double lib_a[7];
+    lib_a[0] = (double)(ox);
+    lib_a[1] = (double)(oy);
+    lib_a[2] = (double)(oz);
+    lib_a[3] = (double)(dx);
+    lib_a[4] = (double)(dy);
+    lib_a[5] = (double)(dz);
+    lib_a[6] = (double)(power);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = item; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return (long long)orchard_game(ORCHARD_GAME_FIRE_WEAPON, target, 0, lib_a, 7, lib_t);
+}
+static inline int orchard_set_ballistics(const char* mode) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = mode; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_SET_BALLISTICS, 0, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline double orchard_worn_armor(orchard_entity target, const char* damage_type) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = damage_type; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_WORN_ARMOR, target, 0, lib_a, 0, lib_t);
+}
+static inline orchard_entity orchard_start_weather(const char* preset, double duration, double fade_in, double fade_out) {
+    double lib_a[3];
+    lib_a[0] = (double)(duration);
+    lib_a[1] = (double)(fade_in);
+    lib_a[2] = (double)(fade_out);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = preset; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_lib_entity(ORCHARD_GAME_START_WEATHER, 0, 0, lib_a, 3, lib_t);
+}
+static inline orchard_entity orchard_start_weather_at(const char* preset, double x, double y, double z, double radius, double duration, double fade_in, double fade_out) {
+    double lib_a[7];
+    lib_a[0] = (double)(x);
+    lib_a[1] = (double)(y);
+    lib_a[2] = (double)(z);
+    lib_a[3] = (double)(radius);
+    lib_a[4] = (double)(duration);
+    lib_a[5] = (double)(fade_in);
+    lib_a[6] = (double)(fade_out);
+    char lib_t[4096]; const char* lib_p[1]; lib_p[0] = preset; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 1);
+    return orchard_lib_entity(ORCHARD_GAME_START_WEATHER_AT, 0, 0, lib_a, 7, lib_t);
+}
+static inline int orchard_stop_weather(orchard_entity zone, double fade_out) {
+    double lib_a[1];
+    lib_a[0] = (double)(fade_out);
+    return orchard_game(ORCHARD_GAME_STOP_WEATHER, zone, 0, lib_a, 1, "") != 0.0;
+}
+static inline long long orchard_stop_all_weather(double fade_out) {
+    double lib_a[1];
+    lib_a[0] = (double)(fade_out);
+    return (long long)orchard_game(ORCHARD_GAME_STOP_ALL_WEATHER, 0, 0, lib_a, 1, "");
+}
+static inline int orchard_set_climate(orchard_entity zone, const char* setting, const char* value) {
+    double lib_a[1];
+    char lib_t[4096]; const char* lib_p[2]; lib_p[0] = setting; lib_p[1] = value; orchard_lib_join(lib_t, sizeof(lib_t), lib_p, 2);
+    (void)lib_a;
+    return orchard_game(ORCHARD_GAME_SET_CLIMATE, zone, 0, lib_a, 0, lib_t) != 0.0;
+}
+static inline double orchard_temperature_at(double x, double y, double z) {
+    double lib_a[3];
+    lib_a[0] = (double)(x);
+    lib_a[1] = (double)(y);
+    lib_a[2] = (double)(z);
+    return orchard_game(ORCHARD_GAME_TEMPERATURE_AT, 0, 0, lib_a, 3, "");
+}
+static inline double orchard_wind_x_at(double x, double y, double z) {
+    double lib_a[3];
+    lib_a[0] = (double)(x);
+    lib_a[1] = (double)(y);
+    lib_a[2] = (double)(z);
+    return orchard_game(ORCHARD_GAME_WIND_X_AT, 0, 0, lib_a, 3, "");
+}
+static inline double orchard_wind_y_at(double x, double y, double z) {
+    double lib_a[3];
+    lib_a[0] = (double)(x);
+    lib_a[1] = (double)(y);
+    lib_a[2] = (double)(z);
+    return orchard_game(ORCHARD_GAME_WIND_Y_AT, 0, 0, lib_a, 3, "");
+}
+static inline double orchard_wind_z_at(double x, double y, double z) {
+    double lib_a[3];
+    lib_a[0] = (double)(x);
+    lib_a[1] = (double)(y);
+    lib_a[2] = (double)(z);
+    return orchard_game(ORCHARD_GAME_WIND_Z_AT, 0, 0, lib_a, 3, "");
+}
+static inline double orchard_rain_at(double x, double y, double z) {
+    double lib_a[3];
+    lib_a[0] = (double)(x);
+    lib_a[1] = (double)(y);
+    lib_a[2] = (double)(z);
+    return orchard_game(ORCHARD_GAME_RAIN_AT, 0, 0, lib_a, 3, "");
+}
+static inline double orchard_snow_at(double x, double y, double z) {
+    double lib_a[3];
+    lib_a[0] = (double)(x);
+    lib_a[1] = (double)(y);
+    lib_a[2] = (double)(z);
+    return orchard_game(ORCHARD_GAME_SNOW_AT, 0, 0, lib_a, 3, "");
+}
+static inline int orchard_is_sheltered(double x, double y, double z) {
+    double lib_a[3];
+    lib_a[0] = (double)(x);
+    lib_a[1] = (double)(y);
+    lib_a[2] = (double)(z);
+    return orchard_game(ORCHARD_GAME_IS_SHELTERED, 0, 0, lib_a, 3, "") != 0.0;
+}
+
 #endif // ORCHARD_SCRIPT_ORCHARD_LIB_H

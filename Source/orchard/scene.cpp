@@ -979,6 +979,354 @@ const char* death_action_label(DeathAction v) {
     return "Nothing";
 }
 
+const std::vector<std::string>& damage_types() {
+    static const std::vector<std::string> all = {"physical", "melee", "blunt", "slash", "pierce", "projectile", "explosion", "fire", "cold", "poison", "bleed", "shock", "acid", "fall", "drown", "starve", "thirst", "magic", "true"};
+    return all;
+}
+
+const char* damage_type_label(const std::string& type) {
+    if (type == "physical") return "Physical (blunt hits, crushing)";
+    if (type == "melee") return "Melee (claws, fists, blades)";
+    if (type == "blunt") return "Blunt (clubs, hammers, falls)";
+    if (type == "slash") return "Slashing (swords, axes)";
+    if (type == "pierce") return "Piercing (spears, arrows, daggers)";
+    if (type == "projectile") return "Projectile (bullets, arrows)";
+    if (type == "explosion") return "Explosion";
+    if (type == "fire") return "Fire";
+    if (type == "cold") return "Cold";
+    if (type == "poison") return "Poison";
+    if (type == "bleed") return "Bleeding";
+    if (type == "shock") return "Shock (electric)";
+    if (type == "acid") return "Acid";
+    if (type == "fall") return "Falling";
+    if (type == "drown") return "Drowning";
+    if (type == "starve") return "Starving";
+    if (type == "thirst") return "Thirst";
+    if (type == "magic") return "Magic";
+    if (type == "true") return "True (ignores armor and resistance)";
+    return "Custom";
+}
+
+bool armor_blocks(const std::string& type) {
+    return type == "physical" || type == "melee" || type == "blunt" || type == "slash" || type == "pierce" || type == "projectile" || type == "explosion";
+}
+
+const std::vector<std::string>& armor_modes() {
+    static const std::vector<std::string> all = {"diminishing", "percent", "flat", "formula", "none"};
+    return all;
+}
+
+const char* armor_mode_label(const std::string& mode) {
+    if (mode == "diminishing") return "Diminishing (damage \u00D7 constant / (constant + armor))";
+    if (mode == "percent") return "Percent (armor is the % blocked, up to a cap)";
+    if (mode == "flat") return "Flat (each hit loses the armor value)";
+    if (mode == "formula") return "Formula (your own maths)";
+    if (mode == "none") return "None (armor does nothing by itself)";
+    return "Custom";
+}
+
+bool type_listed(const std::string& list, const std::string& type, bool empty_means_all) {
+    bool any = false;
+    std::string cur;
+    for (char c : list + ",") {
+        if (c != ',' && c != ';' && c != ' ' && c != '\t') {
+            cur += c;
+            continue;
+        }
+        if (cur.empty()) continue;
+        any = true;
+        if (cur == type || (cur == "all" && type != "true")) return true;
+        cur.clear();
+    }
+    return !any && empty_means_all && type != "true";
+}
+
+namespace {
+
+struct HealthField {
+    const char* key;
+    float Health::*value;
+    std::string Health::*text;
+    bool saved;
+};
+
+const std::vector<HealthField>& health_fields() {
+    static const std::vector<HealthField> all = {
+        {"health", &Health::value, nullptr, false},
+        {"max_health", &Health::max, nullptr, false},
+        {"regen", &Health::regen, nullptr, false},
+        {"regen_delay", &Health::regen_delay, nullptr, false},
+        {"impact_damage", &Health::impact_damage, nullptr, false},
+        {"burn_damage", &Health::burn_damage, nullptr, false},
+        {"explode_radius", &Health::explode_radius, nullptr, false},
+        {"explode_force", &Health::explode_force, nullptr, false},
+        {"explode_damage", &Health::explode_damage, nullptr, false},
+        {"respawn_delay", &Health::respawn_delay, nullptr, false},
+        {"armor", &Health::armor, nullptr, false},
+        {"poise", &Health::poise, nullptr, false},
+        {"stagger_scale", &Health::stagger_scale, nullptr, false},
+        {"damage_formula", nullptr, &Health::damage_formula, false},
+        {"effect_formula", nullptr, &Health::effect_formula, false},
+        {"armor_mode", nullptr, &Health::armor_mode, true},
+        {"armor_constant", &Health::armor_constant, nullptr, true},
+        {"armor_cap", &Health::armor_cap, nullptr, true},
+        {"armor_min", &Health::armor_min, nullptr, true},
+        {"armor_wear", &Health::armor_wear, nullptr, true},
+        {"armor_types", nullptr, &Health::armor_types, true},
+        {"armor_formula", nullptr, &Health::armor_formula, true},
+        {"shield", &Health::shield, nullptr, true},
+        {"max_shield", &Health::max_shield, nullptr, true},
+        {"shield_regen", &Health::shield_regen, nullptr, true},
+        {"shield_delay", &Health::shield_delay, nullptr, true},
+        {"shield_absorb", &Health::shield_absorb, nullptr, true},
+        {"shield_types", nullptr, &Health::shield_types, true},
+        {"shield_formula", nullptr, &Health::shield_formula, true},
+    };
+    return all;
+}
+
+} // namespace
+
+const std::vector<std::string>& health_settings() {
+    static const std::vector<std::string> all = [] {
+        std::vector<std::string> v;
+        for (const HealthField& f : health_fields()) v.push_back(f.key);
+        v.push_back("resist");
+        return v;
+    }();
+    return all;
+}
+
+float* health_value(Health& h, const std::string& key) {
+    for (const HealthField& f : health_fields())
+        if (f.value && key == f.key) return &(h.*(f.value));
+    return nullptr;
+}
+
+std::string* health_text(Health& h, const std::string& key) {
+    for (const HealthField& f : health_fields())
+        if (f.text && key == f.key) return &(h.*(f.text));
+    return nullptr;
+}
+
+const std::vector<std::string>& climate_presets() {
+    static const std::vector<std::string> all = {"clear", "warm", "hot", "heatwave", "cool", "cold", "freezing", "breeze", "windy", "gale", "rain", "storm", "thunderstorm", "drizzle", "snow", "blizzard", "fog", "sandstorm", "custom"};
+    return all;
+}
+
+bool apply_climate_preset(Climate& c, const std::string& p) {
+    if (std::find(climate_presets().begin(), climate_presets().end(), p) == climate_presets().end()) return false;
+    c.preset = p;
+    if (p == "custom") return true;
+    c.temperature = 20.0f;
+    c.relative = false;
+    c.wind_speed = 0.0f;
+    c.gust = 0.0f;
+    c.rain = 0.0f;
+    c.snow = 0.0f;
+    c.fog = 0.0f;
+    c.humidity = 0.5f;
+    c.lightning = 0.0f;
+    if (p == "warm") c.temperature = 27.0f;
+    else if (p == "hot") c.temperature = 35.0f;
+    else if (p == "heatwave") {
+        c.temperature = 44.0f;
+        c.humidity = 0.2f;
+    } else if (p == "cool") c.temperature = 12.0f;
+    else if (p == "cold") c.temperature = 2.0f;
+    else if (p == "freezing") c.temperature = -15.0f;
+    else if (p == "breeze") {
+        c.wind_speed = 4.0f;
+        c.gust = 2.0f;
+    } else if (p == "windy") {
+        c.wind_speed = 10.0f;
+        c.gust = 5.0f;
+    } else if (p == "gale") {
+        c.wind_speed = 20.0f;
+        c.gust = 8.0f;
+        c.temperature = 12.0f;
+    } else if (p == "drizzle") {
+        c.rain = 0.25f;
+        c.humidity = 0.9f;
+        c.temperature = 14.0f;
+    } else if (p == "rain") {
+        c.rain = 0.6f;
+        c.humidity = 0.95f;
+        c.temperature = 13.0f;
+        c.wind_speed = 3.0f;
+    } else if (p == "storm") {
+        c.rain = 0.9f;
+        c.humidity = 1.0f;
+        c.temperature = 11.0f;
+        c.wind_speed = 14.0f;
+        c.gust = 6.0f;
+    } else if (p == "thunderstorm") {
+        c.rain = 1.0f;
+        c.humidity = 1.0f;
+        c.temperature = 16.0f;
+        c.wind_speed = 12.0f;
+        c.gust = 8.0f;
+        c.lightning = 4.0f;
+    } else if (p == "snow") {
+        c.snow = 0.6f;
+        c.temperature = -4.0f;
+        c.wind_speed = 2.0f;
+    } else if (p == "blizzard") {
+        c.snow = 1.0f;
+        c.temperature = -20.0f;
+        c.wind_speed = 18.0f;
+        c.gust = 8.0f;
+        c.fog = 0.6f;
+    } else if (p == "fog") {
+        c.fog = 0.8f;
+        c.humidity = 1.0f;
+        c.temperature = 9.0f;
+    } else if (p == "sandstorm") {
+        c.temperature = 38.0f;
+        c.wind_speed = 16.0f;
+        c.gust = 6.0f;
+        c.fog = 0.7f;
+        c.humidity = 0.05f;
+    }
+    return true;
+}
+
+float* climate_value(Climate& c, const std::string& key) {
+    if (key == "temperature") return &c.temperature;
+    if (key == "wind_speed" || key == "wind") return &c.wind_speed;
+    if (key == "gust") return &c.gust;
+    if (key == "gust_rate") return &c.gust_rate;
+    if (key == "rain") return &c.rain;
+    if (key == "snow") return &c.snow;
+    if (key == "fog") return &c.fog;
+    if (key == "humidity") return &c.humidity;
+    if (key == "lightning") return &c.lightning;
+    if (key == "delay") return &c.delay;
+    if (key == "fade_in") return &c.fade_in;
+    if (key == "duration") return &c.duration;
+    if (key == "fade_out") return &c.fade_out;
+    if (key == "blend") return &c.blend;
+    if (key == "size_x") return &c.size.x;
+    if (key == "size_y") return &c.size.y;
+    if (key == "size_z") return &c.size.z;
+    if (key == "wind_x") return &c.wind_dir.x;
+    if (key == "wind_y") return &c.wind_dir.y;
+    if (key == "wind_z") return &c.wind_dir.z;
+    return nullptr;
+}
+
+std::string resist_text(const std::map<std::string, float>& resist) {
+    std::string out;
+    for (const auto& [k, v] : resist) out += (out.empty() ? "" : ",") + k + "=" + number(v);
+    return out;
+}
+
+std::map<std::string, float> parse_resist(const std::string& text) {
+    std::map<std::string, float> out;
+    std::string cur;
+    for (char c : text + ",") {
+        if (c != ',' && c != ';') {
+            if (c != ' ' && c != '\t') cur += c;
+            continue;
+        }
+        const std::size_t eq = cur.find_first_of("=:");
+        if (eq != std::string::npos && eq > 0) out[cur.substr(0, eq)] = static_cast<float>(std::atof(cur.substr(eq + 1).c_str()));
+        cur.clear();
+    }
+    return out;
+}
+
+namespace {
+
+struct SurvivalField {
+    const char* key;
+    float Survival::*value;
+    bool Survival::*on;
+};
+
+const std::vector<SurvivalField>& survival_fields() {
+    static const std::vector<SurvivalField> all = {
+        {"stamina_on", nullptr, &Survival::stamina_on},
+        {"stamina", &Survival::stamina, nullptr},
+        {"max_stamina", &Survival::max_stamina, nullptr},
+        {"stamina_regen", &Survival::stamina_regen, nullptr},
+        {"stamina_delay", &Survival::stamina_delay, nullptr},
+        {"sprint_cost", &Survival::sprint_cost, nullptr},
+        {"jump_cost", &Survival::jump_cost, nullptr},
+        {"sprint_min", &Survival::sprint_min, nullptr},
+        {"hunger_on", nullptr, &Survival::hunger_on},
+        {"hunger", &Survival::hunger, nullptr},
+        {"max_hunger", &Survival::max_hunger, nullptr},
+        {"saturation", &Survival::saturation, nullptr},
+        {"exhaustion", &Survival::exhaustion, nullptr},
+        {"idle_exhaustion", &Survival::idle_exhaustion, nullptr},
+        {"sprint_exhaustion", &Survival::sprint_exhaustion, nullptr},
+        {"jump_exhaustion", &Survival::jump_exhaustion, nullptr},
+        {"heal_exhaustion", &Survival::heal_exhaustion, nullptr},
+        {"fed_level", &Survival::fed_level, nullptr},
+        {"fed_heal", &Survival::fed_heal, nullptr},
+        {"starve_damage", &Survival::starve_damage, nullptr},
+        {"thirst_on", nullptr, &Survival::thirst_on},
+        {"thirst", &Survival::thirst, nullptr},
+        {"max_thirst", &Survival::max_thirst, nullptr},
+        {"thirst_rate", &Survival::thirst_rate, nullptr},
+        {"sprint_thirst", &Survival::sprint_thirst, nullptr},
+        {"dehydrate_damage", &Survival::dehydrate_damage, nullptr},
+        {"breath_on", nullptr, &Survival::breath_on},
+        {"breath", &Survival::breath, nullptr},
+        {"max_breath", &Survival::max_breath, nullptr},
+        {"breath_recover", &Survival::breath_recover, nullptr},
+        {"drown_damage", &Survival::drown_damage, nullptr},
+        {"head_height", &Survival::head_height, nullptr},
+        {"temperature_on", nullptr, &Survival::temperature_on},
+        {"temperature", &Survival::temperature, nullptr},
+        {"insulation", &Survival::insulation, nullptr},
+        {"ambient", &Survival::ambient, nullptr},
+        {"comfort_low", &Survival::comfort_low, nullptr},
+        {"comfort_high", &Survival::comfort_high, nullptr},
+        {"exposure", &Survival::exposure, nullptr},
+        {"cold_damage", &Survival::cold_damage, nullptr},
+        {"heat_damage", &Survival::heat_damage, nullptr},
+        {"weight_on", nullptr, &Survival::weight_on},
+        {"carried", &Survival::carried, nullptr},
+        {"carry_limit", &Survival::carry_limit, nullptr},
+        {"count_items", nullptr, &Survival::count_items},
+        {"light_load", &Survival::light_load, nullptr},
+        {"heavy_speed", &Survival::heavy_speed, nullptr},
+        {"overload", &Survival::overload, nullptr},
+        {"sprint_load", &Survival::sprint_load, nullptr},
+        {"load_stamina", &Survival::load_stamina, nullptr},
+        {"mana_on", nullptr, &Survival::mana_on},
+        {"mana", &Survival::mana, nullptr},
+        {"max_mana", &Survival::max_mana, nullptr},
+        {"mana_regen", &Survival::mana_regen, nullptr},
+    };
+    return all;
+}
+
+} // namespace
+
+const std::vector<std::string>& survival_stats() {
+    static const std::vector<std::string> all = [] {
+        std::vector<std::string> v;
+        for (const SurvivalField& f : survival_fields()) v.push_back(f.key);
+        return v;
+    }();
+    return all;
+}
+
+float* survival_value(Survival& s, const std::string& key) {
+    for (const SurvivalField& f : survival_fields())
+        if (f.value && key == f.key) return &(s.*(f.value));
+    return nullptr;
+}
+
+bool* survival_switch(Survival& s, const std::string& key) {
+    for (const SurvivalField& f : survival_fields())
+        if (f.on && key == f.key) return &(s.*(f.on));
+    return nullptr;
+}
+
 bool is_model_file(const std::string& path) {
     const std::size_t dot = path.find_last_of('.');
     if (dot == std::string::npos) return false;
@@ -1122,6 +1470,10 @@ Entity Scene::create(const std::string& name, Entity parent) {
     s.animator.reset();
     s.terrain.reset();
     s.health.reset();
+    s.survival.reset();
+    s.inventory.reset();
+    s.pickup.reset();
+    s.climate.reset();
     s.agent.reset();
     s.sound.reset();
     s.solid.reset();
@@ -1488,6 +1840,118 @@ const Agent* Scene::agent(Entity e) const {
     return s && s->agent ? &*s->agent : nullptr;
 }
 
+Inventory* Scene::inventory(Entity e) {
+    Slot* s = slot(e);
+    return s && s->inventory ? &*s->inventory : nullptr;
+}
+
+const Inventory* Scene::inventory(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->inventory ? &*s->inventory : nullptr;
+}
+
+Inventory& Scene::add_inventory(Entity e) {
+    static Inventory none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Inventory{};
+        return none;
+    }
+    if (!s->inventory) s->inventory = Inventory{};
+    return *s->inventory;
+}
+
+bool Scene::remove_inventory(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->inventory) return false;
+    s->inventory.reset();
+    return true;
+}
+
+Pickup* Scene::pickup(Entity e) {
+    Slot* s = slot(e);
+    return s && s->pickup ? &*s->pickup : nullptr;
+}
+
+const Pickup* Scene::pickup(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->pickup ? &*s->pickup : nullptr;
+}
+
+Pickup& Scene::add_pickup(Entity e) {
+    static Pickup none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Pickup{};
+        return none;
+    }
+    if (!s->pickup) s->pickup = Pickup{};
+    return *s->pickup;
+}
+
+bool Scene::remove_pickup(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->pickup) return false;
+    s->pickup.reset();
+    return true;
+}
+
+Climate* Scene::climate(Entity e) {
+    Slot* s = slot(e);
+    return s && s->climate ? &*s->climate : nullptr;
+}
+
+const Climate* Scene::climate(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->climate ? &*s->climate : nullptr;
+}
+
+Climate& Scene::add_climate(Entity e) {
+    static Climate none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Climate{};
+        return none;
+    }
+    if (!s->climate) s->climate = Climate{};
+    return *s->climate;
+}
+
+bool Scene::remove_climate(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->climate) return false;
+    s->climate.reset();
+    return true;
+}
+
+Survival* Scene::survival(Entity e) {
+    Slot* s = slot(e);
+    return s && s->survival ? &*s->survival : nullptr;
+}
+
+const Survival* Scene::survival(Entity e) const {
+    const Slot* s = slot(e);
+    return s && s->survival ? &*s->survival : nullptr;
+}
+
+Survival& Scene::add_survival(Entity e) {
+    static Survival none;
+    Slot* s = slot(e);
+    if (!s) {
+        none = Survival{};
+        return none;
+    }
+    if (!s->survival) s->survival = Survival{};
+    return *s->survival;
+}
+
+bool Scene::remove_survival(Entity e) {
+    Slot* s = slot(e);
+    if (!s || !s->survival) return false;
+    s->survival.reset();
+    return true;
+}
+
 Agent& Scene::add_agent(Entity e) {
     static Agent none;
     Slot* s = slot(e);
@@ -1796,6 +2260,10 @@ Entity Scene::copy_from(const Scene& other, Entity source, Entity parent) {
     dst->animator = copy.animator;
     dst->terrain = copy.terrain;
     dst->health = copy.health;
+    dst->survival = copy.survival;
+    dst->inventory = copy.inventory;
+    dst->pickup = copy.pickup;
+    dst->climate = copy.climate;
     dst->agent = copy.agent;
     dst->sound = copy.sound;
     dst->solid = copy.solid;
@@ -3110,6 +3578,74 @@ std::string Scene::save() const {
             if (h.explode_force != d.explode_force) out << " blast-force:" << number(h.explode_force);
             if (h.explode_damage != d.explode_damage) out << " blast-damage:" << number(h.explode_damage);
             if (h.respawn_delay != d.respawn_delay) out << " respawn:" << number(h.respawn_delay);
+            if (h.armor != d.armor) out << " armor:" << number(h.armor);
+            if (!h.resist.empty()) out << " resist:" << escape_token(resist_text(h.resist));
+            if (h.poise != d.poise) out << " poise:" << number(h.poise);
+            if (h.stagger_scale != d.stagger_scale) out << " stagger:" << number(h.stagger_scale);
+            if (!h.damage_formula.empty()) out << " damage-formula:" << escape_token(h.damage_formula);
+            if (!h.effect_formula.empty()) out << " effect-formula:" << escape_token(h.effect_formula);
+            Health hd;
+            Health hv = h;
+            for (const HealthField& fd : health_fields()) {
+                if (!fd.saved) continue;
+                if (fd.value && hv.*(fd.value) != hd.*(fd.value)) out << " " << fd.key << ":" << number(hv.*(fd.value));
+                if (fd.text && hv.*(fd.text) != hd.*(fd.text)) out << " " << fd.key << ":" << ((hv.*(fd.text)).empty() ? std::string("%00") : escape_token(hv.*(fd.text)));
+            }
+            out << "\n";
+        }
+        if (s.survival) {
+            Survival d;
+            Survival v = *s.survival;
+            out << "survival " << n;
+            for (const std::string& key : survival_stats()) {
+                if (const float* x = survival_value(v, key); x && *x != *survival_value(d, key)) out << " " << key << ":" << number(*x);
+                if (const bool* b = survival_switch(v, key); b && *b != *survival_switch(d, key)) out << " " << key << ":" << (*b ? 1 : 0);
+            }
+            out << "\n";
+        }
+        if (s.inventory) {
+            const Inventory d;
+            const Inventory& v = *s.inventory;
+            out << "inventory " << n;
+            for (const std::string& key : inventory_settings()) {
+                const std::string a = inventory_field(v, key), b = inventory_field(d, key);
+                if (a != b) out << " " << key << ":" << (a.empty() ? std::string("%00") : escape_token(a));
+            }
+            out << "\n";
+            for (std::size_t k = 0; k < v.items.size(); ++k)
+                if (!v.items[k].empty()) out << "inv-item " << n << " items " << k << " " << escape_token(stack_text(v.items[k])) << "\n";
+            for (std::size_t k = 0; k < v.hotbar_items.size(); ++k)
+                if (!v.hotbar_items[k].empty()) out << "inv-item " << n << " hotbar " << k << " " << escape_token(stack_text(v.hotbar_items[k])) << "\n";
+            for (const auto& [slot, st] : v.worn)
+                if (!st.empty()) out << "inv-item " << n << " worn:" << escape_token(slot) << " 0 " << escape_token(stack_text(st)) << "\n";
+            for (const auto& [slot, st] : v.holstered)
+                if (!st.empty()) out << "inv-item " << n << " holster:" << escape_token(slot) << " 0 " << escape_token(stack_text(st)) << "\n";
+            for (std::size_t k = 0; k < v.binds.size(); ++k)
+                if (!v.binds[k].empty()) out << "inv-item " << n << " bind " << k << " " << escape_token(v.binds[k]) << "*0\n";
+        }
+        if (s.pickup) {
+            const Pickup& pk = *s.pickup;
+            out << "pickup " << n << " stack:" << escape_token(stack_text(pk.stack));
+            if (pk.auto_pickup) out << " auto:1";
+            if (pk.respawn != 0.0f) out << " respawn:" << number(pk.respawn);
+            if (pk.look != "detailed") out << " look:" << escape_token(pk.look);
+            out << "\n";
+        }
+        if (s.climate) {
+            const Climate d;
+            Climate c = *s.climate;
+            Climate dd = d;
+            out << "climate " << n << " preset:" << escape_token(c.preset);
+            for (const char* key : {"temperature", "wind_speed", "gust", "gust_rate", "rain", "snow", "fog", "humidity", "lightning", "delay", "fade_in", "duration", "fade_out", "blend", "size_x", "size_y", "size_z", "wind_x", "wind_y", "wind_z"})
+                if (*climate_value(c, key) != *climate_value(dd, key)) out << " " << key << ":" << number(*climate_value(c, key));
+            if (c.global) out << " global:1";
+            if (c.shape != d.shape) out << " shape:" << escape_token(c.shape);
+            if (c.relative) out << " relative:1";
+            if (c.loop) out << " loop:1";
+            if (!c.active) out << " active:0";
+            if (!c.visuals) out << " visuals:0";
+            if (c.priority != 0) out << " priority:" << c.priority;
+            if (!c.after.empty()) out << " after:" << escape_token(c.after);
             out << "\n";
         }
         if (s.agent) {
@@ -3139,6 +3675,13 @@ std::string Scene::save() const {
             f("reaction", a.reaction, d.reaction);
             f("reach", a.attack_range, d.attack_range);
             f("damage", a.attack_damage, d.attack_damage);
+            f("knockback", a.attack_knockback, d.attack_knockback);
+            t("damage-type", a.damage_type, d.damage_type);
+            t("hit-effect", a.hit_effect, d.hit_effect);
+            f("hit-effect-time", a.hit_effect_time, d.hit_effect_time);
+            f("hit-effect-chance", a.hit_effect_chance, d.hit_effect_chance);
+            t("damage-formula", a.damage_formula, d.damage_formula);
+            t("knockback-formula", a.knockback_formula, d.knockback_formula);
             f("rate", a.attack_rate, d.attack_rate);
             b("ranged", a.ranged, d.ranged);
             f("accuracy", a.accuracy, d.accuracy);
@@ -3207,6 +3750,16 @@ std::string Scene::save() const {
         if (!s.bone.empty()) out << "bone " << n << " " << escape_token(s.bone) << "\n";
         if (!s.instance_of.empty()) out << "instance " << n << " " << s.instance_of << "\n";
     }
+    for (const auto& [id, def] : m_items.custom) {
+        const ItemDef* base = builtin_item(id);
+        ItemDef blank;
+        out << "item-def " << escape_token(id);
+        for (const char* key : {"name", "category", "shape", "description", "kind", "size", "weight", "volume", "max_stack", "continuous", "unit", "grid_w", "grid_h", "length", "color", "accent", "texture", "tags", "damage", "damage_type", "knockback", "rate", "range", "magazine", "ammo", "reload", "speed", "spread", "pellets", "automatic", "two_handed", "block", "blast_radius", "mana", "spell", "ballistics", "effect", "use_effect", "heal", "food", "water", "wear", "armor", "insulation", "capacity", "slots_w", "slots_h", "holster_kinds", "holster_size", "holster_count"}) {
+            const std::string v = item_field(def, key);
+            if (v != item_field(base ? *base : blank, key)) out << " " << key << ":" << (v.empty() ? std::string("%00") : escape_token(v));
+        }
+        out << "\n";
+    }
     return out.str();
 }
 
@@ -3233,11 +3786,24 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
     while (std::getline(in, line)) {
         ++line_no;
         if (line.empty()) continue;
+        if (line.rfind("item-def ", 0) == 0) {
+            std::istringstream defs(line);
+            std::string word, id;
+            defs >> word >> id;
+            ItemDef& def = scene.items().define(unescape_token(id));
+            for (std::string token; defs >> token;) {
+                const std::size_t colon = token.find(':');
+                if (colon == std::string::npos) continue;
+                const std::string v = token.substr(colon + 1);
+                set_item_field(def, token.substr(0, colon), v == "%00" ? std::string() : unescape_token(v));
+            }
+            continue;
+        }
         std::istringstream row(line);
         std::string kind;
         std::size_t num = 0, parent = 0;
         row >> kind >> num;
-        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material" || kind == "fluid" || kind == "emitter" || kind == "instance" || kind == "camera" || kind == "model" || kind == "animator" || kind == "anim-event" || kind == "bone" || kind == "health" || kind == "agent" || kind == "sound" || kind == "solid" || kind == "tags" || is_terrain_line(kind)) {
+        if (kind == "script" || kind == "body" || kind == "collider" || kind == "light" || kind == "material" || kind == "fluid" || kind == "emitter" || kind == "instance" || kind == "camera" || kind == "model" || kind == "animator" || kind == "anim-event" || kind == "bone" || kind == "health" || kind == "survival" || kind == "inventory" || kind == "inv-item" || kind == "pickup" || kind == "climate" || kind == "agent" || kind == "sound" || kind == "solid" || kind == "tags" || is_terrain_line(kind)) {
             const auto owner = by_number.find(num);
             if (!row || owner == by_number.end()) {
                 if (error) *error = "line " + std::to_string(line_no) + ": " + kind + " for an entity that isn't there";
@@ -3287,6 +3853,94 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     else if (key == "blast-force") h.explode_force = x;
                     else if (key == "blast-damage") h.explode_damage = x;
                     else if (key == "respawn") h.respawn_delay = std::max(0.0f, x);
+                    else if (key == "armor") h.armor = std::max(0.0f, x);
+                    else if (key == "resist") h.resist = parse_resist(unescape_token(v));
+                    else if (key == "poise") h.poise = std::max(0.0f, x);
+                    else if (key == "stagger") h.stagger_scale = std::max(0.0f, x);
+                    else if (key == "damage-formula") h.damage_formula = unescape_token(v);
+                    else if (key == "effect-formula") h.effect_formula = unescape_token(v);
+                    else if (float* x2 = health_value(h, key)) *x2 = x;
+                    else if (std::string* t2 = health_text(h, key)) *t2 = v == "%00" ? std::string() : unescape_token(v);
+                }
+                continue;
+            }
+            if (kind == "inventory") {
+                Inventory& inv = scene.add_inventory(owner->second);
+                for (std::string token; row >> token;) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    const std::string v = token.substr(colon + 1);
+                    set_inventory_field(inv, token.substr(0, colon), v == "%00" ? std::string() : unescape_token(v));
+                }
+                continue;
+            }
+            if (kind == "inv-item") {
+                Inventory& inv = scene.add_inventory(owner->second);
+                std::string list, text;
+                std::size_t index = 0;
+                row >> list >> index >> text;
+                if (list == "bind") {
+                    if (inv.binds.size() <= index) inv.binds.resize(index + 1);
+                    const std::string id = unescape_token(text);
+                    inv.binds[index] = id.substr(0, id.find('*'));
+                    continue;
+                }
+                const std::optional<ItemStack> st = parse_stack(unescape_token(text));
+                if (!st) continue;
+                if (list == "items") {
+                    if (inv.items.size() <= index) inv.items.resize(index + 1);
+                    inv.items[index] = *st;
+                } else if (list == "hotbar") {
+                    if (inv.hotbar_items.size() <= index) inv.hotbar_items.resize(index + 1);
+                    inv.hotbar_items[index] = *st;
+                } else if (list.rfind("worn:", 0) == 0) {
+                    inv.worn[unescape_token(list.substr(5))] = *st;
+                } else if (list.rfind("holster:", 0) == 0) {
+                    inv.holstered[unescape_token(list.substr(8))] = *st;
+                }
+                continue;
+            }
+            if (kind == "pickup") {
+                Pickup& pk = scene.add_pickup(owner->second);
+                for (std::string token; row >> token;) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    const std::string key = token.substr(0, colon), v = unescape_token(token.substr(colon + 1));
+                    if (key == "stack") {
+                        if (const auto st = parse_stack(v)) pk.stack = *st;
+                    } else if (key == "auto") pk.auto_pickup = v != "0";
+                    else if (key == "respawn") pk.respawn = static_cast<float>(std::atof(v.c_str()));
+                    else if (key == "look") pk.look = v;
+                }
+                continue;
+            }
+            if (kind == "climate") {
+                Climate& c = scene.add_climate(owner->second);
+                for (std::string token; row >> token;) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    const std::string key = token.substr(0, colon), v = unescape_token(token.substr(colon + 1));
+                    if (float* x = climate_value(c, key)) *x = static_cast<float>(std::atof(v.c_str()));
+                    else if (key == "preset") c.preset = v;
+                    else if (key == "global") c.global = v != "0";
+                    else if (key == "shape") c.shape = v;
+                    else if (key == "relative") c.relative = v != "0";
+                    else if (key == "loop") c.loop = v != "0";
+                    else if (key == "active") c.active = v != "0";
+                    else if (key == "visuals") c.visuals = v != "0";
+                    else if (key == "priority") c.priority = std::atoi(v.c_str());
+                    else if (key == "after") c.after = v;
+                }
+                continue;
+            }
+            if (kind == "survival") {
+                Survival& sv = scene.add_survival(owner->second);
+                for (std::string token; row >> token;) {
+                    const std::size_t colon = token.find(':');
+                    if (colon == std::string::npos) continue;
+                    const std::string key = token.substr(0, colon), v = token.substr(colon + 1);
+                    if (float* x = survival_value(sv, key)) *x = static_cast<float>(std::atof(v.c_str()));
+                    else if (bool* b = survival_switch(sv, key)) *b = v != "0";
                 }
                 continue;
             }
@@ -3347,6 +4001,13 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     else if (key == "reaction") a.reaction = std::max(0.0f, x);
                     else if (key == "reach") a.attack_range = std::max(0.0f, x);
                     else if (key == "damage") a.attack_damage = x;
+                    else if (key == "knockback") a.attack_knockback = std::max(0.0f, x);
+                    else if (key == "damage-type") a.damage_type = v;
+                    else if (key == "hit-effect") a.hit_effect = v;
+                    else if (key == "hit-effect-time") a.hit_effect_time = x;
+                    else if (key == "hit-effect-chance") a.hit_effect_chance = std::clamp(x, 0.0f, 1.0f);
+                    else if (key == "damage-formula") a.damage_formula = v;
+                    else if (key == "knockback-formula") a.knockback_formula = v;
                     else if (key == "rate") a.attack_rate = std::max(0.0f, x);
                     else if (key == "ranged") a.ranged = on;
                     else if (key == "accuracy") a.accuracy = std::clamp(x, 0.0f, 1.0f);

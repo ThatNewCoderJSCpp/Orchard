@@ -90,6 +90,14 @@ public:
     }
     virtual bool flat() const { return false; }
     virtual float gravity() const { return 9.81f; }
+    virtual float mass(Entity e) const {
+        static_cast<void>(e);
+        return 0.0f;
+    }
+    virtual float fluid_depth(Vec3 point) const {
+        static_cast<void>(point);
+        return 0.0f;
+    }
 };
 
 struct ScriptHooks {

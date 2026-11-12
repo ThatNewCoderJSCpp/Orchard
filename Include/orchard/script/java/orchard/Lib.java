@@ -269,4 +269,137 @@ public class Lib {
     public static String secureHex(double byte_count) { return Native.gameText(342, 0, 0, new double[] {byte_count}, ""); }
     public static String secureHex() { return secureHex(16.0); }
     public static String secureUuid() { return Native.gameText(343, 0, 0, new double[] {}, ""); }
+    public static double applyDamage(Entity target, double amount, String damage_type) { return Native.game(400, libId(target), 0, new double[] {amount}, libJoin(damage_type)); }
+    public static double applyDamage(Entity target, double amount) { return applyDamage(target, amount, "physical"); }
+    public static double applyDamageFrom(Entity target, Entity attacker, double amount, String damage_type, double knock_x, double knock_y, double knock_z, double stagger_time) { return Native.game(401, libId(target), libId(attacker), new double[] {amount, knock_x, knock_y, knock_z, stagger_time}, libJoin(damage_type)); }
+    public static double applyDamageFrom(Entity target, Entity attacker, double amount, String damage_type, double knock_x, double knock_y, double knock_z) { return applyDamageFrom(target, attacker, amount, damage_type, knock_x, knock_y, knock_z, -1.0); }
+    public static double applyDamageFrom(Entity target, Entity attacker, double amount, String damage_type, double knock_x, double knock_y) { return applyDamageFrom(target, attacker, amount, damage_type, knock_x, knock_y, 0.0, -1.0); }
+    public static double applyDamageFrom(Entity target, Entity attacker, double amount, String damage_type, double knock_x) { return applyDamageFrom(target, attacker, amount, damage_type, knock_x, 0.0, 0.0, -1.0); }
+    public static double applyDamageFrom(Entity target, Entity attacker, double amount, String damage_type) { return applyDamageFrom(target, attacker, amount, damage_type, 0.0, 0.0, 0.0, -1.0); }
+    public static double applyDamageFrom(Entity target, Entity attacker, double amount) { return applyDamageFrom(target, attacker, amount, "physical", 0.0, 0.0, 0.0, -1.0); }
+    public static void damageOverTime(Entity target, double amount, String damage_type, double duration, double interval, boolean forever) { Native.game(402, libId(target), 0, new double[] {amount, duration, interval, forever ? 1.0 : 0.0}, libJoin(damage_type)); }
+    public static void damageOverTime(Entity target, double amount, String damage_type, double duration, double interval) { damageOverTime(target, amount, damage_type, duration, interval, false); }
+    public static void damageOverTime(Entity target, double amount, String damage_type, double duration) { damageOverTime(target, amount, damage_type, duration, 1.0, false); }
+    public static void damageOverTime(Entity target, double amount, String damage_type) { damageOverTime(target, amount, damage_type, 5.0, 1.0, false); }
+    public static void damageOverTime(Entity target, double amount) { damageOverTime(target, amount, "physical", 5.0, 1.0, false); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration, double interval, boolean forever, double knock_x, double knock_y, double knock_z, double push_repeat, double stagger_time, boolean stack, String damage_key) { Native.game(403, libId(target), libId(attacker), new double[] {amount, duration, interval, forever ? 1.0 : 0.0, knock_x, knock_y, knock_z, push_repeat, stagger_time, stack ? 1.0 : 0.0}, libJoin(damage_type, damage_key)); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration, double interval, boolean forever, double knock_x, double knock_y, double knock_z, double push_repeat, double stagger_time, boolean stack) { damageOverTimeFrom(target, attacker, amount, damage_type, duration, interval, forever, knock_x, knock_y, knock_z, push_repeat, stagger_time, stack, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration, double interval, boolean forever, double knock_x, double knock_y, double knock_z, double push_repeat, double stagger_time) { damageOverTimeFrom(target, attacker, amount, damage_type, duration, interval, forever, knock_x, knock_y, knock_z, push_repeat, stagger_time, false, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration, double interval, boolean forever, double knock_x, double knock_y, double knock_z, double push_repeat) { damageOverTimeFrom(target, attacker, amount, damage_type, duration, interval, forever, knock_x, knock_y, knock_z, push_repeat, -1.0, false, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration, double interval, boolean forever, double knock_x, double knock_y, double knock_z) { damageOverTimeFrom(target, attacker, amount, damage_type, duration, interval, forever, knock_x, knock_y, knock_z, 0.0, -1.0, false, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration, double interval, boolean forever, double knock_x, double knock_y) { damageOverTimeFrom(target, attacker, amount, damage_type, duration, interval, forever, knock_x, knock_y, 0.0, 0.0, -1.0, false, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration, double interval, boolean forever, double knock_x) { damageOverTimeFrom(target, attacker, amount, damage_type, duration, interval, forever, knock_x, 0.0, 0.0, 0.0, -1.0, false, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration, double interval, boolean forever) { damageOverTimeFrom(target, attacker, amount, damage_type, duration, interval, forever, 0.0, 0.0, 0.0, 0.0, -1.0, false, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration, double interval) { damageOverTimeFrom(target, attacker, amount, damage_type, duration, interval, false, 0.0, 0.0, 0.0, 0.0, -1.0, false, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type, double duration) { damageOverTimeFrom(target, attacker, amount, damage_type, duration, 1.0, false, 0.0, 0.0, 0.0, 0.0, -1.0, false, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount, String damage_type) { damageOverTimeFrom(target, attacker, amount, damage_type, 5.0, 1.0, false, 0.0, 0.0, 0.0, 0.0, -1.0, false, ""); }
+    public static void damageOverTimeFrom(Entity target, Entity attacker, double amount) { damageOverTimeFrom(target, attacker, amount, "physical", 5.0, 1.0, false, 0.0, 0.0, 0.0, 0.0, -1.0, false, ""); }
+    public static boolean stopDamageOverTime(Entity target, String damage_key) { return Native.game(404, libId(target), 0, new double[] {}, libJoin(damage_key)) != 0.0; }
+    public static boolean stopDamageOverTime(Entity target) { return stopDamageOverTime(target, ""); }
+    public static int damageOverTimeCount(Entity target) { return (int) Native.game(405, libId(target), 0, new double[] {}, ""); }
+    public static String lastDamageType(Entity target) { return Native.gameText(406, libId(target), 0, new double[] {}, ""); }
+    public static boolean applyEffect(Entity target, String effect_name, double duration, double strength) { return Native.game(407, libId(target), 0, new double[] {duration, strength}, libJoin(effect_name)) != 0.0; }
+    public static boolean applyEffect(Entity target, String effect_name, double duration) { return applyEffect(target, effect_name, duration, 1.0); }
+    public static boolean applyEffect(Entity target, String effect_name) { return applyEffect(target, effect_name, 0.0, 1.0); }
+    public static boolean applyEffectForever(Entity target, String effect_name, double strength) { return Native.game(408, libId(target), 0, new double[] {strength}, libJoin(effect_name)) != 0.0; }
+    public static boolean applyEffectForever(Entity target, String effect_name) { return applyEffectForever(target, effect_name, 1.0); }
+    public static boolean applyEffectFrom(Entity target, Entity source, String effect_name, double duration, double strength) { return Native.game(409, libId(target), libId(source), new double[] {duration, strength}, libJoin(effect_name)) != 0.0; }
+    public static boolean applyEffectFrom(Entity target, Entity source, String effect_name, double duration) { return applyEffectFrom(target, source, effect_name, duration, 1.0); }
+    public static boolean applyEffectFrom(Entity target, Entity source, String effect_name) { return applyEffectFrom(target, source, effect_name, 0.0, 1.0); }
+    public static boolean removeEffect(Entity target, String effect_name) { return Native.game(410, libId(target), 0, new double[] {}, libJoin(effect_name)) != 0.0; }
+    public static int clearEffects(Entity target) { return (int) Native.game(411, libId(target), 0, new double[] {}, ""); }
+    public static boolean hasEffect(Entity target, String effect_name) { return Native.game(412, libId(target), 0, new double[] {}, libJoin(effect_name)) != 0.0; }
+    public static int effectStacks(Entity target, String effect_name) { return (int) Native.game(413, libId(target), 0, new double[] {}, libJoin(effect_name)); }
+    public static double effectTimeLeft(Entity target, String effect_name) { return Native.game(414, libId(target), 0, new double[] {}, libJoin(effect_name)); }
+    public static String effectList(Entity target) { return Native.gameText(415, libId(target), 0, new double[] {}, ""); }
+    public static boolean defineEffect(String effect_name, String setting, String value) { return Native.game(416, 0, 0, new double[] {}, libJoin(effect_name, setting, value)) != 0.0; }
+    public static boolean stagger(Entity target, double seconds) { return Native.game(417, libId(target), 0, new double[] {seconds}, "") != 0.0; }
+    public static boolean stagger(Entity target) { return stagger(target, 0.5); }
+    public static double staggerTimeLeft(Entity target) { return Native.game(418, libId(target), 0, new double[] {}, ""); }
+    public static boolean isStunned(Entity target) { return Native.game(419, libId(target), 0, new double[] {}, "") != 0.0; }
+    public static double moveScale(Entity target) { return Native.game(420, libId(target), 0, new double[] {}, ""); }
+    public static double stat(Entity target, String stat_name) { return Native.game(421, libId(target), 0, new double[] {}, libJoin(stat_name)); }
+    public static boolean setStat(Entity target, String stat_name, double value) { return Native.game(422, libId(target), 0, new double[] {value}, libJoin(stat_name)) != 0.0; }
+    public static double addStat(Entity target, String stat_name, double amount) { return Native.game(423, libId(target), 0, new double[] {amount}, libJoin(stat_name)); }
+    public static double eat(Entity target, double food, double saturation) { return Native.game(424, libId(target), 0, new double[] {food, saturation}, ""); }
+    public static double eat(Entity target, double food) { return eat(target, food, 0.0); }
+    public static double drink(Entity target, double amount) { return Native.game(425, libId(target), 0, new double[] {amount}, ""); }
+    public static boolean useStamina(Entity target, double amount) { return Native.game(426, libId(target), 0, new double[] {amount}, "") != 0.0; }
+    public static double resistance(Entity target, String damage_type) { return Native.game(427, libId(target), 0, new double[] {}, libJoin(damage_type)); }
+    public static boolean setResistance(Entity target, String damage_type, double value) { return Native.game(428, libId(target), 0, new double[] {value}, libJoin(damage_type)) != 0.0; }
+    public static boolean setDamageFormula(Entity target, String formula) { return Native.game(429, libId(target), 0, new double[] {}, libJoin(formula)) != 0.0; }
+    public static boolean setEffectFormula(Entity target, String formula) { return Native.game(430, libId(target), 0, new double[] {}, libJoin(formula)) != 0.0; }
+    public static boolean isUnderwater(Entity target) { return Native.game(431, libId(target), 0, new double[] {}, "") != 0.0; }
+    public static boolean setHealthSetting(Entity target, String setting, String value) { return Native.game(432, libId(target), 0, new double[] {}, libJoin(setting, value)) != 0.0; }
+    public static String healthSetting(Entity target, String setting) { return Native.gameText(433, libId(target), 0, new double[] {}, libJoin(setting)); }
+    public static double convertUnits(double value, String from_unit, String to_unit) { return Native.game(434, 0, 0, new double[] {value}, libJoin(from_unit, to_unit)); }
+    public static double giveItem(Entity target, String item, double amount) { return Native.game(440, libId(target), 0, new double[] {amount}, libJoin(item)); }
+    public static double giveItem(Entity target, String item) { return giveItem(target, item, 1.0); }
+    public static double takeItem(Entity target, String item, double amount) { return Native.game(441, libId(target), 0, new double[] {amount}, libJoin(item)); }
+    public static double takeItem(Entity target, String item) { return takeItem(target, item, 1.0); }
+    public static double itemCount(Entity target, String item) { return Native.game(442, libId(target), 0, new double[] {}, libJoin(item)); }
+    public static Entity spawnItem(String item, double amount, double x, double y, double z, String look) { return new Entity(Native.gameEntity(443, 0, 0, new double[] {amount, x, y, z}, libJoin(item, look))); }
+    public static Entity spawnItem(String item, double amount, double x, double y, double z) { return spawnItem(item, amount, x, y, z, "detailed"); }
+    public static Entity dropItem(Entity target, String list, double index, double amount) { return new Entity(Native.gameEntity(444, libId(target), 0, new double[] {index, amount}, libJoin(list))); }
+    public static Entity dropItem(Entity target, String list, double index) { return dropItem(target, list, index, -1.0); }
+    public static Entity dropItem(Entity target, String list) { return dropItem(target, list, 0.0, -1.0); }
+    public static Entity dropItem(Entity target) { return dropItem(target, "items", 0.0, -1.0); }
+    public static boolean pickUp(Entity target, Entity pickup) { return Native.game(445, libId(target), libId(pickup), new double[] {}, "") != 0.0; }
+    public static Entity nearestPickup(Entity target, double radius) { return new Entity(Native.gameEntity(446, libId(target), 0, new double[] {radius}, "")); }
+    public static Entity nearestPickup(Entity target) { return nearestPickup(target, 2.5); }
+    public static boolean defineItem(String item, String setting, String value) { return Native.game(447, 0, 0, new double[] {}, libJoin(item, setting, value)) != 0.0; }
+    public static String itemSetting(String item, String setting) { return Native.gameText(448, 0, 0, new double[] {}, libJoin(item, setting)); }
+    public static boolean equipItem(Entity target, String list, double index) { return Native.game(449, libId(target), 0, new double[] {index}, libJoin(list)) != 0.0; }
+    public static boolean unequipItem(Entity target, String slot) { return Native.game(450, libId(target), 0, new double[] {}, libJoin(slot)) != 0.0; }
+    public static boolean holdItem(Entity target, String hand, String list, double index) { return Native.game(451, libId(target), 0, new double[] {index}, libJoin(hand, list)) != 0.0; }
+    public static String heldItem(Entity target, String hand) { return Native.gameText(452, libId(target), 0, new double[] {}, libJoin(hand)); }
+    public static String heldItem(Entity target) { return heldItem(target, "mainhand"); }
+    public static boolean holsterItem(Entity target, String hand) { return Native.game(453, libId(target), 0, new double[] {}, libJoin(hand)) != 0.0; }
+    public static boolean holsterItem(Entity target) { return holsterItem(target, "mainhand"); }
+    public static boolean drawItem(Entity target, String slot, String hand) { return Native.game(454, libId(target), 0, new double[] {}, libJoin(slot, hand)) != 0.0; }
+    public static boolean drawItem(Entity target, String slot) { return drawItem(target, slot, "mainhand"); }
+    public static boolean selectSlot(Entity target, double index) { return Native.game(455, libId(target), 0, new double[] {index}, "") != 0.0; }
+    public static boolean useItem(Entity target, String list, double index) { return Native.game(456, libId(target), 0, new double[] {index}, libJoin(list)) != 0.0; }
+    public static boolean useHeld(Entity target, boolean pressed, boolean held) { return Native.game(457, libId(target), 0, new double[] {pressed ? 1.0 : 0.0, held ? 1.0 : 0.0}, "") != 0.0; }
+    public static boolean useHeld(Entity target, boolean pressed) { return useHeld(target, pressed, false); }
+    public static boolean useHeld(Entity target) { return useHeld(target, true, false); }
+    public static boolean releaseHeld(Entity target) { return Native.game(458, libId(target), 0, new double[] {}, "") != 0.0; }
+    public static boolean reloadWeapon(Entity target) { return Native.game(459, libId(target), 0, new double[] {}, "") != 0.0; }
+    public static boolean moveItem(Entity target, String list, double index, Entity to, String to_list, double to_index, double amount) { return Native.game(460, libId(target), libId(to), new double[] {index, to_index, amount}, libJoin(list, to_list)) != 0.0; }
+    public static boolean moveItem(Entity target, String list, double index, Entity to, String to_list, double to_index) { return moveItem(target, list, index, to, to_list, to_index, -1.0); }
+    public static String inventorySetting(Entity target, String setting) { return Native.gameText(461, libId(target), 0, new double[] {}, libJoin(setting)); }
+    public static boolean setInventorySetting(Entity target, String setting, String value) { return Native.game(462, libId(target), 0, new double[] {}, libJoin(setting, value)) != 0.0; }
+    public static String slotItem(Entity target, String list, double index) { return Native.gameText(463, libId(target), 0, new double[] {index}, libJoin(list)); }
+    public static double slotAmount(Entity target, String list, double index) { return Native.game(464, libId(target), 0, new double[] {index}, libJoin(list)); }
+    public static void setAim(Entity target, double ox, double oy, double oz, double dx, double dy, double dz) { Native.game(465, libId(target), 0, new double[] {ox, oy, oz, dx, dy, dz}, ""); }
+    public static boolean setStance(Entity target, String stance) { return Native.game(466, libId(target), 0, new double[] {}, libJoin(stance)) != 0.0; }
+    public static void setAiming(Entity target, boolean on) { Native.game(467, libId(target), 0, new double[] {on ? 1.0 : 0.0}, ""); }
+    public static void setAiming(Entity target) { setAiming(target, true); }
+    public static void setBlocking(Entity target, boolean on) { Native.game(468, libId(target), 0, new double[] {on ? 1.0 : 0.0}, ""); }
+    public static void setBlocking(Entity target) { setBlocking(target, true); }
+    public static int fireWeapon(Entity target, String item, double ox, double oy, double oz, double dx, double dy, double dz, double power) { return (int) Native.game(469, libId(target), 0, new double[] {ox, oy, oz, dx, dy, dz, power}, libJoin(item)); }
+    public static int fireWeapon(Entity target, String item, double ox, double oy, double oz, double dx, double dy, double dz) { return fireWeapon(target, item, ox, oy, oz, dx, dy, dz, 1.0); }
+    public static boolean setBallistics(String mode) { return Native.game(470, 0, 0, new double[] {}, libJoin(mode)) != 0.0; }
+    public static double wornArmor(Entity target, String damage_type) { return Native.game(471, libId(target), 0, new double[] {}, libJoin(damage_type)); }
+    public static double wornArmor(Entity target) { return wornArmor(target, "physical"); }
+    public static Entity startWeather(String preset, double duration, double fade_in, double fade_out) { return new Entity(Native.gameEntity(472, 0, 0, new double[] {duration, fade_in, fade_out}, libJoin(preset))); }
+    public static Entity startWeather(String preset, double duration, double fade_in) { return startWeather(preset, duration, fade_in, 2.0); }
+    public static Entity startWeather(String preset, double duration) { return startWeather(preset, duration, 2.0, 2.0); }
+    public static Entity startWeather(String preset) { return startWeather(preset, -1.0, 2.0, 2.0); }
+    public static Entity startWeatherAt(String preset, double x, double y, double z, double radius, double duration, double fade_in, double fade_out) { return new Entity(Native.gameEntity(473, 0, 0, new double[] {x, y, z, radius, duration, fade_in, fade_out}, libJoin(preset))); }
+    public static Entity startWeatherAt(String preset, double x, double y, double z, double radius, double duration, double fade_in) { return startWeatherAt(preset, x, y, z, radius, duration, fade_in, 2.0); }
+    public static Entity startWeatherAt(String preset, double x, double y, double z, double radius, double duration) { return startWeatherAt(preset, x, y, z, radius, duration, 2.0, 2.0); }
+    public static Entity startWeatherAt(String preset, double x, double y, double z, double radius) { return startWeatherAt(preset, x, y, z, radius, -1.0, 2.0, 2.0); }
+    public static boolean stopWeather(Entity zone, double fade_out) { return Native.game(474, libId(zone), 0, new double[] {fade_out}, "") != 0.0; }
+    public static boolean stopWeather(Entity zone) { return stopWeather(zone, 2.0); }
+    public static int stopAllWeather(double fade_out) { return (int) Native.game(475, 0, 0, new double[] {fade_out}, ""); }
+    public static int stopAllWeather() { return stopAllWeather(2.0); }
+    public static boolean setClimate(Entity zone, String setting, String value) { return Native.game(476, libId(zone), 0, new double[] {}, libJoin(setting, value)) != 0.0; }
+    public static double temperatureAt(double x, double y, double z) { return Native.game(477, 0, 0, new double[] {x, y, z}, ""); }
+    public static double windXAt(double x, double y, double z) { return Native.game(478, 0, 0, new double[] {x, y, z}, ""); }
+    public static double windYAt(double x, double y, double z) { return Native.game(479, 0, 0, new double[] {x, y, z}, ""); }
+    public static double windZAt(double x, double y, double z) { return Native.game(480, 0, 0, new double[] {x, y, z}, ""); }
+    public static double rainAt(double x, double y, double z) { return Native.game(481, 0, 0, new double[] {x, y, z}, ""); }
+    public static double snowAt(double x, double y, double z) { return Native.game(482, 0, 0, new double[] {x, y, z}, ""); }
+    public static boolean isSheltered(double x, double y, double z) { return Native.game(483, 0, 0, new double[] {x, y, z}, "") != 0.0; }
 }

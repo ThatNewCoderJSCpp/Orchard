@@ -1,6 +1,7 @@
 #include <orchard/scripting.hpp>
 #include <orchard/graph.hpp>
 #include <orchard/script/orchard_api.h>
+#include <orchard/units.hpp>
 
 #include "script_detail.hpp"
 
@@ -690,6 +691,35 @@ const char* host_game_text(int op, orchard_entity entity, orchard_entity other, 
     auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
     const std::vector<std::string> t = split_text(text);
     auto chess = [&]() { return w.chess(static_cast<int>(arg(0, 0.0))); };
+    if (op == ORCHARD_GAME_LAST_DAMAGE_TYPE) {
+        out = r.gameplay().last_damage_type(e);
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_ITEM_SETTING) {
+        if (const ItemDef* def = r.gameplay().item_def(part(t, 0))) out = item_field(*def, part(t, 1));
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_HELD_ITEM) {
+        if (const ItemStack* st = r.gameplay().held(e, part(t, 0, "mainhand"))) out = st->item;
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_SLOT_ITEM) {
+        if (const ItemStack* st = r.gameplay().stack_at(e, part(t, 0), static_cast<int>(arg(0, 0.0)))) out = st->item;
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_INVENTORY_SETTING) {
+        if (Scene* sc = r.scene())
+            if (const Inventory* inv = sc->inventory(r.gameplay().inventory_owner(e))) out = inventory_field(*inv, part(t, 0));
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_HEALTH_SETTING) {
+        out = r.gameplay().health_setting(e, part(t, 0));
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_EFFECT_LIST) {
+        for (const std::string& name : r.gameplay().effects(e)) out += (out.empty() ? "" : ",") + name;
+        return out.c_str();
+    }
     switch (op) {
     case ORCHARD_GAME_SECURE_PICK:
     case ORCHARD_GAME_RANDOM_PICK: {
@@ -865,6 +895,145 @@ int host_game_values(int op, orchard_entity entity, orchard_entity other, const 
     return n;
 }
 
+double host_damage(int op, const Entity& e, const Entity& attacker, const double* args, int count, const char* text) {
+    Gameplay& g = rt().gameplay();
+    const Entity o = attacker == e ? Entity{} : attacker;
+    auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
+    const std::vector<std::string> t = split_text(text);
+    auto f = [&](int i, double fallback) { return static_cast<float>(arg(i, fallback)); };
+    auto b = [](bool v) { return v ? 1.0 : 0.0; };
+    switch (op) {
+    case ORCHARD_GAME_APPLY_DAMAGE: {
+        Damage d;
+        d.amount = f(0, 0.0);
+        d.type = part(t, 0, "physical");
+        return g.apply_damage(e, d);
+    }
+    case ORCHARD_GAME_APPLY_DAMAGE_FROM: {
+        Damage d;
+        d.attacker = o;
+        d.amount = f(0, 0.0);
+        d.type = part(t, 0, "physical");
+        d.knockback = Vec3{f(1, 0.0), f(2, 0.0), f(3, 0.0)};
+        d.stagger = f(4, -1.0);
+        return g.apply_damage(e, d);
+    }
+    case ORCHARD_GAME_DAMAGE_OVER_TIME:
+    case ORCHARD_GAME_DAMAGE_OVER_TIME_FROM: {
+        Damage d;
+        d.attacker = o;
+        d.amount = f(0, 0.0);
+        d.type = part(t, 0, "physical");
+        d.duration = arg(3, 0.0) != 0.0 ? -1.0f : std::max(0.001f, f(1, 5.0));
+        d.interval = std::max(0.0f, f(2, 1.0));
+        if (op == ORCHARD_GAME_DAMAGE_OVER_TIME_FROM) {
+            d.knockback = Vec3{f(4, 0.0), f(5, 0.0), f(6, 0.0)};
+            d.push = static_cast<PushRepeat>(std::clamp(static_cast<int>(arg(7, 0.0)), 0, 2));
+            d.stagger = f(8, -1.0);
+            d.stack = arg(9, 0.0) != 0.0;
+            d.key = part(t, 1);
+        }
+        return g.apply_damage(e, d);
+    }
+    case ORCHARD_GAME_STOP_DAMAGE: return b(g.stop_damage(e, part(t, 0)));
+    case ORCHARD_GAME_DAMAGE_OVER_TIME_COUNT: return g.damage_over_time_count(e);
+    case ORCHARD_GAME_APPLY_EFFECT: return b(g.apply_effect(e, part(t, 0), f(0, 0.0), f(1, 1.0)));
+    case ORCHARD_GAME_APPLY_EFFECT_FOREVER: return b(g.apply_effect(e, part(t, 0), -1.0f, f(0, 1.0)));
+    case ORCHARD_GAME_APPLY_EFFECT_FROM: return b(g.apply_effect(e, part(t, 0), f(0, 0.0), f(1, 1.0), o));
+    case ORCHARD_GAME_REMOVE_EFFECT: return b(g.remove_effect(e, part(t, 0)));
+    case ORCHARD_GAME_CLEAR_EFFECTS: return g.clear_effects(e);
+    case ORCHARD_GAME_HAS_EFFECT: return b(g.effect_stacks(e, part(t, 0)) > 0);
+    case ORCHARD_GAME_EFFECT_STACKS: return g.effect_stacks(e, part(t, 0));
+    case ORCHARD_GAME_EFFECT_TIME_LEFT: return g.effect_time_left(e, part(t, 0));
+    case ORCHARD_GAME_DEFINE_EFFECT: return b(g.set_effect_value(part(t, 0), part(t, 1), part(t, 2)));
+    case ORCHARD_GAME_STAGGER: return b(g.stagger(e, f(0, 0.5)));
+    case ORCHARD_GAME_STAGGER_TIME_LEFT: return g.staggered(e);
+    case ORCHARD_GAME_IS_STUNNED: return b(g.stunned(e));
+    case ORCHARD_GAME_MOVE_SCALE: return g.move_scale(e);
+    case ORCHARD_GAME_STAT: return g.stat(e, part(t, 0));
+    case ORCHARD_GAME_SET_STAT: return b(g.set_stat(e, part(t, 0), f(0, 0.0)));
+    case ORCHARD_GAME_ADD_STAT: return g.add_stat(e, part(t, 0), f(0, 0.0));
+    case ORCHARD_GAME_EAT: return g.eat(e, f(0, 0.0), f(1, 0.0));
+    case ORCHARD_GAME_DRINK: return g.drink(e, f(0, 0.0));
+    case ORCHARD_GAME_USE_STAMINA: return b(g.use_stamina(e, f(0, 0.0)));
+    case ORCHARD_GAME_RESISTANCE: return g.resistance(e, part(t, 0));
+    case ORCHARD_GAME_SET_RESISTANCE: return b(g.set_resistance(e, part(t, 0), f(0, 0.0)));
+    case ORCHARD_GAME_SET_DAMAGE_FORMULA: return b(g.set_damage_formula(e, part(t, 0)));
+    case ORCHARD_GAME_SET_EFFECT_FORMULA: return b(g.set_effect_formula(e, part(t, 0)));
+    case ORCHARD_GAME_IS_UNDERWATER: return b(g.underwater(e));
+    case ORCHARD_GAME_SET_HEALTH_SETTING: return b(g.set_health_setting(e, part(t, 0), part(t, 1)));
+    case ORCHARD_GAME_CONVERT_UNITS: return convert_units(arg(0, 0.0), part(t, 0), part(t, 1)).value_or(arg(0, 0.0));
+    default: return 0.0;
+    }
+}
+
+double host_items(int op, const Entity& e, const Entity& o, const double* args, int count, const char* text) {
+    Gameplay& g = rt().gameplay();
+    Scene* s = rt().scene();
+    auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
+    const std::vector<std::string> t = split_text(text);
+    auto f = [&](int i, double fallback) { return static_cast<float>(arg(i, fallback)); };
+    auto i32 = [&](int i, double fallback) { return static_cast<int>(std::floor(arg(i, fallback))); };
+    auto v3 = [&](int i) { return Vec3{f(i, 0.0), f(i + 1, 0.0), f(i + 2, 0.0)}; };
+    auto b = [](bool v) { return v ? 1.0 : 0.0; };
+    switch (op) {
+    case ORCHARD_GAME_GIVE_ITEM: return g.give(e, part(t, 0), f(0, 1.0));
+    case ORCHARD_GAME_TAKE_ITEM: return g.take(e, part(t, 0), f(0, 1.0));
+    case ORCHARD_GAME_ITEM_COUNT: return g.count(e, part(t, 0));
+    case ORCHARD_GAME_PICK_UP: return b(g.pick_up(e, o));
+    case ORCHARD_GAME_DEFINE_ITEM: return b(g.define_item(part(t, 0), part(t, 1), part(t, 2)));
+    case ORCHARD_GAME_EQUIP_ITEM: return b(g.equip(e, part(t, 0), i32(0, 0.0)));
+    case ORCHARD_GAME_UNEQUIP_ITEM: return b(g.unequip(e, part(t, 0)));
+    case ORCHARD_GAME_HOLD_ITEM: return b(g.hold(e, part(t, 0, "mainhand"), part(t, 1), i32(0, 0.0)));
+    case ORCHARD_GAME_HOLSTER_ITEM: return b(g.holster(e, part(t, 0, "mainhand")));
+    case ORCHARD_GAME_DRAW_ITEM: return b(g.draw(e, part(t, 0), part(t, 1, "mainhand")));
+    case ORCHARD_GAME_SELECT_SLOT: return b(g.select_slot(e, i32(0, 0.0)));
+    case ORCHARD_GAME_USE_ITEM: return b(g.use_item(e, part(t, 0), i32(0, 0.0)));
+    case ORCHARD_GAME_USE_HELD: return b(g.use_held(e, arg(0, 1.0) != 0.0, arg(1, 0.0) != 0.0, 1.0f / 60.0f));
+    case ORCHARD_GAME_RELEASE_HELD: return b(g.release_held(e));
+    case ORCHARD_GAME_RELOAD_WEAPON: return b(g.reload(e));
+    case ORCHARD_GAME_MOVE_ITEM: return b(g.move_item(e, part(t, 0), i32(0, 0.0), o.valid() ? o : e, part(t, 1), i32(1, 0.0), f(2, -1.0)));
+    case ORCHARD_GAME_SET_INVENTORY_SETTING: {
+        if (!s) return 0.0;
+        const Entity owner = g.inventory_owner(e);
+        Inventory* inv = s->inventory(owner);
+        if (!inv) inv = &s->add_inventory(owner.valid() ? owner : e);
+        return b(set_inventory_field(*inv, part(t, 0), part(t, 1)));
+    }
+    case ORCHARD_GAME_SLOT_AMOUNT: {
+        const ItemStack* st = g.stack_at(e, part(t, 0), i32(0, 0.0));
+        return st ? st->amount : 0.0;
+    }
+    case ORCHARD_GAME_SET_AIM: g.set_aim(e, v3(0), v3(3)); return 0.0;
+    case ORCHARD_GAME_SET_STANCE: return b(g.set_stance(e, part(t, 0)));
+    case ORCHARD_GAME_SET_AIMING: g.set_aiming(e, arg(0, 1.0) != 0.0); return 0.0;
+    case ORCHARD_GAME_SET_BLOCKING: g.set_blocking(e, arg(0, 1.0) != 0.0); return 0.0;
+    case ORCHARD_GAME_FIRE_WEAPON: {
+        const std::string id = part(t, 0);
+        const ItemDef* def = id.empty() ? g.held_def(e) : g.item_def(id);
+        return def ? g.fire(e, v3(0), v3(3), *def, f(6, 1.0)) : 0.0;
+    }
+    case ORCHARD_GAME_SET_BALLISTICS: {
+        const auto mode = parse_ballistics(part(t, 0));
+        if (!mode) return 0.0;
+        g.set_ballistics(*mode);
+        return 1.0;
+    }
+    case ORCHARD_GAME_WORN_ARMOR: return g.worn_armor(e, part(t, 0, "physical"));
+    case ORCHARD_GAME_STOP_WEATHER: return b(g.stop_weather(e, f(0, 2.0)));
+    case ORCHARD_GAME_STOP_ALL_WEATHER: return g.stop_all_weather(f(0, 2.0));
+    case ORCHARD_GAME_SET_CLIMATE: return b(g.set_climate(e, part(t, 0), part(t, 1)));
+    case ORCHARD_GAME_TEMPERATURE_AT: return g.climate_at(v3(0)).temperature;
+    case ORCHARD_GAME_WIND_X_AT: return g.climate_at(v3(0)).wind.x;
+    case ORCHARD_GAME_WIND_Y_AT: return g.climate_at(v3(0)).wind.y;
+    case ORCHARD_GAME_WIND_Z_AT: return g.climate_at(v3(0)).wind.z;
+    case ORCHARD_GAME_RAIN_AT: return g.climate_at(v3(0)).rain;
+    case ORCHARD_GAME_SNOW_AT: return g.climate_at(v3(0)).snow;
+    case ORCHARD_GAME_IS_SHELTERED: return b(g.sheltered(v3(0)));
+    default: return 0.0;
+    }
+}
+
 double host_game(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text) {
     if (!g_runtime) return 0.0;
     Gameplay& g = rt().gameplay();
@@ -872,6 +1041,8 @@ double host_game(int op, orchard_entity entity, orchard_entity other, const doub
     const Entity e = entity_of(entity), o = entity_of(other);
     auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
     const std::string tag = text ? std::string(text) : std::string();
+    if (op >= ORCHARD_GAME_APPLY_DAMAGE && op <= ORCHARD_GAME_CONVERT_UNITS) return host_damage(op, e, o, args, count, text);
+    if (op >= ORCHARD_GAME_GIVE_ITEM && op <= ORCHARD_GAME_IS_SHELTERED) return host_items(op, e, o, args, count, text);
     switch (op) {
     case ORCHARD_GAME_HEALTH: return g.health(e);
     case ORCHARD_GAME_MAX_HEALTH: return g.max_health(e);
@@ -929,6 +1100,14 @@ orchard_entity host_game_entity(int op, orchard_entity entity, orchard_entity ot
     }
     case ORCHARD_GAME_AI_TARGET: return id_of(rt().ai().target(e));
     case ORCHARD_GAME_AI_MAIN_PLAYER: return id_of(rt().ai().main_player());
+    case ORCHARD_GAME_SPAWN_ITEM: {
+        const std::vector<std::string> t = split_text(text);
+        return id_of(g.spawn_item(part(t, 0), static_cast<float>(arg(0, 1.0)), Vec3{static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0)), static_cast<float>(arg(3, 0.0))}, part(t, 1, "detailed")));
+    }
+    case ORCHARD_GAME_DROP_ITEM: return id_of(g.drop_item(e, split_text(text).empty() ? std::string("items") : part(split_text(text), 0, "items"), static_cast<int>(arg(0, 0.0)), static_cast<float>(arg(1, -1.0))));
+    case ORCHARD_GAME_NEAREST_PICKUP: return id_of(g.nearest_pickup(e, static_cast<float>(arg(0, 2.5))));
+    case ORCHARD_GAME_START_WEATHER: return id_of(g.start_weather(part(split_text(text), 0), static_cast<float>(arg(0, -1.0)), static_cast<float>(arg(1, 2.0)), static_cast<float>(arg(2, 2.0))));
+    case ORCHARD_GAME_START_WEATHER_AT: return id_of(g.start_weather(part(split_text(text), 0), static_cast<float>(arg(4, -1.0)), static_cast<float>(arg(5, 2.0)), static_cast<float>(arg(6, 2.0)), Vec3{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))}, static_cast<float>(arg(3, 10.0))));
     default: return 0;
     }
 }

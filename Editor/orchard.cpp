@@ -2,6 +2,8 @@
 #include <orchard/scripting.hpp>
 #include <orchard/effects.hpp>
 #include <orchard/solid.hpp>
+#include <orchard/units.hpp>
+#include <orchard/hud.hpp>
 #include <xylem/xylem.hpp>
 #include <chlorophyll/chlorophyll.hpp>
 
@@ -560,6 +562,13 @@ private:
             m_light_dirty = true;
         }
         if (m_session.playing() && pref("play.use_camera", "1") == "1") drive_player_camera(static_cast<float>(f.dt));
+        if (m_session.playing()) play_tick(static_cast<float>(f.dt));
+        else if (m_inv_open || m_bags_open || !m_play_down.empty()) {
+            close_screen();
+            m_play_down.clear();
+            m_use_down = false;
+        }
+        if (m_session.playing() || ++m_item_model_check % 15 == 0) ensure_item_models();
         smooth_bodies_for_drawing();
         if (m_session.playing() && pref("play.use_camera", "1") == "1") follow_game_camera();
         for (const orchard::ParticleCommand& c : m_session.scripts().take_particle_commands()) m_gpu.particles().command(c.entity, c.action, c.count);
@@ -579,6 +588,7 @@ private:
         m_gpu.set_texture_folder(m_project ? m_project->folder() : std::string());
         m_gpu.set_also_selected(m_also);
         m_gpu.draw(f, m_scene, m_selected, m_view, m_session.playing(), seconds);
+        if (m_session.playing()) draw_play_hud(f);
         unsmooth_bodies();
         if (m_gpu.terrain().stats().pending > 0) redraw();
     }
@@ -1687,8 +1697,62 @@ private:
         return out;
     }
 
+    static std::optional<orchard::UnitKind> unit_kind_of(const std::string& key) {
+        using K = orchard::UnitKind;
+        static const std::map<std::string, K> keys = {
+            {"survival.carried", K::weight}, {"survival.carry_limit", K::weight}, {"inventory.max_weight", K::weight},
+            {"climate.wind_speed", K::speed}, {"climate.gust", K::speed}, {"climate.size_x", K::distance}, {"climate.size_y", K::distance}, {"climate.size_z", K::distance}, {"climate.blend", K::distance},
+            {"survival.temperature", K::temperature}, {"survival.ambient", K::temperature}, {"survival.comfort_low", K::temperature}, {"survival.comfort_high", K::temperature},
+            {"survival.insulation", K::temperature_change}, {"survival.cold_damage", K::per_degree}, {"survival.heat_damage", K::per_degree},
+            {"camera.move_speed", K::speed}, {"camera.sprint_speed", K::speed}, {"camera.jump_speed", K::speed}, {"agent.walk_speed", K::speed}, {"agent.run_speed", K::speed}, {"health.poise", K::speed},
+            {"agent.sight_range", K::distance}, {"agent.attack_range", K::distance}, {"agent.eye_height", K::distance}, {"agent.fly_height", K::distance}, {"agent.radius", K::distance}, {"agent.height", K::distance}, {"agent.step", K::distance}, {"agent.max_drop", K::distance},
+            {"camera.eye_height", K::distance}, {"camera.view_height", K::distance}, {"camera.near_clip", K::distance}, {"camera.far_clip", K::distance}, {"survival.head_height", K::distance}, {"health.explode_radius", K::distance},
+            {"sound.range", K::distance}, {"sound.min_distance", K::distance}, {"light.radius", K::distance}, {"light.length", K::distance}, {"light.width", K::distance}, {"light.height", K::distance},
+            {"agent.attack_knockback", K::impulse},
+        };
+        if (const auto it = keys.find(key); it != keys.end()) return it->second;
+        if (key.rfind("collider:", 0) == 0 && key.size() > 5 && key.compare(key.size() - 5, 5, ":mass") == 0) return K::weight;
+        return std::nullopt;
+    }
+
+    static std::string unit_pref_key(orchard::UnitKind k) {
+        using K = orchard::UnitKind;
+        if (k == K::temperature_change || k == K::per_degree) k = K::temperature;
+        return std::string("units.") + orchard::to_string(k);
+    }
+
+    std::string unit_of(orchard::UnitKind k) const {
+        const std::string u = pref(unit_pref_key(k), orchard::units_of(k).front().name);
+        return orchard::find_unit(k, u) ? u : std::string(orchard::units_of(k).front().name);
+    }
+
+    std::string unit_field(orchard::UnitKind k, const std::string& label) const {
+        std::vector<std::pair<std::string, std::string>> options;
+        for (const orchard::UnitDef& u : orchard::units_of(k)) options.emplace_back(u.name, u.label);
+        return field(unit_pref_key(k), label, "select", unit_of(k), options_of(options), "Only changes how the editor shows these numbers; the game and scripts always use metres, kilograms, seconds and Celsius.");
+    }
+
     std::string field(const std::string& key, const std::string& label, const std::string& kind, const std::string& value, const std::string& extra = std::string(), const std::string& help = std::string()) const {
-        return "field\t" + key + "\t" + clean(label) + "\t" + kind + "\t" + clean(value) + "\t" + clean(extra) + "\t" + clean(help) + "\n";
+        std::string shown = value, named = label;
+        if (kind == "float")
+            if (const std::optional<orchard::UnitKind> uk = unit_kind_of(key)) {
+                using K = orchard::UnitKind;
+                const std::string unit = unit_of(*uk);
+                shown = number(static_cast<float>(orchard::from_si(std::atof(value.c_str()), *uk, unit)));
+                const std::string si = *uk == K::weight ? "kg" : *uk == K::speed ? "m/s" : *uk == K::distance ? "m" : *uk == K::impulse ? "N\u00B7s" : *uk == K::per_degree ? "" : "C";
+                const std::string to = orchard::unit_short(*uk, unit);
+                bool done = false;
+                for (const std::string& open : {std::string("(") + si + ")", std::string("(") + si + ","}) {
+                    const std::size_t at = si.empty() ? std::string::npos : named.find(open);
+                    if (at != std::string::npos) {
+                        named.replace(at + 1, si.size(), to);
+                        done = true;
+                        break;
+                    }
+                }
+                if (!done) named += " (" + to + ")";
+            }
+        return "field\t" + key + "\t" + clean(named) + "\t" + kind + "\t" + clean(shown) + "\t" + clean(extra) + "\t" + clean(help) + "\n";
     }
 
     std::string inspect(orchard::Entity e) const {
@@ -1804,6 +1868,7 @@ private:
                 const float cmass = orchard::collider_mass(c, wscale, m_scene.dimension());
                 const float cdensity = c.locked(orchard::collider_lock_mass) && c.mass > 0.0f ? cmass / std::max(1e-9f, orchard::collider_density_unit(m_scene.dimension()) * orchard::collider_volume(c, wscale, m_scene.dimension())) : c.density;
                 out += field(base + "name", "Name", "string", c.name);
+                if (i == 0) out += unit_field(orchard::UnitKind::weight, "Weight unit");
                 out += field(base + "mass", "Mass (kg)", "float", number(cmass), "0.1");
                 out += field(base + "density", flat ? "Density (kg/m\u00B2)" : "Density (\u00D7 water)", "float", number(cdensity), "0.1");
                 out += field(base + "lock_mass", "Lock mass", "bool", yesno(c.locked(orchard::collider_lock_mass)));
@@ -1888,6 +1953,8 @@ private:
             out += field("camera.active", "Player view (Play looks through it)", "bool", yesno(cam->active));
             out += field("camera.control", "Built-in controls", "select", orchard::to_string(cam->control), options_of({{"none", "None (scripts move it)"}, {"fly", "Fly (W A S D, Q / E, drag to look)"}, {"walk", "Walk (W A S D, Space jumps, drag to look)"}}));
             if (cam->control != orchard::CameraControl::none) {
+                out += unit_field(orchard::UnitKind::speed, "Speed unit");
+                out += unit_field(orchard::UnitKind::distance, "Distance unit");
                 out += field("camera.move_speed", "Speed (m/s)", "float", number(cam->move_speed), "0.5");
                 out += field("camera.sprint_speed", "Shift speed (m/s, 0 = 3x speed)", "float", number(cam->sprint_speed), "0.5");
                 out += field("camera.mouse_look", "Drag to look around", "bool", yesno(cam->mouse_look));
@@ -1933,6 +2000,218 @@ private:
                 out += field("health.explode_damage", "Blast damage", "float", number(hp->explode_damage), "5");
             }
             if (hp->on_death == orchard::DeathAction::respawn) out += field("health.respawn_delay", "Comes back after (s)", "float", number(hp->respawn_delay), "0.5");
+            out += unit_field(orchard::UnitKind::speed, "Speed unit");
+            out += unit_field(orchard::UnitKind::distance, "Distance unit");
+            out += field("health.armor", "Armor", "float", number(hp->armor), "1");
+            {
+                std::vector<std::pair<std::string, std::string>> modes;
+                for (const std::string& m : orchard::armor_modes()) modes.emplace_back(m, orchard::armor_mode_label(m));
+                out += field("health.armor_mode", "How armor works", "select", hp->armor_mode, options_of(modes));
+            }
+            if (hp->armor_mode == "diminishing") out += field("health.armor_constant", "Armor that halves damage", "float", number(hp->armor_constant), "5");
+            if (hp->armor_mode == "percent") out += field("health.armor_cap", "Blocks at most (0 to 1)", "slider", number(hp->armor_cap), "0.05");
+            if (hp->armor_mode == "flat") out += field("health.armor_min", "Always lets through at least (0 to 1 of the hit)", "slider", number(hp->armor_min), "0.05");
+            if (hp->armor_mode == "formula") out += field("health.armor_formula", "Armor formula (damage left after armor)", "string", hp->armor_formula, std::string(), "Uses amount, armor, constant, health, max_health, shield, max_shield, resist, knockback, distance, is_melee, has_poison, random(a, b), min, max, clamp, pow. Example: max(amount - armor * 0.5, amount * 0.2)");
+            if (hp->armor_mode != "none") {
+                out += field("health.armor_types", "Armor blocks these damage types (comma separated, all = everything but true)", "string", hp->armor_types);
+                out += field("health.armor_wear", "Armor lost per damage it blocks", "float", number(hp->armor_wear), "0.01");
+            }
+            out += field("health.max_shield", "Shield (soaks up damage before health, 0 = none)", "float", number(hp->max_shield), "5");
+            if (hp->max_shield > 0.0f) {
+                out += field("health.shield", "Shield now", "float", number(hp->shield), "5");
+                out += field("health.shield_regen", "Shield recharges per second", "float", number(hp->shield_regen), "1");
+                out += field("health.shield_delay", "Starts recharging after (s without damage)", "float", number(hp->shield_delay), "0.5");
+                out += field("health.shield_absorb", "Share of each hit the shield takes (0 to 1)", "slider", number(hp->shield_absorb), "0.05");
+                out += field("health.shield_types", "Shield takes these damage types (empty = all but true)", "string", hp->shield_types);
+                out += field("health.shield_formula", "Shield formula (how much it soaks up, empty = share above)", "string", hp->shield_formula, std::string(), "Uses the same names as the armor formula, with amount being the hit after armor. Example: amount * (0.5 + 0.5 * shield_fraction)");
+            }
+            out += field("health.resist", "Resistances (type=amount, 0.5 = half, 1 = immune, -0.5 = weak)", "string", orchard::resist_text(hp->resist), std::string(), "Works for damage types (fire, poison, cold, bleed, shock, explosion, ...) and for effect names (stunned, frozen, ...), which also shortens how long they last.");
+            out += field("health.poise", "Staggers when knocked faster than (m/s)", "float", number(hp->poise), "0.1");
+            out += field("health.stagger_scale", "Stagger time multiplier (0 = never staggers)", "float", number(hp->stagger_scale), "0.1");
+            out += field("health.damage_formula", "Damage formula (empty = normal)", "string", hp->damage_formula, std::string(), "Changes every hit after armor and resistances. Uses amount, base, health, max_health, armor, resist, over_time, staggered, knockback, distance, is_fire, has_poison, random(a, b), min, max, clamp. Example: amount * (1 + is_fire)");
+            out += field("health.effect_formula", "Effect length formula (empty = normal)", "string", hp->effect_formula, std::string(), "Changes how long effects last. Uses duration, strength, stacks, resist, health, max_health, forever, is_poison. Return 0 to block the effect.");
+        }
+        const orchard::Survival* sv = m_scene.survival(e);
+        out += field("has_survival", "Has survival stats (stamina, hunger, thirst, breath, temperature)", "bool", yesno(sv != nullptr));
+        if (sv) {
+            out += field("survival.stamina_on", "Stamina (sprinting and jumping use it)", "bool", yesno(sv->stamina_on));
+            if (sv->stamina_on) {
+                out += field("survival.stamina", "Stamina", "float", number(sv->stamina), "5");
+                out += field("survival.max_stamina", "Max stamina", "float", number(sv->max_stamina), "5");
+                out += field("survival.stamina_regen", "Recovers per second", "float", number(sv->stamina_regen), "1");
+                out += field("survival.stamina_delay", "Starts recovering after (s)", "float", number(sv->stamina_delay), "0.1");
+                out += field("survival.sprint_cost", "Sprinting uses per second", "float", number(sv->sprint_cost), "1");
+                out += field("survival.jump_cost", "Each jump uses", "float", number(sv->jump_cost), "1");
+                out += field("survival.sprint_min", "Needs this much to start sprinting", "float", number(sv->sprint_min), "1");
+            }
+            out += field("survival.hunger_on", "Hunger", "bool", yesno(sv->hunger_on));
+            if (sv->hunger_on) {
+                out += field("survival.hunger", "Food", "float", number(sv->hunger), "1");
+                out += field("survival.max_hunger", "Max food", "float", number(sv->max_hunger), "1");
+                out += field("survival.saturation", "Saturation (used up before food)", "float", number(sv->saturation), "1");
+                out += field("survival.idle_exhaustion", "Tiredness per second resting (4 = one food)", "float", number(sv->idle_exhaustion), "0.001");
+                out += field("survival.sprint_exhaustion", "Extra tiredness per second sprinting", "float", number(sv->sprint_exhaustion), "0.01");
+                out += field("survival.jump_exhaustion", "Tiredness per jump", "float", number(sv->jump_exhaustion), "0.01");
+                out += field("survival.fed_level", "Heals while food is at least", "float", number(sv->fed_level), "1");
+                out += field("survival.fed_heal", "Heals per second when fed", "float", number(sv->fed_heal), "0.1");
+                out += field("survival.heal_exhaustion", "Tiredness per health healed", "float", number(sv->heal_exhaustion), "0.5");
+                out += field("survival.starve_damage", "Starving damage per second", "float", number(sv->starve_damage), "0.1");
+            }
+            out += field("survival.thirst_on", "Thirst", "bool", yesno(sv->thirst_on));
+            if (sv->thirst_on) {
+                out += field("survival.thirst", "Water", "float", number(sv->thirst), "5");
+                out += field("survival.max_thirst", "Max water", "float", number(sv->max_thirst), "5");
+                out += field("survival.thirst_rate", "Water used per second", "float", number(sv->thirst_rate), "0.01");
+                out += field("survival.sprint_thirst", "Sprinting multiplies that by", "float", number(sv->sprint_thirst), "0.1");
+                out += field("survival.dehydrate_damage", "Thirst damage per second", "float", number(sv->dehydrate_damage), "0.1");
+            }
+            out += field("survival.breath_on", "Breath (drowns under water)", "bool", yesno(sv->breath_on));
+            if (sv->breath_on) {
+                out += field("survival.max_breath", "Holds breath for (s)", "float", number(sv->max_breath), "1");
+                out += field("survival.breath_recover", "Breath back per second", "float", number(sv->breath_recover), "0.5");
+                out += field("survival.drown_damage", "Drowning damage per second", "float", number(sv->drown_damage), "1");
+                out += unit_field(orchard::UnitKind::distance, "Distance unit");
+                out += field("survival.head_height", "Head height (m)", "float", number(sv->head_height), "0.1");
+            }
+            out += field("survival.temperature_on", "Body temperature", "bool", yesno(sv->temperature_on));
+            if (sv->temperature_on) {
+                out += unit_field(orchard::UnitKind::temperature, "Temperature unit");
+                out += field("survival.temperature", "Body temperature (C)", "float", number(sv->temperature), "0.5");
+                out += field("survival.ambient", "Air temperature (C)", "float", number(sv->ambient), "1");
+                out += field("survival.insulation", "Clothing warmth (C)", "float", number(sv->insulation), "1");
+                out += field("survival.comfort_low", "Gets cold below (C)", "float", number(sv->comfort_low), "1");
+                out += field("survival.comfort_high", "Gets hot above (C)", "float", number(sv->comfort_high), "1");
+                out += field("survival.exposure", "How fast the body cools or heats", "float", number(sv->exposure), "0.005");
+                out += field("survival.cold_damage", "Cold damage per second per degree of hypothermia (below 35 C, 95 F)", "float", number(sv->cold_damage), "0.1");
+                out += field("survival.heat_damage", "Heat damage per second per degree of heatstroke (above 40 C, 104 F)", "float", number(sv->heat_damage), "0.1");
+            }
+            out += field("survival.weight_on", "Weight and encumbrance", "bool", yesno(sv->weight_on));
+            if (sv->weight_on) {
+                out += unit_field(orchard::UnitKind::weight, "Weight unit");
+                out += field("survival.carry_limit", "Can carry", "float", number(sv->carry_limit), "1");
+                out += field("survival.carried", "Extra weight carried (scripts change this)", "float", number(sv->carried), "1");
+                out += field("survival.count_items", "Also count children tagged item", "bool", yesno(sv->count_items));
+                out += field("survival.light_load", "No slowdown below (share of what it can carry)", "slider", number(sv->light_load), "0.05");
+                out += field("survival.heavy_speed", "Speed when fully loaded (0 to 1)", "slider", number(sv->heavy_speed), "0.05");
+                out += field("survival.overload", "Can't move at all at (share of what it can carry, 1.5 = 150%)", "float", number(sv->overload), "0.05");
+                out += field("survival.sprint_load", "Can't sprint above (share)", "float", number(sv->sprint_load), "0.05");
+                out += field("survival.load_stamina", "Extra stamina used when fully loaded (1 = double)", "float", number(sv->load_stamina), "0.1");
+            }
+        }
+
+        group("Items and inventory");
+        const orchard::Inventory* inv = m_scene.inventory(e);
+        out += field("has_inventory", "Has an inventory (players, chests, backpacks, NPCs)", "bool", yesno(inv != nullptr));
+        if (inv) {
+            auto iv = [&](const char* k) { return orchard::inventory_field(*inv, k); };
+            std::vector<std::pair<std::string, std::string>> presets, styles, anchors, measures, modes, ball;
+            for (const std::string& p : orchard::inventory_presets()) presets.emplace_back(p, orchard::inventory_preset_label(p));
+            for (orchard::InventoryStyle st : orchard::inventory_styles()) styles.emplace_back(orchard::to_string(st), orchard::inventory_style_label(st));
+            for (const std::string& a : orchard::hud_anchors()) anchors.emplace_back(a, a);
+            measures = {{"count", "Count (whole items, like Minecraft)"}, {"weight", "Weight (stack holds up to this much weight)"}, {"volume", "Volume (stack holds up to this many litres)"}};
+            modes = {{"beside", "Shown next to the inventory"}, {"own_key", "Opened with their own key"}, {"both", "Both"}};
+            ball = {{"", "Use the game's mode"}};
+            for (orchard::Ballistics b : orchard::ballistics_modes()) ball.emplace_back(orchard::to_string(b), orchard::ballistics_label(b));
+            out += field("inventory.enabled", "Inventory on", "bool", iv("enabled"));
+            out += field("inventory.preset", "Works like", "select", inv->preset, options_of(presets), "Picking one fills in every setting below; change any of them afterwards.");
+            out += field("inventory.style", "Style", "select", iv("style"), options_of(styles));
+            out += field("inventory.title", "Title", "string", inv->title);
+            if (inv->style != orchard::InventoryStyle::weight && inv->style != orchard::InventoryStyle::volume) {
+                out += field("inventory.columns", "Columns", "float", iv("columns"), "1");
+                out += field("inventory.rows", "Rows", "float", iv("rows"), "1");
+            }
+            out += unit_field(orchard::UnitKind::weight, "Weight unit");
+            out += field("inventory.max_weight", "Can carry at most (0 = no limit)", "float", iv("max_weight"), "1");
+            out += field("inventory.max_volume", "Holds at most litres (0 = no limit)", "float", iv("max_volume"), "1");
+            out += field("inventory.stack_measure", "Stacks are measured by", "select", inv->stack_measure, options_of(measures));
+            out += field("inventory.stack_limit", "Stack limit (0 = each item's own, never below 0)", "float", iv("stack_limit"), "1", "With count it is how many fit in one slot. With weight or volume it is how much weight or how many litres fit. Fractions are allowed unless whole counts is on.");
+            out += field("inventory.whole_counts", "Whole counts only (no 0.5 of an item)", "bool", iv("whole_counts"));
+            out += field("inventory.count_weight", "Items count towards carry weight", "bool", iv("count_weight"));
+            out += field("inventory.show_weight", "Show weight and volume on screen", "bool", iv("show_weight"));
+            out += field("inventory.open_keys", "Opens with (keys, comma separated, empty = never)", "string", inv->open_keys);
+            out += field("inventory.anchor", "Screen position", "select", inv->anchor, options_of(anchors));
+            out += field("inventory.offset_x", "Move right (px)", "float", iv("offset_x"), "4");
+            out += field("inventory.offset_y", "Move down (px)", "float", iv("offset_y"), "4");
+            out += field("inventory.cell", "Cell size (px)", "float", iv("cell"), "2");
+            out += field("inventory.padding", "Gap between cells (px)", "float", iv("padding"), "1");
+            out += field("inventory.opacity", "Background opacity (0 to 1)", "slider", iv("opacity"), "0.05");
+            out += field("inventory.hotbar", "Hotbar", "bool", iv("hotbar"));
+            if (inv->hotbar) {
+                out += field("inventory.hotbar_slots", "Hotbar slots", "float", iv("hotbar_slots"), "1");
+                out += field("inventory.hotbar_own", "Hotbar has its own slots (off = shows the first inventory row)", "bool", iv("hotbar_own"));
+                out += field("inventory.hotbar_anchor", "Hotbar position", "select", inv->hotbar_anchor, options_of(anchors));
+                out += field("inventory.hotbar_x", "Hotbar move right (px)", "float", iv("hotbar_x"), "4");
+                out += field("inventory.hotbar_y", "Hotbar move down (px)", "float", iv("hotbar_y"), "4");
+                out += field("inventory.hotbar_cell", "Hotbar cell size (px)", "float", iv("hotbar_cell"), "2");
+                out += field("inventory.hotbar_padding", "Hotbar gap (px)", "float", iv("hotbar_padding"), "1");
+                out += field("inventory.hotbar_vertical", "Vertical hotbar", "bool", iv("hotbar_vertical"));
+                out += field("inventory.hotbar_keys", "Slot keys (comma separated, in order)", "string", inv->hotbar_keys);
+                out += field("inventory.hotbar_scroll", "Mouse wheel changes slot", "bool", iv("hotbar_scroll"));
+            }
+            out += field("inventory.equipment", "Equipment slots (clothing, armor, trinkets, holsters)", "bool", iv("equipment"));
+            out += field("inventory.require_holsters", "Putting away a weapon needs a holster, sling or big enough bag", "bool", iv("require_holsters"));
+            out += field("inventory.container_mode", "Worn bags and rigs", "select", inv->container_mode, options_of(modes));
+            if (inv->container_mode != "beside") out += field("inventory.container_keys", "Bags open with", "string", inv->container_keys);
+            out += field("inventory.use_keys", "Use / attack", "string", inv->use_keys);
+            out += field("inventory.alt_keys", "Aim / block / offhand", "string", inv->alt_keys);
+            out += field("inventory.reload_keys", "Reload", "string", inv->reload_keys);
+            out += field("inventory.interact_keys", "Pick up / open", "string", inv->interact_keys);
+            out += field("inventory.drop_keys", "Drop", "string", inv->drop_keys);
+            out += field("inventory.holster_keys", "Holster / draw", "string", inv->holster_keys);
+            out += field("inventory.ballistics", "Ballistics for this one", "select", inv->ballistics, options_of(ball));
+            out += field("inventory.stance_accuracy", "Stance and movement change accuracy", "bool", iv("stance_accuracy"));
+            std::string items;
+            for (const orchard::ItemStack& st : inv->items) items += (items.empty() ? "" : ", ") + orchard::stack_text(st);
+            out += field("inventory.start_items", "Starts with (item*amount, comma separated)", "string", items, std::string(), "Example: pistol_9mm, ammo_9mm*30, bandage*3, water*1.5. Item names are in the right-click Add Item menu.");
+        }
+        const orchard::Pickup* pk = m_scene.pickup(e);
+        out += field("has_pickup", "Is an item pickup", "bool", yesno(pk != nullptr));
+        if (pk) {
+            out += field("pickup.item", "Item", "string", pk->stack.item);
+            out += field("pickup.amount", "Amount", "float", number(pk->stack.amount), "1");
+            out += field("pickup.auto", "Picked up by walking over it", "bool", yesno(pk->auto_pickup));
+            out += field("pickup.respawn", "Comes back after (s, 0 = never)", "float", number(pk->respawn), "1");
+            out += field("pickup.look", "Look", "select", pk->look, options_of({{"simple", "Simple"}, {"detailed", "Detailed"}, {"realistic", "Realistic (liquids move)"}}));
+        }
+
+        group("Weather and climate");
+        const orchard::Climate* cl = m_scene.climate(e);
+        out += field("has_climate", "Is a climate zone (heat, cold, wind, rain, snow, fog)", "bool", yesno(cl != nullptr));
+        if (cl) {
+            std::vector<std::pair<std::string, std::string>> pre;
+            for (const std::string& p : orchard::climate_presets()) pre.emplace_back(p, p);
+            out += field("climate.preset", "Weather", "select", cl->preset, options_of(pre), "Picking one fills in the values below.");
+            out += field("climate.active", "On", "bool", yesno(cl->active));
+            out += field("climate.global", "Whole world (off = only inside its shape)", "bool", yesno(cl->global));
+            if (!cl->global) {
+                out += field("climate.shape", "Shape", "select", cl->shape, options_of({{"box", "Box"}, {"sphere", "Sphere"}}));
+                out += field("climate.size_x", cl->shape == "sphere" ? "Radius (m)" : "Width (m)", "float", number(cl->size.x), "1");
+                if (cl->shape != "sphere") {
+                    out += field("climate.size_y", "Height (m)", "float", number(cl->size.y), "1");
+                    out += field("climate.size_z", "Depth (m)", "float", number(cl->size.z), "1");
+                }
+                out += field("climate.blend", "Fades out over the edge (m)", "float", number(cl->blend), "0.5");
+            }
+            out += field("climate.priority", "Priority (higher zones win where they overlap)", "float", std::to_string(cl->priority), "1");
+            out += unit_field(orchard::UnitKind::speed, "Speed unit");
+            out += field("climate.relative", "Temperature adds to the world's (off = sets it)", "bool", yesno(cl->relative));
+            out += field("climate.temperature", "Temperature (C)", "float", number(cl->temperature), "1");
+            out += field("climate.wind_speed", "Wind (m/s)", "float", number(cl->wind_speed), "0.5");
+            out += field("climate.wind_x", "Wind direction X", "float", number(cl->wind_dir.x), "0.1");
+            out += field("climate.wind_z", "Wind direction Z", "float", number(cl->wind_dir.z), "0.1");
+            out += field("climate.gust", "Gusts (m/s extra)", "float", number(cl->gust), "0.5");
+            out += field("climate.rain", "Rain (0 to 1)", "slider", number(cl->rain), "0.05");
+            out += field("climate.snow", "Snow (0 to 1)", "slider", number(cl->snow), "0.05");
+            out += field("climate.fog", "Fog (0 to 1)", "slider", number(cl->fog), "0.05");
+            out += field("climate.humidity", "Humidity (0 to 1)", "slider", number(cl->humidity), "0.05");
+            out += field("climate.lightning", "Lightning strikes per minute", "float", number(cl->lightning), "0.5");
+            out += field("climate.delay", "Starts after (s)", "float", number(cl->delay), "1");
+            out += field("climate.fade_in", "Builds up over (s)", "float", number(cl->fade_in), "1");
+            out += field("climate.duration", "Lasts (s, -1 = forever)", "float", number(cl->duration), "1");
+            out += field("climate.fade_out", "Dies down over (s)", "float", number(cl->fade_out), "1");
+            out += field("climate.loop", "Starts again when it ends", "bool", yesno(cl->loop));
+            out += field("climate.after", "Then switches to (weather preset, empty = stops)", "string", cl->after);
+            out += field("climate.visuals", "Shows rain, snow and lightning", "bool", yesno(cl->visuals));
         }
         {
             std::string joined;
@@ -1963,6 +2242,9 @@ private:
             out += field("agent.enabled", "On", "bool", yesno(ag->enabled));
             out += field("agent.team", "Team", "string", ag->team, std::string(), "Agents on the same team are friends. Players are on the team 'player'.");
             out += field("agent.targets", "Only hunts (teams or tags, comma separated)", "string", ag->targets);
+            out += unit_field(orchard::UnitKind::speed, "Speed unit");
+            out += unit_field(orchard::UnitKind::distance, "Distance unit");
+            out += unit_field(orchard::UnitKind::impulse, "Knockback unit");
             out += field("agent.walk_speed", "Walk speed (m/s)", "float", number(ag->walk_speed), "0.1");
             out += field("agent.run_speed", "Run speed (m/s)", "float", number(ag->run_speed), "0.1");
             out += field("agent.turn_speed", "Turn speed (degrees/s)", "float", number(ag->turn_speed), "10");
@@ -1975,6 +2257,21 @@ private:
             out += field("agent.ranged", "Shoots (off = melee)", "bool", yesno(ag->ranged));
             out += field("agent.attack_range", ag->ranged ? "Shooting range (m)" : "Reach (m)", "float", number(ag->attack_range), "0.1");
             out += field("agent.attack_damage", "Damage per hit", "float", number(ag->attack_damage), "1");
+            out += field("agent.attack_knockback", "Knockback per hit (N·s)", "float", number(ag->attack_knockback), "5");
+            {
+                std::vector<std::pair<std::string, std::string>> types;
+                for (const std::string& t : orchard::damage_types()) types.emplace_back(t, orchard::damage_type_label(t));
+                out += field("agent.damage_type", "Damage type", "select", ag->damage_type, options_of(types));
+                std::vector<std::pair<std::string, std::string>> effects{{"", "None"}};
+                for (const orchard::EffectDef& d : orchard::effect_presets()) effects.emplace_back(d.name, d.name);
+                out += field("agent.hit_effect", "Hits also cause", "select", ag->hit_effect, options_of(effects));
+                if (!ag->hit_effect.empty()) {
+                    out += field("agent.hit_effect_time", "For (s, negative = forever)", "float", number(ag->hit_effect_time), "0.5");
+                    out += field("agent.hit_effect_chance", "Chance per hit (0 to 1)", "slider", number(ag->hit_effect_chance), "0.05");
+                }
+                out += field("agent.damage_formula", "Damage formula (empty = Damage per hit)", "string", ag->damage_formula, std::string(), "Uses damage, knockback, distance, health, max_health, health_fraction, target_health, target_max_health, target_mass, ranged, random(a, b).");
+                out += field("agent.knockback_formula", "Knockback formula (empty = Knockback per hit)", "string", ag->knockback_formula, std::string(), "Same names as the damage formula. Example: knockback * (1 + 2 * (target_health < 20))");
+            }
             out += field("agent.attack_rate", ag->ranged ? "Shots per second" : "Hits per second", "float", number(ag->attack_rate), "0.1");
             if (ag->ranged) {
                 out += field("agent.accuracy", "Accuracy (0 to 1)", "slider", number(ag->accuracy), "0.05");
@@ -2019,6 +2316,7 @@ private:
             out += field("sound.autoplay", "Starts when Play starts", "bool", yesno(snd->autoplay));
             out += field("sound.spatial", "Comes from this entity (quieter far away)", "bool", yesno(snd->spatial));
             if (snd->spatial) {
+                out += unit_field(orchard::UnitKind::distance, "Distance unit");
                 out += field("sound.range", "Heard up to (m)", "float", number(snd->range), "1");
                 out += field("sound.min_distance", "Full volume within (m)", "float", number(snd->min_distance), "0.5");
             }
@@ -2391,6 +2689,24 @@ private:
     }
 
     std::string inspect_set(orchard::Entity e, const std::string& key, const std::string& value) {
+        if (key.rfind("units.", 0) == 0) {
+            for (orchard::UnitKind k : orchard::unit_kinds())
+                if (unit_pref_key(k) == key && orchard::find_unit(k, value)) {
+                    m_prefs[key] = value;
+                    save_prefs();
+                    return std::string("rebuild");
+                }
+            return std::string();
+        }
+        if (const std::optional<orchard::UnitKind> uk = unit_kind_of(key)) {
+            char* end = nullptr;
+            const double typed = std::strtod(value.c_str(), &end);
+            if (end != value.c_str()) return inspect_set_si(e, key, number(static_cast<float>(orchard::to_si(typed, *uk, unit_of(*uk)))));
+        }
+        return inspect_set_si(e, key, value);
+    }
+
+    std::string inspect_set_si(orchard::Entity e, const std::string& key, const std::string& value) {
         if (!m_scene.alive(e)) return std::string();
         const bool on = value == "1" || value == "true";
         const float v = static_cast<float>(std::atof(value.c_str()));
@@ -2886,6 +3202,15 @@ private:
                 return std::string("rebuild");
             } else if (k == "attack_range") return f(ag->attack_range, 0.0f, 10000.0f);
             else if (k == "attack_damage") return f(ag->attack_damage, -100000.0f, 100000.0f);
+            else if (k == "attack_knockback") return f(ag->attack_knockback, 0.0f, 100000.0f);
+            else if (k == "damage_type") ag->damage_type = value;
+            else if (k == "hit_effect") {
+                ag->hit_effect = value;
+                return std::string("rebuild");
+            } else if (k == "hit_effect_time") ag->hit_effect_time = v;
+            else if (k == "hit_effect_chance") return f(ag->hit_effect_chance, 0.0f, 1.0f);
+            else if (k == "damage_formula") ag->damage_formula = value;
+            else if (k == "knockback_formula") ag->knockback_formula = value;
             else if (k == "attack_rate") return f(ag->attack_rate, 0.0f, 100.0f);
             else if (k == "accuracy") return f(ag->accuracy, 0.0f, 1.0f);
             else if (k == "magazine") ag->magazine = std::max(0, std::atoi(value.c_str()));
@@ -2939,6 +3264,114 @@ private:
             }
             return "rebuild";
         }
+        if (key == "has_survival") {
+            if (on) {
+                if (!m_scene.survival(e)) m_scene.add_survival(e);
+            } else {
+                m_scene.remove_survival(e);
+            }
+            return "rebuild";
+        }
+        if (key.rfind("survival.", 0) == 0) {
+            orchard::Survival* sv = m_scene.survival(e);
+            if (!sv) return std::string();
+            const std::string k = key.substr(9);
+            if (bool* b = orchard::survival_switch(*sv, k)) {
+                *b = on;
+                return std::string("rebuild");
+            }
+            float* x = orchard::survival_value(*sv, k);
+            if (!x) return std::string();
+            *x = v;
+            return std::string("ok");
+        }
+        if (key == "has_inventory") {
+            if (on) {
+                if (!m_scene.inventory(e)) orchard::apply_inventory_preset(m_scene.add_inventory(e), "minecraft");
+            } else {
+                m_scene.remove_inventory(e);
+            }
+            return "rebuild";
+        }
+        if (key.rfind("inventory.", 0) == 0) {
+            orchard::Inventory* inv = m_scene.inventory(e);
+            if (!inv) return std::string();
+            const std::string k = key.substr(10);
+            if (k == "preset") return orchard::apply_inventory_preset(*inv, value) ? std::string("rebuild") : std::string();
+            if (k == "start_items") {
+                inv->items.clear();
+                std::string cur;
+                for (char ch : value + ",") {
+                    if (ch == ',') {
+                        const std::size_t a = cur.find_first_not_of(" \t"), b = cur.find_last_not_of(" \t");
+                        if (a != std::string::npos) {
+                            const std::optional<orchard::ItemStack> st = orchard::parse_stack(cur.substr(a, b - a + 1));
+                            if (st && !st->item.empty() && st->amount > 0.0f) orchard::inventory_add(m_scene.items(), *inv, st->item, st->amount);
+                        }
+                        cur.clear();
+                    } else {
+                        cur += ch;
+                    }
+                }
+                return std::string("ok");
+            }
+            const bool rebuild = k == "style" || k == "hotbar" || k == "container_mode";
+            if (!orchard::set_inventory_field(*inv, k, value)) return std::string();
+            return rebuild ? std::string("rebuild") : std::string("ok");
+        }
+        if (key == "has_pickup") {
+            if (on) {
+                if (!m_scene.pickup(e)) {
+                    orchard::Pickup& pk = m_scene.add_pickup(e);
+                    pk.stack.item = "apple";
+                    pk.stack.amount = 1.0f;
+                }
+            } else {
+                m_scene.remove_pickup(e);
+            }
+            return "rebuild";
+        }
+        if (key.rfind("pickup.", 0) == 0) {
+            orchard::Pickup* pk = m_scene.pickup(e);
+            if (!pk) return std::string();
+            const std::string k = key.substr(7);
+            if (k == "item") pk->stack.item = value;
+            else if (k == "amount") pk->stack.amount = std::max(0.0f, v);
+            else if (k == "auto") pk->auto_pickup = on;
+            else if (k == "respawn") pk->respawn = std::max(0.0f, v);
+            else if (k == "look") pk->look = value;
+            else return std::string();
+            return std::string("ok");
+        }
+        if (key == "has_climate") {
+            if (on) {
+                if (!m_scene.climate(e)) orchard::apply_climate_preset(m_scene.add_climate(e), "rain");
+            } else {
+                m_scene.remove_climate(e);
+            }
+            return "rebuild";
+        }
+        if (key.rfind("climate.", 0) == 0) {
+            orchard::Climate* cl = m_scene.climate(e);
+            if (!cl) return std::string();
+            const std::string k = key.substr(8);
+            const std::string val = (k == "global" || k == "relative" || k == "loop" || k == "active" || k == "visuals") ? std::string(on ? "1" : "0") : value;
+            if (k == "preset") return orchard::apply_climate_preset(*cl, value) ? std::string("rebuild") : std::string();
+            if (float* f = orchard::climate_value(*cl, k)) {
+                *f = v;
+                return std::string("ok");
+            }
+            if (k == "global") cl->global = on;
+            else if (k == "relative") cl->relative = on;
+            else if (k == "loop") cl->loop = on;
+            else if (k == "active") cl->active = on;
+            else if (k == "visuals") cl->visuals = on;
+            else if (k == "shape") cl->shape = val;
+            else if (k == "after") cl->after = val;
+            else if (k == "priority") cl->priority = static_cast<int>(v);
+            else return std::string();
+            return std::string(k == "global" || k == "shape" ? "rebuild" : "ok");
+        }
         if (key == "tags") {
             const std::vector<std::string> old = m_scene.tags(e);
             for (const std::string& t : old) m_scene.remove_tag(e, t);
@@ -2978,6 +3411,34 @@ private:
             else if (k == "explode_force") h->explode_force = std::max(0.0f, v);
             else if (k == "explode_damage") h->explode_damage = std::max(0.0f, v);
             else if (k == "respawn_delay") h->respawn_delay = std::max(0.0f, v);
+            else if (k == "armor") h->armor = std::max(0.0f, v);
+            else if (k == "armor_mode") {
+                if (std::find(orchard::armor_modes().begin(), orchard::armor_modes().end(), value) == orchard::armor_modes().end()) return std::string();
+                h->armor_mode = value;
+                return std::string("rebuild");
+            } else if (k == "armor_constant") h->armor_constant = std::max(0.001f, v);
+            else if (k == "armor_cap") h->armor_cap = std::clamp(v, 0.0f, 1.0f);
+            else if (k == "armor_min") h->armor_min = std::clamp(v, 0.0f, 1.0f);
+            else if (k == "armor_wear") h->armor_wear = std::max(0.0f, v);
+            else if (k == "armor_types") h->armor_types = value;
+            else if (k == "armor_formula") h->armor_formula = value;
+            else if (k == "max_shield") {
+                const bool had = h->max_shield > 0.0f;
+                h->max_shield = std::max(0.0f, v);
+                if (!had) h->shield = h->max_shield;
+                h->shield = std::min(h->shield, h->max_shield);
+                if (had != (h->max_shield > 0.0f)) return std::string("rebuild");
+            } else if (k == "shield") h->shield = std::clamp(v, 0.0f, h->max_shield);
+            else if (k == "shield_regen") h->shield_regen = v;
+            else if (k == "shield_delay") h->shield_delay = std::max(0.0f, v);
+            else if (k == "shield_absorb") h->shield_absorb = std::clamp(v, 0.0f, 1.0f);
+            else if (k == "shield_types") h->shield_types = value;
+            else if (k == "shield_formula") h->shield_formula = value;
+            else if (k == "resist") h->resist = orchard::parse_resist(value);
+            else if (k == "poise") h->poise = std::max(0.0f, v);
+            else if (k == "stagger_scale") h->stagger_scale = std::max(0.0f, v);
+            else if (k == "damage_formula") h->damage_formula = value;
+            else if (k == "effect_formula") h->effect_formula = value;
             else return std::string();
             return std::string("ok");
         }
@@ -3521,6 +3982,670 @@ private:
         m_player_ready = true;
     }
 
+    // ----- Items, inventory screens, hotbar and weapons while playing -----
+    struct HudDrag {
+        bool on = false;
+        orchard::Entity owner;
+        std::string list;
+        int index = -1;
+        std::string item;
+        float start_x = 0.0f, start_y = 0.0f;
+        bool rotate = false;
+        int button = 1;
+        bool shift = false;
+    };
+    bool m_inv_open = false;
+    bool m_bags_open = false;
+    orchard::Entity m_inv_other;
+    HudDrag m_hud_drag;
+    bool m_use_down = false;
+    std::set<std::string> m_play_down;
+    float m_mouse_x = 0.0f, m_mouse_y = 0.0f;
+    std::set<std::string> m_item_models_checked;
+    std::map<std::string, std::shared_ptr<fizmo::images::BitmapImage>> m_item_icons;
+
+    orchard::Entity play_me() const {
+        const orchard::Entity cam = m_scene.active_camera();
+        const orchard::Entity rider = m_scene.body_owner(cam);
+        return m_scene.alive(rider) ? rider : cam;
+    }
+
+    orchard::Entity play_owner() {
+        orchard::Gameplay& g = m_session.scripts().gameplay();
+        orchard::Entity o = g.inventory_owner(play_me());
+        if (!m_scene.alive(o)) o = g.inventory_owner(m_scene.active_camera());
+        return o;
+    }
+
+    bool screen_open() const { return m_session.playing() && (m_inv_open || m_bags_open); }
+
+    static bool key_in(const std::string& keys, const std::string& name) {
+        const std::string want = orchard::ScriptRuntime::key_name(name);
+        std::string cur;
+        for (char ch : keys + ",") {
+            if (ch == ',') {
+                if (!cur.empty() && orchard::ScriptRuntime::key_name(cur) == want) return true;
+                cur.clear();
+            } else if (ch != ' ') {
+                cur += ch;
+            }
+        }
+        return false;
+    }
+
+    static int key_index(const std::string& keys, const std::string& name) {
+        const std::string want = orchard::ScriptRuntime::key_name(name);
+        std::string cur;
+        int i = 0;
+        for (char ch : keys + ",") {
+            if (ch == ',') {
+                if (!cur.empty()) {
+                    if (orchard::ScriptRuntime::key_name(cur) == want) return i;
+                    ++i;
+                }
+                cur.clear();
+            } else if (ch != ' ') {
+                cur += ch;
+            }
+        }
+        return -1;
+    }
+
+    void close_screen() {
+        m_inv_open = m_bags_open = false;
+        m_inv_other = orchard::Entity{};
+        m_hud_drag = HudDrag{};
+    }
+
+    // Where the selected hotbar item lives, so drop and use can find it.
+    bool selected_stack(orchard::Entity owner, std::string& list, int& index) {
+        orchard::Inventory* inv = m_scene.inventory(owner);
+        if (!inv) return false;
+        if (!inv->worn["mainhand"].empty()) {
+            list = "worn:mainhand";
+            index = 0;
+            return true;
+        }
+        const int sel = inv->selected;
+        if (inv->style == orchard::InventoryStyle::slots) {
+            list = inv->hotbar && inv->hotbar_own ? "hotbar" : "items";
+            index = sel;
+            orchard::ItemStack* s = m_session.scripts().gameplay().stack_at(owner, list, index);
+            return s && !s->empty();
+        }
+        if (sel < 0 || sel >= static_cast<int>(inv->binds.size())) return false;
+        const std::string& id = inv->binds[static_cast<std::size_t>(sel)];
+        for (std::size_t i = 0; i < inv->items.size(); ++i)
+            if (inv->items[i].item == id && !inv->items[i].empty()) {
+                list = "items";
+                index = static_cast<int>(i);
+                return true;
+            }
+        return false;
+    }
+
+    orchard::Entity nearest_storage(orchard::Entity owner, float radius) {
+        orchard::Gameplay& g = m_session.scripts().gameplay();
+        const orchard::Vec3 at = g.position(owner);
+        orchard::Entity best;
+        float best_d = radius;
+        for (orchard::Entity e : m_scene.entities()) {
+            if (e == owner || !m_scene.inventory(e) || !m_scene.inventory(e)->enabled) continue;
+            if (m_scene.agent(e) && m_scene.health(e) && !g.dead(e)) continue;
+            const float d = orchard::length(g.position(e) - at);
+            if (d < best_d) {
+                best_d = d;
+                best = e;
+            }
+        }
+        return best;
+    }
+
+    // Keys and mouse buttons while playing. Returns true when the inventory screen used it.
+    bool play_input(const std::string& name, bool down) {
+        if (!m_session.playing()) return false;
+        const std::string k = orchard::ScriptRuntime::key_name(name);
+        const bool edge = down ? m_play_down.insert(k).second : m_play_down.erase(k) > 0;
+        if (!edge) return screen_open();
+        const orchard::Entity owner = play_owner();
+        orchard::Inventory* inv = m_scene.inventory(owner);
+        if (!inv || !inv->enabled) return false;
+        orchard::Gameplay& g = m_session.scripts().gameplay();
+        if (!down) {
+            if (key_in(inv->use_keys, name) && m_use_down) {
+                m_use_down = false;
+                g.release_held(owner);
+            }
+            if (key_in(inv->alt_keys, name)) {
+                g.set_aiming(owner, false);
+                g.set_blocking(owner, false);
+            }
+            return screen_open();
+        }
+        if (screen_open()) {
+            if (k == "escape" || key_in(inv->open_keys, name) || (m_bags_open && key_in(inv->container_keys, name)) || (m_scene.alive(m_inv_other) && key_in(inv->interact_keys, name))) {
+                close_screen();
+                redraw();
+                return true;
+            }
+            if (m_hud_drag.on && k == "r") m_hud_drag.rotate = !m_hud_drag.rotate;
+            if (const int slot = key_index(inv->hotbar_keys, name); slot >= 0) {
+                // Hovering an item and pressing a slot key binds it there, like Minecraft and Tarkov.
+                const orchard::HudLayout lay = inventory_screen(owner);
+                if (const orchard::HudRect* it = orchard::hud_item_at(lay, m_mouse_x, m_mouse_y); it && !it->other) {
+                    if (inv->style == orchard::InventoryStyle::slots && inv->hotbar_own) g.move_item(owner, it->list, it->index, owner, "hotbar", slot);
+                    else {
+                        if (static_cast<int>(inv->binds.size()) <= slot) inv->binds.resize(static_cast<std::size_t>(slot + 1));
+                        inv->binds[static_cast<std::size_t>(slot)] = it->label;
+                    }
+                }
+            }
+            redraw();
+            return true;
+        }
+        if (key_in(inv->open_keys, name)) {
+            m_inv_open = true;
+            m_use_down = false;
+            redraw();
+            return true;
+        }
+        if (inv->container_mode != "beside" && key_in(inv->container_keys, name)) {
+            m_bags_open = true;
+            redraw();
+            return true;
+        }
+        if (const int slot = key_index(inv->hotbar_keys, name); slot >= 0 && inv->hotbar) {
+            g.select_slot(owner, slot);
+            return false;
+        }
+        if (key_in(inv->reload_keys, name)) g.reload(owner);
+        if (key_in(inv->holster_keys, name)) {
+            if (g.held(owner) && !g.held(owner)->empty() && !inv->worn["mainhand"].empty()) g.holster(owner);
+            else
+                for (const std::string& slot : g.holster_slots(owner))
+                    if (const orchard::ItemStack* s = g.stack_at(owner, "holster:" + slot, 0); s && !s->empty()) {
+                        g.draw(owner, slot);
+                        break;
+                    }
+        }
+        if (key_in(inv->drop_keys, name)) {
+            std::string list;
+            int index = 0;
+            if (selected_stack(owner, list, index)) g.drop_item(owner, list, index, m_session.scripts().key_down("ctrl") ? -1.0f : 1.0f);
+        }
+        if (key_in(inv->interact_keys, name)) {
+            const orchard::Entity near = g.nearest_pickup(owner, 2.5f);
+            if (m_scene.alive(near)) {
+                g.pick_up(owner, near);
+            } else if (const orchard::Entity box = nearest_storage(owner, 2.5f); m_scene.alive(box)) {
+                m_inv_other = box;
+                m_inv_open = true;
+                m_use_down = false;
+            }
+        }
+        if (key_in(inv->use_keys, name)) {
+            m_use_down = true;
+            g.use_held(owner, true, false, 0.0f);
+        }
+        if (key_in(inv->alt_keys, name)) {
+            const orchard::ItemDef* d = g.held_def(owner);
+            if (d && (d->kind == orchard::ItemKind::melee || d->block > 0.0f)) g.set_blocking(owner, true);
+            else g.set_aiming(owner, true);
+            if (const orchard::ItemDef* off = g.held_def(owner, "offhand"); off && off->block > 0.0f) g.set_blocking(owner, true);
+        }
+        return false;
+    }
+
+    orchard::HudLayout inventory_screen(orchard::Entity owner) {
+        const orchard::Inventory* inv = m_scene.inventory(owner);
+        if (!inv) return {};
+        const bool containers = inv->container_mode != "own_key" || m_bags_open;
+        const orchard::Inventory* other = m_scene.alive(m_inv_other) ? m_scene.inventory(m_inv_other) : nullptr;
+        const std::string other_title = other ? (other->title.empty() || other->title == "Inventory" ? m_scene.name(m_inv_other) : other->title) : std::string();
+        return orchard::inventory_layout(m_scene.items(), *inv, static_cast<float>(m_view.width()), static_cast<float>(m_view.height()), containers, other, other_title);
+    }
+
+    bool hud_press(float x, float y, int button, bool shift) {
+        m_mouse_x = x;
+        m_mouse_y = y;
+        if (!screen_open()) return false;
+        const orchard::Entity owner = play_owner();
+        if (!m_scene.inventory(owner)) return false;
+        const orchard::HudLayout lay = inventory_screen(owner);
+        const orchard::HudRect* it = orchard::hud_item_at(lay, x, y);
+        m_hud_drag = HudDrag{};
+        if (it && it->index >= -1) {
+            m_hud_drag.on = true;
+            m_hud_drag.owner = it->other ? m_inv_other : owner;
+            m_hud_drag.list = it->list;
+            m_hud_drag.index = it->list.rfind("worn:", 0) == 0 || it->list.rfind("holster:", 0) == 0 ? 0 : it->index;
+            m_hud_drag.item = it->label;
+            m_hud_drag.start_x = x;
+            m_hud_drag.start_y = y;
+            m_hud_drag.button = button;
+            m_hud_drag.shift = shift;
+        }
+        redraw();
+        return true;
+    }
+
+    bool hud_release(float x, float y) {
+        if (!screen_open()) return false;
+        m_mouse_x = x;
+        m_mouse_y = y;
+        HudDrag d = m_hud_drag;
+        m_hud_drag = HudDrag{};
+        if (!d.on) return true;
+        const orchard::Entity owner = play_owner();
+        orchard::Gameplay& g = m_session.scripts().gameplay();
+        orchard::ItemStack* src = g.stack_at(d.owner, d.list, d.index);
+        if (!src || src->empty()) return true;
+        const float amount = d.button == 2 && src->amount > 1.0f ? std::floor(src->amount * 0.5f) : -1.0f;
+        const bool clicked = std::fabs(x - d.start_x) + std::fabs(y - d.start_y) < 5.0f;
+        if (clicked) {
+            if (d.shift) {
+                // Shift-click sends it across: to the open chest, or back from it.
+                const orchard::Entity to = d.owner == owner ? m_inv_other : owner;
+                if (m_scene.alive(to)) g.move_item(d.owner, d.list, d.index, to, "items", -1, amount);
+            } else if (d.button == 2 && d.owner == owner) {
+                const orchard::ItemDef* def = g.item_def(src->item);
+                if (def && def->wearable() && d.list.rfind("worn:", 0) != 0) g.equip(owner, d.list, d.index);
+                else if (def && d.list.rfind("worn:", 0) == 0) g.unequip(owner, d.list.substr(5));
+                else g.use_item(owner, d.list, d.index);
+            }
+            redraw();
+            return true;
+        }
+        const orchard::HudLayout lay = inventory_screen(owner);
+        const orchard::HudRect* cell = orchard::hud_cell_at(lay, x, y);
+        if (!cell) {
+            bool inside = false;
+            for (const orchard::HudRect& p : lay.panels) inside = inside || p.contains(x, y);
+            if (!inside && d.owner == owner) g.drop_item(owner, d.list, d.index, amount);
+            redraw();
+            return true;
+        }
+        const orchard::Entity to = cell->other ? m_inv_other : owner;
+        if (cell->list == "bind") {
+            orchard::Inventory* inv = m_scene.inventory(owner);
+            if (inv && cell->index >= 0) {
+                if (static_cast<int>(inv->binds.size()) <= cell->index) inv->binds.resize(static_cast<std::size_t>(cell->index + 1));
+                inv->binds[static_cast<std::size_t>(cell->index)] = d.item;
+            }
+        } else {
+            g.move_item(d.owner, d.list, d.index, to, cell->list, cell->index, amount, cell->gx, cell->gy, d.rotate);
+        }
+        redraw();
+        return true;
+    }
+
+    void play_tick(float dt) {
+        const orchard::Entity owner = play_owner();
+        orchard::Gameplay& g = m_session.scripts().gameplay();
+        if (m_scene.alive(m_inv_other)) {
+            if (orchard::length(g.position(m_inv_other) - g.position(owner)) > 4.0f) close_screen();
+        }
+        if (!m_scene.inventory(owner)) return;
+        const orchard::Entity cam = m_scene.active_camera();
+        orchard::Vec3 origin = g.position(cam), dir{0.0f, 0.0f, -1.0f};
+        if (m_view.dimension() == orchard::Dimension::three_d) {
+            if (m_player_ready) dir = look_direction(m_player_yaw, m_player_pitch);
+            else dir = orchard::normalize(orchard::mul_direction(m_scene.world_matrix(cam), camera_forward_axis()));
+            const orchard::Mat4 w = m_scene.world_matrix(cam);
+            origin = orchard::Vec3{w.at(0, 3), w.at(1, 3), w.at(2, 3)};
+        } else {
+            // In 2D the player aims at the mouse.
+            const orchard::PanCamera& pc = m_view.pan_camera();
+            const float ppu = std::max(1e-3f, pc.pixels_per_unit);
+            const orchard::Vec3 me = g.position(owner);
+            const orchard::Vec3 mouse{pc.center.x + (m_mouse_x - m_view.width() * 0.5f) / ppu, pc.center.y - (m_mouse_y - m_view.height() * 0.5f) / ppu, 0.0f};
+            origin = me + orchard::Vec3{0.0f, 0.4f, 0.0f};
+            dir = mouse - origin;
+            dir.z = 0.0f;
+            if (orchard::length(dir) < 1e-4f) dir = orchard::Vec3{1.0f, 0.0f, 0.0f};
+            dir = orchard::normalize(dir);
+        }
+        g.set_aim(owner, origin, dir);
+        orchard::ScriptRuntime& keys = m_session.scripts();
+        g.set_stance(owner, keys.key_down("ctrl") || keys.key_down("c") ? "crouch" : "stand");
+        if (m_use_down && !screen_open()) g.use_held(owner, false, true, dt);
+    }
+
+    void ensure_item_models() {
+        if (!m_project) return;
+        const std::string prefix = "Assets/Models/Items/";
+        for (orchard::Entity e : m_scene.entities()) {
+            const orchard::Model* md = m_scene.model(e);
+            if (!md || md->source.rfind(prefix, 0) != 0 || m_item_models_checked.count(md->source)) continue;
+            m_item_models_checked.insert(md->source);
+            const std::string path = m_project->path_of(md->source);
+            if (fs::exists(path)) continue;
+            std::string stem = md->source.substr(prefix.size());
+            if (stem.size() > 4) stem.resize(stem.size() - 4);
+            const std::size_t dash = stem.rfind('-');
+            if (dash == std::string::npos) continue;
+            const orchard::ItemDef* def = m_scene.items().find(stem.substr(0, dash));
+            if (def) orchard::editor::write_item_model(*def, stem.substr(dash + 1), path);
+        }
+    }
+
+    const fizmo::images::BitmapImage* item_icon(const orchard::ItemDef& d) {
+        if (d.texture.empty() || !m_project) return nullptr;
+        auto it = m_item_icons.find(d.texture);
+        if (it == m_item_icons.end()) {
+            auto img = std::make_shared<fizmo::images::BitmapImage>();
+            std::string err;
+            if (!fizmo::images::load_image(m_project->path_of(d.texture), *img, &err)) img.reset();
+            it = m_item_icons.emplace(d.texture, img).first;
+        }
+        return it->second.get();
+    }
+
+    static fizmo::colors::Color hud_rgb(orchard::Vec3 c, int a = 255) {
+        auto b = [](float v) { return static_cast<std::uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+        return fizmo::colors::Color(b(c.x), b(c.y), b(c.z), static_cast<std::uint8_t>(std::clamp(a, 0, 255)));
+    }
+
+    // A small drawing of the item, so it's recognisable without art.
+    void draw_item_icon(fizmo::graphics::Renderer& r, const orchard::ItemDef* d, float x, float y, float w, float h, bool rotated) {
+        namespace fg = fizmo::graphics;
+        if (!d) {
+            r.draw_rect(static_cast<int>(x + w * 0.3f), static_cast<int>(y + h * 0.3f), static_cast<unsigned>(w * 0.4f), static_cast<unsigned>(h * 0.4f), fg::Paint::fill(fizmo::colors::Color(200, 60, 60)));
+            return;
+        }
+        if (const fizmo::images::BitmapImage* img = item_icon(*d)) {
+            r.draw_image(*img, static_cast<int>(x + 2), static_cast<int>(y + 2), static_cast<unsigned>(std::max(1.0f, w - 4)), static_cast<unsigned>(std::max(1.0f, h - 4)));
+            return;
+        }
+        const fizmo::colors::Color c = hud_rgb(d->color), a = hud_rgb(d->accent), outline(16, 18, 15);
+        const float cx = x + w * 0.5f, cy = y + h * 0.5f, s = std::min(w, h);
+        const int ix = static_cast<int>(cx), iy = static_cast<int>(cy);
+        using K = orchard::ItemKind;
+        auto bar = [&](float x0, float y0, float x1, float y1, float thick, fizmo::colors::Color col) {
+            if (rotated) {
+                std::swap(x0, y0);
+                std::swap(x1, y1);
+                x0 = cx + (x0 - cy);
+                x1 = cx + (x1 - cy);
+                y0 = cy + (y0 - cx);
+                y1 = cy + (y1 - cx);
+            }
+            r.draw_line(static_cast<int>(x0), static_cast<int>(y0), static_cast<int>(x1), static_cast<int>(y1), fg::Paint::stroke(col, std::max(1.0f, thick)));
+        };
+        switch (d->kind) {
+        case K::gun:
+            bar(x + w * 0.12f, cy - s * 0.06f, x + w * 0.9f, cy - s * 0.06f, s * 0.14f, c);
+            bar(x + w * 0.2f, cy, x + w * 0.16f, cy + s * 0.28f, s * 0.12f, a);
+            if (d->magazine > 1) bar(x + w * 0.4f, cy, x + w * 0.42f, cy + s * 0.22f, s * 0.08f, c);
+            break;
+        case K::melee: case K::tool:
+            bar(x + w * 0.2f, y + h * 0.8f, x + w * 0.38f, y + h * 0.62f, s * 0.1f, a);
+            bar(x + w * 0.38f, y + h * 0.62f, x + w * 0.85f, y + h * 0.15f, d->damage_type == "blunt" ? s * 0.16f : s * 0.08f, c);
+            bar(x + w * 0.3f, y + h * 0.52f, x + w * 0.48f, y + h * 0.7f, s * 0.06f, a);
+            break;
+        case K::bow:
+            r.draw_arc(ix, iy, static_cast<unsigned>(s * 0.32f), static_cast<unsigned>(s * 0.4f), fg::Paint::stroke(c, std::max(1.0f, s * 0.07f)));
+            bar(cx, y + h * 0.1f, cx, y + h * 0.9f, 1.0f, fizmo::colors::Color(230, 230, 220));
+            break;
+        case K::potion: case K::drink:
+            r.draw_circle(ix, static_cast<int>(cy + s * 0.08f), static_cast<unsigned>(s * 0.25f), fg::Paint::fill(c));
+            r.draw_rect(static_cast<int>(cx - s * 0.07f), static_cast<int>(cy - s * 0.35f), static_cast<unsigned>(s * 0.14f), static_cast<unsigned>(s * 0.22f), fg::Paint::fill(fizmo::colors::Color(200, 215, 220, 200)));
+            r.draw_circle(ix, static_cast<int>(cy + s * 0.08f), static_cast<unsigned>(s * 0.25f), fg::Paint::stroke(outline, 1));
+            break;
+        case K::ammo:
+            for (int i = -1; i <= 1; ++i) bar(cx + i * s * 0.15f, cy + s * 0.25f, cx + i * s * 0.15f, cy - s * 0.2f, s * 0.09f, c);
+            break;
+        case K::magic:
+            bar(x + w * 0.2f, y + h * 0.85f, x + w * 0.7f, y + h * 0.3f, s * 0.07f, a);
+            r.draw_circle(static_cast<int>(x + w * 0.72f), static_cast<int>(y + h * 0.27f), static_cast<unsigned>(s * 0.13f), fg::Paint::fill(c));
+            break;
+        case K::clothing: case K::armor: case K::container: case K::holster:
+            r.draw_polygon({fg::RenderPoint(cx - s * 0.3f, cy - s * 0.25f), fg::RenderPoint(cx + s * 0.3f, cy - s * 0.25f), fg::RenderPoint(cx + s * 0.25f, cy + s * 0.3f), fg::RenderPoint(cx - s * 0.25f, cy + s * 0.3f)}, fg::Paint::fill(c));
+            if (d->kind == K::armor) r.draw_rect(static_cast<int>(cx - s * 0.1f), static_cast<int>(cy - s * 0.15f), static_cast<unsigned>(s * 0.2f), static_cast<unsigned>(s * 0.3f), fg::Paint::fill(a));
+            break;
+        case K::trinket:
+            r.draw_circle(ix, iy, static_cast<unsigned>(s * 0.18f), fg::Paint::stroke(c, std::max(1.0f, s * 0.06f)));
+            break;
+        default:
+            r.draw_circle(ix, iy, static_cast<unsigned>(s * 0.26f), fg::Paint::fill(c));
+            r.draw_circle(ix, iy, static_cast<unsigned>(s * 0.26f), fg::Paint::stroke(outline, 1));
+            break;
+        }
+    }
+
+    void draw_play_hud(grove::GpuCanvasFrame& f) {
+        namespace fg = fizmo::graphics;
+        using fizmo::colors::Color;
+        fg::Renderer& r = f.renderer;
+        orchard::Gameplay& g = m_session.scripts().gameplay();
+        const float sw = static_cast<float>(m_view.width()), sh = static_cast<float>(m_view.height());
+        auto style = [](float size, Color c) {
+            fizmo::text::TextStyle st;
+            st.set_size(size);
+            st.set_fg_color(c);
+            return st;
+        };
+        auto text = [&](float x, float y, const std::string& s, float size, Color c) { r.draw_text(static_cast<int>(x), static_cast<int>(y), s, style(size, c)); };
+        auto text_w = [&](const std::string& s, float size) { return static_cast<float>(r.measure_text(s, style(size, Color(255, 255, 255))).width); };
+        auto label = [&](float x, float y, const std::string& s, float size, Color c) {
+            r.draw_rect(static_cast<int>(x - 6.0f), static_cast<int>(y - 3.0f), static_cast<unsigned>(text_w(s, size) + 12.0f), static_cast<unsigned>(size + 8.0f), fg::Paint::fill(Color(12, 14, 11, 170)));
+            text(x, y, s, size, c);
+        };
+        auto rect = [&](float x, float y, float w, float h, Color c) { r.draw_rect(static_cast<int>(x), static_cast<int>(y), static_cast<unsigned>(std::max(1.0f, w)), static_cast<unsigned>(std::max(1.0f, h)), fg::Paint::fill(c)); };
+        auto frame = [&](float x, float y, float w, float h, Color c, float t = 1.0f) { r.draw_rect(static_cast<int>(x), static_cast<int>(y), static_cast<unsigned>(std::max(1.0f, w)), static_cast<unsigned>(std::max(1.0f, h)), fg::Paint::stroke(c, t)); };
+
+        // Bullets in flight and hitscan tracers, drawn in both 2D and 3D.
+        for (const orchard::Tracer& t : g.tracers()) {
+            float ax, ay, bx, by;
+            if (!m_view.project(t.from, ax, ay) || !m_view.project(t.to, bx, by)) continue;
+            const int a = static_cast<int>(255.0f * std::clamp(1.0f - t.age / std::max(0.001f, t.life), 0.0f, 1.0f));
+            r.draw_line(static_cast<int>(ax), static_cast<int>(ay), static_cast<int>(bx), static_cast<int>(by), fg::Paint::stroke(hud_rgb(t.color, a), 2));
+        }
+        for (const orchard::Projectile& p : g.projectiles()) {
+            float ax, ay, bx, by;
+            const orchard::Vec3 tail = p.position - p.velocity * 0.012f;
+            if (!m_view.project(p.position, ax, ay) || !m_view.project(tail, bx, by)) continue;
+            r.draw_line(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(ax), static_cast<int>(ay), fg::Paint::stroke(Color(255, 225, 140, 220), 2));
+        }
+
+        const orchard::Entity owner = play_owner();
+        orchard::Inventory* inv = m_scene.inventory(owner);
+        if (!inv || !inv->enabled) return;
+        const orchard::ItemCatalog& cat = m_scene.items();
+        const int alpha = static_cast<int>(std::clamp(inv->opacity, 0.0f, 1.0f) * 255.0f);
+        const Color panel_c(22, 25, 21, alpha), cell_c(52, 58, 49, std::max(alpha, 120)), edge_c(98, 108, 92), sel_c(247, 180, 72), white(236, 240, 230), dim(150, 158, 144);
+
+        auto stack_of = [&](orchard::Entity who, const orchard::HudRect& it) -> const orchard::ItemStack* {
+            const int index = it.list.rfind("worn:", 0) == 0 || it.list.rfind("holster:", 0) == 0 ? 0 : it.index;
+            return g.stack_at(who, it.list, index);
+        };
+        auto draw_items = [&](const orchard::HudLayout& lay, bool listy_owner) {
+            for (const orchard::HudRect& it : lay.items) {
+                const orchard::Entity who = it.other ? m_inv_other : owner;
+                if (m_hud_drag.on && m_hud_drag.owner == who && m_hud_drag.list == it.list && (it.list.rfind("worn:", 0) == 0 || m_hud_drag.index == it.index)) continue;
+                const orchard::ItemStack* st = it.kind == "bind" ? nullptr : stack_of(who, it);
+                const orchard::ItemDef* d = cat.find(it.label);
+                const bool row = it.w > it.h * 2.5f;
+                if (row) {
+                    draw_item_icon(r, d, it.x, it.y, it.h, it.h, false);
+                    text(it.x + it.h + 4.0f, it.y + it.h * 0.2f, d ? d->name : it.label, std::max(10.0f, it.h * 0.5f), white);
+                    if (st) {
+                        std::string right = orchard::amount_text(d, st->amount);
+                        if (d && inv->show_weight) right += "   " + orchard::amount_text(nullptr, orchard::stack_weight(cat, *st)) + " kg";
+                        text(it.x + it.w - text_w(right, std::max(10.0f, it.h * 0.45f)) - 4.0f, it.y + it.h * 0.22f, right, std::max(10.0f, it.h * 0.45f), dim);
+                    }
+                    continue;
+                }
+                rect(it.x + 1, it.y + 1, it.w - 2, it.h - 2, Color(70, 78, 66, std::max(alpha, 140)));
+                draw_item_icon(r, d, it.x, it.y, it.w, it.h, st && st->rotated);
+                if (st && (st->amount != 1.0f || (d && d->continuous))) {
+                    const std::string a = orchard::amount_text(d, st->amount);
+                    const float ts = std::max(9.0f, std::min(it.w, it.h) * 0.28f);
+                    text(it.x + it.w - text_w(a, ts) - 3.0f, it.y + it.h - ts - 3.0f, a, ts, white);
+                }
+                if (st && d && d->kind == orchard::ItemKind::gun && d->magazine > 0) {
+                    const float k = std::clamp(st->loaded / static_cast<float>(d->magazine), 0.0f, 1.0f);
+                    rect(it.x + 2, it.y + it.h - 3, (it.w - 4) * k, 2, Color(240, 200, 90));
+                }
+                if (st && st->durability >= 0.0f && st->durability < 1.0f) rect(it.x + 2, it.y + 2, (it.w - 4) * std::clamp(st->durability, 0.0f, 1.0f), 2, Color(110, 200, 110));
+                static_cast<void>(listy_owner);
+            }
+        };
+
+        if (!screen_open()) {
+            const orchard::HudLayout bar = orchard::hotbar_layout(cat, *inv, sw, sh);
+            for (const orchard::HudRect& p : bar.panels) rect(p.x, p.y, p.w, p.h, panel_c);
+            for (const orchard::HudRect& c : bar.cells) {
+                rect(c.x, c.y, c.w, c.h, cell_c);
+                frame(c.x, c.y, c.w, c.h, c.selected ? sel_c : edge_c, c.selected ? 2.0f : 1.0f);
+            }
+            for (const orchard::HudRect& it : bar.items) {
+                const orchard::ItemDef* d = cat.find(it.label);
+                draw_item_icon(r, d, it.x, it.y, it.w, it.h, false);
+                float amount = 0.0f;
+                if (it.kind == "bind") amount = g.count(owner, it.label);
+                else if (const orchard::ItemStack* st = g.stack_at(owner, it.list, it.index)) amount = st->amount;
+                if (amount != 1.0f || (d && d->continuous)) {
+                    const std::string a = orchard::amount_text(d, amount);
+                    const float ts = std::max(9.0f, it.w * 0.28f);
+                    text(it.x + it.w - text_w(a, ts) - 3.0f, it.y + it.h - ts - 3.0f, a, ts, amount <= 0.0f ? dim : white);
+                }
+            }
+            // What's in hand, ammo and the crosshair.
+            const orchard::ItemStack* held = g.held(owner);
+            const orchard::ItemDef* hd = held && !held->empty() ? cat.find(held->item) : nullptr;
+            if (hd) {
+                std::string line = hd->name;
+                if (hd->kind == orchard::ItemKind::gun || hd->kind == orchard::ItemKind::bow) {
+                    char buf[64];
+                    if (hd->magazine > 0) std::snprintf(buf, sizeof(buf), "  %d / %d", static_cast<int>(held->loaded), hd->magazine);
+                    else buf[0] = '\0';
+                    line += buf;
+                    if (!hd->ammo.empty()) line += "  (" + orchard::amount_text(cat.find(hd->ammo), g.count(owner, hd->ammo)) + " spare)";
+                }
+                if (g.reloading(owner)) line += "  reloading...";
+                label(sw - text_w(line, 14.0f) - 16.0f, sh - 34.0f, line, 14.0f, white);
+                if (hd->weapon() && m_view.dimension() == orchard::Dimension::three_d) {
+                    const orchard::Camera* cam = m_scene.camera(m_scene.active_camera());
+                    const float fov = orchard::radians(cam ? cam->fov : 60.0f);
+                    const float spread = orchard::radians(std::max(0.05f, hd->spread)) * g.spread_now(owner);
+                    const float gap = std::clamp(spread / std::max(0.1f, fov) * sh, 3.0f, sh * 0.25f);
+                    const float cx = sw * 0.5f, cy = sh * 0.5f, len = 7.0f;
+                    const Color ch(240, 244, 236, 220);
+                    for (int i = 0; i < 4; ++i) {
+                        const float dx = i == 0 ? 1.0f : i == 1 ? -1.0f : 0.0f, dy = i == 2 ? 1.0f : i == 3 ? -1.0f : 0.0f;
+                        r.draw_line(static_cast<int>(cx + dx * gap), static_cast<int>(cy + dy * gap), static_cast<int>(cx + dx * (gap + len)), static_cast<int>(cy + dy * (gap + len)), fg::Paint::stroke(ch, 2));
+                    }
+                }
+            }
+            const orchard::Entity near = g.nearest_pickup(owner, 2.5f);
+            if (m_scene.alive(near)) {
+                const orchard::Pickup* pk = m_scene.pickup(near);
+                const orchard::ItemDef* d = pk ? cat.find(pk->stack.item) : nullptr;
+                if (pk && !pk->auto_pickup) {
+                    std::string first = inv->interact_keys.substr(0, inv->interact_keys.find(','));
+                    const std::string tip = "[" + first + "] pick up " + (d ? d->name : pk->stack.item) + (pk->stack.amount != 1.0f ? " x" + orchard::amount_text(d, pk->stack.amount) : "");
+                    label((sw - text_w(tip, 14.0f)) * 0.5f, sh * 0.5f + 40.0f, tip, 14.0f, white);
+                }
+            } else if (const orchard::Entity box = nearest_storage(owner, 2.5f); m_scene.alive(box)) {
+                std::string first = inv->interact_keys.substr(0, inv->interact_keys.find(','));
+                const std::string tip = "[" + first + "] open " + m_scene.name(box);
+                label((sw - text_w(tip, 14.0f)) * 0.5f, sh * 0.5f + 40.0f, tip, 14.0f, white);
+            }
+            return;
+        }
+
+        rect(0, 0, sw, sh, Color(0, 0, 0, 90));
+        const orchard::HudLayout lay = inventory_screen(owner);
+        for (const orchard::HudRect& p : lay.panels) {
+            rect(p.x, p.y, p.w, p.h, panel_c);
+            frame(p.x, p.y, p.w, p.h, edge_c);
+            text(p.x + 8.0f, p.y + 4.0f, p.label, 13.0f, white);
+        }
+        // Weight and volume line under the player's own panel.
+        if (inv->show_weight) {
+            const float wgt = orchard::inventory_weight(cat, *inv);
+            char buf[96];
+            if (inv->max_weight > 0.0f) std::snprintf(buf, sizeof(buf), "%.1f / %.1f kg", static_cast<double>(wgt), static_cast<double>(inv->max_weight));
+            else std::snprintf(buf, sizeof(buf), "%.1f kg", static_cast<double>(wgt));
+            std::string line = buf;
+            if (inv->style == orchard::InventoryStyle::volume || inv->max_volume > 0.0f) {
+                std::snprintf(buf, sizeof(buf), "   %.1f / %.1f L", static_cast<double>(orchard::inventory_volume(cat, *inv)), static_cast<double>(inv->max_volume));
+                line += buf;
+            }
+            for (const orchard::HudRect& p : lay.panels)
+                if (!p.other && p.label == inv->title) {
+                    text(p.x + p.w - text_w(line, 12.0f) - 8.0f, p.y + 5.0f, line, 12.0f, inv->max_weight > 0.0f && wgt > inv->max_weight ? Color(240, 110, 100) : dim);
+                    break;
+                }
+        }
+        for (const orchard::HudRect& t : lay.texts) text(t.x, t.y, t.label, 11.0f, sel_c);
+        const orchard::HudRect* hover_cell = orchard::hud_cell_at(lay, m_mouse_x, m_mouse_y);
+        for (const orchard::HudRect& c : lay.cells) {
+            if (c.w > c.h * 2.5f) {
+                if (&c == hover_cell) rect(c.x, c.y, c.w, c.h, Color(80, 90, 74, 160));
+                continue;
+            }
+            const bool hot = &c == hover_cell && m_hud_drag.on;
+            rect(c.x, c.y, c.w, c.h, hot ? Color(90, 104, 80, 230) : cell_c);
+            frame(c.x, c.y, c.w, c.h, hot ? sel_c : edge_c);
+            if ((c.list.rfind("worn:", 0) == 0 || c.list.rfind("holster:", 0) == 0) && orchard::hud_item_at(lay, c.x + 1.0f, c.y + 1.0f) == nullptr) {
+                std::string slot = c.list.rfind("holster:", 0) == 0 ? std::string("Holster") : orchard::wear_slot_label(c.label);
+                slot = slot.substr(0, slot.find(' '));
+                const float ts = std::clamp(c.w * 0.22f, 7.0f, 10.0f);
+                while (slot.size() > 2 && text_w(slot, ts) > c.w - 4.0f) slot.pop_back();
+                text(c.x + 2.0f, c.y + c.h - ts - 4.0f, slot, ts, dim);
+            }
+        }
+        draw_items(lay, false);
+        // Tooltip for whatever is under the mouse.
+        if (!m_hud_drag.on)
+            if (const orchard::HudRect* it = orchard::hud_item_at(lay, m_mouse_x, m_mouse_y))
+                if (const orchard::ItemDef* d = cat.find(it->label)) {
+                    std::vector<std::string> lines = {d->name};
+                    char buf[160];
+                    std::snprintf(buf, sizeof(buf), "%s   %.2f kg   %.2f L", d->category.c_str(), static_cast<double>(d->weight), static_cast<double>(d->volume));
+                    lines.push_back(buf);
+                    if (d->damage > 0.0f) {
+                        std::snprintf(buf, sizeof(buf), "Damage %.0f %s   Rate %.1f/s", static_cast<double>(d->damage), d->damage_type.c_str(), static_cast<double>(d->rate));
+                        lines.push_back(buf);
+                    }
+                    if (d->armor > 0.0f || d->insulation != 0.0f) {
+                        std::snprintf(buf, sizeof(buf), "Armor %.0f   Warmth %.0f C", static_cast<double>(d->armor), static_cast<double>(d->insulation));
+                        lines.push_back(buf);
+                    }
+                    if (d->heal > 0.0f || d->food > 0.0f || d->water > 0.0f) {
+                        std::snprintf(buf, sizeof(buf), "Heals %.0f   Food %.0f   Water %.0f", static_cast<double>(d->heal), static_cast<double>(d->food), static_cast<double>(d->water));
+                        lines.push_back(buf);
+                    }
+                    if (!d->description.empty()) lines.push_back(d->description.substr(0, 90));
+                    lines.push_back("Drag to move, right-click to use or wear, shift-click to send across");
+                    float tw = 0.0f;
+                    for (const std::string& l : lines) tw = std::max(tw, text_w(l, 12.0f));
+                    float tx = std::min(m_mouse_x + 16.0f, sw - tw - 20.0f), ty = std::min(m_mouse_y + 16.0f, sh - lines.size() * 16.0f - 12.0f);
+                    rect(tx, ty, tw + 14.0f, lines.size() * 16.0f + 8.0f, Color(12, 14, 11, 235));
+                    frame(tx, ty, tw + 14.0f, lines.size() * 16.0f + 8.0f, edge_c);
+                    for (std::size_t i = 0; i < lines.size(); ++i) text(tx + 7.0f, ty + 4.0f + i * 16.0f, lines[i], 12.0f, i == 0 ? white : dim);
+                }
+        if (m_hud_drag.on) {
+            const orchard::ItemDef* d = cat.find(m_hud_drag.item);
+            float cell = inv->cell, pad = inv->padding;
+            for (const orchard::HudRect& c : lay.cells)
+                if (c.w <= c.h * 2.5f && c.list == "items") {
+                    cell = c.w;
+                    break;
+                }
+            pad *= cell / std::max(1.0f, inv->cell);
+            float w = cell, h = cell;
+            if (d && inv->style == orchard::InventoryStyle::grid) {
+                w = (m_hud_drag.rotate ? d->grid_h : d->grid_w) * (cell + pad) - pad;
+                h = (m_hud_drag.rotate ? d->grid_w : d->grid_h) * (cell + pad) - pad;
+            }
+            rect(m_mouse_x - cell * 0.5f, m_mouse_y - cell * 0.5f, w, h, Color(90, 100, 84, 180));
+            draw_item_icon(r, d, m_mouse_x - cell * 0.5f, m_mouse_y - cell * 0.5f, w, h, m_hud_drag.rotate);
+        }
+    }
+
     void drive_player_camera(float dt) {
         if (!m_player_ready) start_player_camera();
         if (!m_player_ready) return;
@@ -3550,17 +4675,20 @@ private:
         if (keys.physical_key_down("s")) move += forward * -1.0f;
         if (keys.physical_key_down("d")) move += right;
         if (keys.physical_key_down("a")) move += right * -1.0f;
-        const float speed = keys.key_down("shift") ? c->sprint() : c->move_speed;
         xylem::World* world = m_session.world();
         const orchard::Entity rider = m_scene.body_owner(cam);
+        orchard::Gameplay& game = keys.gameplay();
+        const orchard::Entity me = m_scene.alive(rider) ? rider : cam;
+        const orchard::Exertion effort = game.exert(me, c->move_speed, c->sprint(), keys.key_down("shift"), orchard::length(move) > 0.0f, keys.key_down("space"), dt);
+        const float speed = effort.speed;
         const orchard::Body* rider_body = rider.valid() ? m_scene.body(rider) : nullptr;
         if (c->control == orchard::CameraControl::walk && world && rider_body && rider_body->type == orchard::BodyType::dynamic && world->has_body(rider)) {
             xylem::CharacterMove mv;
             mv.wish = orchard::length(move) > 0.0f ? orchard::normalize(move) * speed : orchard::Vec3{};
-            mv.jump = keys.key_down("space");
-            mv.jump_speed = c->jump_speed;
+            mv.jump = effort.can_jump;
+            mv.jump_speed = c->jump_speed * effort.jump;
             mv.ride_height = 0.05f;
-            world->move_character(rider, mv, dt);
+            if (world->move_character(rider, mv, dt).jumped) game.jumped(me);
             if (orchard::Transform* rt = m_scene.transform(rider)) {
                 orchard::Vec3 face = orchard::rotate(xylem::world_rotation(m_scene, rider), orchard::Vec3{0.0f, 0.0f, 1.0f});
                 face = face - up * orchard::dot(face, up);
@@ -3656,18 +4784,21 @@ private:
         float lift = 0.0f;
         if (keys.physical_key_down("w") || keys.key_down("up")) lift += 1.0f;
         if (keys.physical_key_down("s") || keys.key_down("down")) lift -= 1.0f;
-        const float speed = keys.key_down("shift") ? c.sprint() : c.move_speed;
         xylem::World* world = m_session.world();
         const orchard::Entity rider = m_scene.body_owner(cam);
+        orchard::Gameplay& game = keys.gameplay();
+        const orchard::Entity me = m_scene.alive(rider) ? rider : cam;
+        const orchard::Exertion effort = game.exert(me, c.move_speed, c.sprint(), keys.key_down("shift"), side != 0.0f, keys.key_down("space") || lift > 0.0f, dt);
+        const float speed = effort.speed;
         const orchard::Body* rider_body = rider.valid() ? m_scene.body(rider) : nullptr;
         const bool riding = world && rider_body && rider_body->type == orchard::BodyType::dynamic && world->has_body(rider);
         if (c.control == orchard::CameraControl::walk && riding) {
             xylem::CharacterMove mv;
             mv.wish = orchard::Vec3{side * speed, 0.0f, 0.0f};
-            mv.jump = keys.key_down("space") || lift > 0.0f;
-            mv.jump_speed = c.jump_speed;
+            mv.jump = effort.can_jump;
+            mv.jump_speed = c.jump_speed * effort.jump;
             mv.ride_height = 0.05f;
-            world->move_character(rider, mv, dt);
+            if (world->move_character(rider, mv, dt).jumped) game.jumped(me);
             if (side != 0.0f && m_scene.dimension() == orchard::Dimension::three_d) face_along(rider, orchard::Vec3{side, 0.0f, 0.0f}, world);
             return;
         }
@@ -3945,12 +5076,15 @@ private:
             page("lights", "Lights");
             page("cameras", "Cameras");
             page("level", "Floors and zones");
+            page("items", "Items, weapons and loot");
+            page("weather", "Weather and climate zones");
             add("add:sound", "Sound");
             line();
             add("add:", "Empty entity");
             return items;
         }
-        const std::string back = at == "triangle" ? "physics" : at == "effects" ? "particles" : at.rfind("player-look:", 0) == 0 ? "player" : at.rfind("character-look:", 0) == 0 ? "characters" : "";
+        std::string back = at == "triangle" ? "physics" : at == "effects" ? "particles" : at.rfind("player-look:", 0) == 0 ? "player" : at.rfind("character-look:", 0) == 0 ? "characters" : "";
+        if (at.rfind("items:", 0) == 0) back = at.find('/') != std::string::npos ? at.substr(0, at.find('/')) : std::string("items");
         items.push_back(grove::menu_item("page:" + back, "\u2039 Back"));
         if (at == "player" || at == "characters") {
             const bool player = at == "player";
@@ -4031,6 +5165,38 @@ private:
             add("add:camera", "Camera (from this view)");
             add("add:player-camera", "Walking camera (W A S D)");
             if (!flat) add("add:camera:fly", "Flying camera (W A S D, E and Q)");
+        } else if (at == "items") {
+            header("Pick up, carry, wear and use (every item can be changed in Define Item)");
+            std::vector<std::string> tops;
+            for (const orchard::ItemDef& d : orchard::item_library()) {
+                const std::string top = d.category.substr(0, d.category.find('/'));
+                if (std::find(tops.begin(), tops.end(), top) == tops.end()) tops.push_back(top);
+            }
+            for (const std::string& t : tops) page("items:" + t, t);
+            line();
+            add("add:chest", "Storage chest (has its own inventory)");
+            add("add:locker", "Locker (grid inventory, Tarkov style)");
+        } else if (at.rfind("items:", 0) == 0) {
+            const std::string cat = at.substr(6);
+            const bool deeper = cat.find('/') != std::string::npos;
+            std::vector<std::string> subs;
+            for (const orchard::ItemDef& d : orchard::item_library()) {
+                if (d.category != cat && d.category.rfind(cat + "/", 0) != 0) continue;
+                if (!deeper && d.category.find('/') != std::string::npos) {
+                    if (std::find(subs.begin(), subs.end(), d.category) == subs.end()) subs.push_back(d.category);
+                } else {
+                    add("add:item:" + d.id, d.name);
+                }
+            }
+            if (!subs.empty()) header(cat);
+            for (const std::string& sc : subs) page("items:" + sc, sc.substr(sc.find('/') + 1));
+        } else if (at == "weather") {
+            header("Covers the whole world");
+            for (const std::string& pr : orchard::climate_presets())
+                if (pr != "custom") add("add:climate-global:" + pr, title_case(pr));
+            line();
+            header("Only inside a box you can move and size");
+            for (const std::string& pr : orchard::climate_presets()) add("add:climate:" + pr, title_case(pr));
         } else if (at == "level") {
             header("Floors and zones");
             add("add:ground", "Floor");
@@ -4876,6 +6042,11 @@ private:
         b.continuous = orchard::BodyContinuous::on;
         b.angular_damping = 1.0f;
         make_player_colliders(e);
+        orchard::Health& hp = m_scene.add_health(e);
+        hp.on_death = orchard::DeathAction::respawn;
+        hp.respawn_delay = 3.0f;
+        m_scene.add_survival(e);
+        orchard::apply_inventory_preset(m_scene.add_inventory(e), "minecraft");
         const orchard::Entity cam = m_scene.create("Camera", e);
         orchard::Camera& cc = m_scene.add_camera(cam);
         cc.control = orchard::CameraControl::walk;
@@ -5028,6 +6199,49 @@ private:
             return e;
         }
         if (kind.rfind("agent:", 0) == 0) return add_agent_entity(kind.substr(6), parent);
+        if (kind.rfind("item:", 0) == 0 || kind == "chest" || kind == "locker" || kind.rfind("climate", 0) == 0) {
+            const orchard::Vec3 at = flat ? orchard::Vec3{m_view.pan_camera().center.x, m_view.pan_camera().center.y, 0.0f} : m_view.orbit_camera().target;
+            if (kind.rfind("item:", 0) == 0) {
+                orchard::Gameplay g;
+                g.start(&m_scene, nullptr);
+                const orchard::Entity e = g.spawn_item(kind.substr(5), 1.0f, at + orchard::Vec3{0.0f, flat ? 0.5f : 0.3f, 0.0f}, "detailed");
+                g.stop();
+                if (m_scene.alive(e) && m_scene.alive(parent)) m_scene.set_parent(e, parent);
+                ensure_item_models();
+                return e;
+            }
+            if (kind == "chest" || kind == "locker") {
+                const bool locker = kind == "locker";
+                const orchard::Entity e = m_scene.create(locker ? "Locker" : "Chest", parent);
+                m_scene.transform(e)->position = at + orchard::Vec3{0.0f, locker ? 0.9f : 0.3f, 0.0f};
+                m_scene.add_body(e).type = orchard::BodyType::fixed;
+                m_scene.add_collider(e)->size = locker ? orchard::Vec3{0.6f, 1.8f, 0.5f} : orchard::Vec3{0.9f, 0.6f, 0.55f};
+                m_scene.add_material(e).color = locker ? orchard::Vec3{0.45f, 0.5f, 0.52f} : orchard::Vec3{0.52f, 0.34f, 0.18f};
+                orchard::Inventory& inv = m_scene.add_inventory(e);
+                orchard::apply_inventory_preset(inv, locker ? "tarkov" : "minecraft");
+                inv.hotbar = false;
+                inv.equipment = false;
+                inv.open_keys.clear();
+                inv.title = locker ? "Locker" : "Chest";
+                if (locker) {
+                    inv.columns = 6;
+                    inv.rows = 8;
+                } else {
+                    inv.rows = 3;
+                }
+                m_scene.add_tag(e, "storage");
+                return e;
+            }
+            const bool global = kind.rfind("climate-global:", 0) == 0;
+            const std::string preset = kind.substr(kind.find(':') + 1);
+            const orchard::Entity e = m_scene.create(std::string(global ? "Weather: " : "Climate zone: ") + title_case(preset), parent);
+            m_scene.transform(e)->position = at;
+            orchard::Climate& c = m_scene.add_climate(e);
+            orchard::apply_climate_preset(c, preset);
+            c.global = global;
+            if (flat) c.size.z = 1.0f;
+            return e;
+        }
         if (kind == "patrol-route" || kind == "hiding-spot" || kind == "cover" || kind == "sound") {
             const orchard::Vec3 at = flat ? orchard::Vec3{m_view.pan_camera().center.x, m_view.pan_camera().center.y, 0.0f} : m_view.orbit_camera().target;
             if (kind == "sound") {
@@ -5299,7 +6513,7 @@ private:
         native("graph_status", [this](const std::vector<std::string>&) { return graph_status_text(); });
 
         native("graph_press", [this](const std::vector<std::string>& f) {
-            float x, y;
+            float x = 0.0f, y = 0.0f;
             orchard::editor::GraphView* g = active_graph();
             if (!g || !graph_point(arg(f, 0), arg(f, 1), x, y)) return std::string();
             if (g->press(x, y, std::atoi(arg(f, 2).c_str()), arg(f, 3) == "1", arg(f, 4) == "1")) redraw_graph();
@@ -5307,7 +6521,7 @@ private:
         });
 
         native("graph_move", [this](const std::vector<std::string>& f) {
-            float x, y;
+            float x = 0.0f, y = 0.0f;
             orchard::editor::GraphView* g = active_graph();
             if (!g || !graph_point(arg(f, 0), arg(f, 1), x, y)) return std::string();
             if (g->drag(x, y)) redraw_graph();
@@ -5315,7 +6529,7 @@ private:
         });
 
         native("graph_release", [this](const std::vector<std::string>& f) {
-            float x, y;
+            float x = 0.0f, y = 0.0f;
             orchard::editor::GraphView* g = active_graph();
             if (!g || !graph_point(arg(f, 0), arg(f, 1), x, y)) return std::string();
             const orchard::editor::GraphEvent ev = g->release(x, y);
@@ -5335,7 +6549,7 @@ private:
         });
 
         native("graph_wheel", [this](const std::vector<std::string>& f) {
-            float x, y;
+            float x = 0.0f, y = 0.0f;
             orchard::editor::GraphView* g = active_graph();
             if (!g || !graph_point(arg(f, 0), arg(f, 1), x, y)) return std::string();
             if (g->wheel(x, y, static_cast<float>(std::atof(arg(f, 2).c_str())))) redraw_graph();
@@ -5631,6 +6845,7 @@ private:
             const int physical = std::atoi(arg(f, 3).c_str());
             if (logical > 0 || physical > 0) m_session.scripts().set_key(logical, physical, down);
             else m_session.scripts().set_key(arg(f, 0), down);
+            if (play_input(arg(f, 0), down)) redraw();
             return std::string("ok");
         });
 
@@ -5644,8 +6859,12 @@ private:
         });
 
         native("viewport_press", [this](const std::vector<std::string>& f) {
-            float x, y;
+            float x = 0.0f, y = 0.0f;
             if (!to_canvas(arg(f, 0), arg(f, 1), x, y)) return std::string();
+            if (m_session.playing()) {
+                if (hud_press(x, y, std::atoi(arg(f, 2).c_str()), arg(f, 3) == "1")) return std::string("ok");
+                play_input("mouse" + arg(f, 2), true);
+            }
             m_drag = true;
             m_drag_button = std::atoi(arg(f, 2).c_str());
             const bool shift = arg(f, 3) == "1";
@@ -5660,7 +6879,15 @@ private:
         });
 
         native("viewport_move", [this](const std::vector<std::string>& f) {
-            float x, y;
+            float x = 0.0f, y = 0.0f;
+            if (m_session.playing() && to_canvas(arg(f, 0), arg(f, 1), x, y)) {
+                m_mouse_x = x;
+                m_mouse_y = y;
+                if (screen_open()) {
+                    redraw();
+                    return std::string("ok");
+                }
+            }
             if (!m_drag || !to_canvas(arg(f, 0), arg(f, 1), x, y)) return std::string();
             if (m_move_entity.valid()) {
                 continue_move(x, y);
@@ -5689,9 +6916,17 @@ private:
         });
 
         native("viewport_release", [this](const std::vector<std::string>& f) {
-            float x, y;
+            float x = 0.0f, y = 0.0f;
+            if (m_session.playing() && to_canvas(arg(f, 0), arg(f, 1), x, y) && hud_release(x, y)) {
+                m_drag = false;
+                return std::string("ok");
+            }
             const bool was = m_drag;
             m_drag = false;
+            if (m_session.playing() && was) {
+                play_input("mouse" + std::to_string(m_drag_button), false);
+                if (!m_move_entity.valid()) return std::string("drag");
+            }
             const orchard::Entity dragged = m_move_entity;
             const bool dragged_moved = m_move_moved;
             m_move_entity = orchard::Entity{};
@@ -5727,6 +6962,16 @@ private:
         });
 
         native("viewport_zoom", [this](const std::vector<std::string>& f) {
+            if (m_session.playing()) {
+                const orchard::Entity owner = play_owner();
+                const orchard::Inventory* inv = m_scene.inventory(owner);
+                if (inv && inv->enabled && inv->hotbar && inv->hotbar_scroll && !screen_open()) {
+                    const double d = std::atof(arg(f, 0).c_str());
+                    if (d != 0.0) m_session.scripts().gameplay().scroll_slot(owner, d > 0.0 ? 1 : -1);
+                    redraw();
+                    return std::string("ok");
+                }
+            }
             m_view.zoom(static_cast<float>(std::atof(arg(f, 0).c_str())));
             moved_view();
             redraw();
@@ -6033,7 +7278,7 @@ private:
         });
 
         native("terrain_pick", [this](const std::vector<std::string>& f) {
-            float x, y;
+            float x = 0.0f, y = 0.0f;
             orchard::Vec3 origin, dir, point;
             orchard::Entity hit;
             if (!to_canvas(arg(f, 0), arg(f, 1), x, y) || !m_view.ray(x, y, origin, dir) || !m_gpu.terrain().pick(m_scene, origin, dir, 1e5f, hit, point)) {
@@ -6447,7 +7692,7 @@ private:
         native("menu_action", [this](const std::vector<std::string>& f) { return menu_action(entity(arg(f, 0)), arg(f, 1)); });
 
         native("viewport_pick", [this](const std::vector<std::string>& f) {
-            float x, y;
+            float x = 0.0f, y = 0.0f;
             if (!to_canvas(arg(f, 0), arg(f, 1), x, y)) return std::string();
             const orchard::Entity e = pick_entity(x, y);
             return m_scene.alive(e) ? std::to_string(e.id()) : std::string();
@@ -6471,6 +7716,7 @@ private:
     orchard::editor::AxesChoice m_axes_choice;
     bool m_animation_was_running = false;
     unsigned m_model_check = 0;
+    unsigned m_item_model_check = 0;
     std::map<std::string, orchard::editor::GraphView> m_graphs;
     orchard::editor::GraphView m_no_graph;
     std::string m_graph_open;

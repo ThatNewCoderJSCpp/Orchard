@@ -153,5 +153,84 @@ namespace Orchard
         public static string SecureToken(double byte_count = 32.0) => Native.GameText(341, 0, 0, "", new double[] {byte_count});
         public static string SecureHex(double byte_count = 16.0) => Native.GameText(342, 0, 0, "", new double[] {byte_count});
         public static string SecureUuid() => Native.GameText(343, 0, 0, "", new double[] {});
+        public static double ApplyDamage(Entity target, double amount, string damage_type = "physical") => Native.Game(400, target?.Id ?? 0, 0, J(damage_type), new double[] {amount});
+        public static double ApplyDamageFrom(Entity target, Entity attacker, double amount, string damage_type = "physical", double knock_x = 0.0, double knock_y = 0.0, double knock_z = 0.0, double stagger_time = -1.0) => Native.Game(401, target?.Id ?? 0, attacker?.Id ?? 0, J(damage_type), new double[] {amount, knock_x, knock_y, knock_z, stagger_time});
+        public static void DamageOverTime(Entity target, double amount, string damage_type = "physical", double duration = 5.0, double interval = 1.0, bool forever = false) { Native.Game(402, target?.Id ?? 0, 0, J(damage_type), new double[] {amount, duration, interval, forever ? 1.0 : 0.0}); }
+        public static void DamageOverTimeFrom(Entity target, Entity attacker, double amount, string damage_type = "physical", double duration = 5.0, double interval = 1.0, bool forever = false, double knock_x = 0.0, double knock_y = 0.0, double knock_z = 0.0, double push_repeat = 0.0, double stagger_time = -1.0, bool stack = false, string damage_key = "") { Native.Game(403, target?.Id ?? 0, attacker?.Id ?? 0, J(damage_type, damage_key), new double[] {amount, duration, interval, forever ? 1.0 : 0.0, knock_x, knock_y, knock_z, push_repeat, stagger_time, stack ? 1.0 : 0.0}); }
+        public static bool StopDamageOverTime(Entity target, string damage_key = "") => Native.Game(404, target?.Id ?? 0, 0, J(damage_key), new double[] {}) != 0.0;
+        public static int DamageOverTimeCount(Entity target) => (int)Native.Game(405, target?.Id ?? 0, 0, "", new double[] {});
+        public static string LastDamageType(Entity target) => Native.GameText(406, target?.Id ?? 0, 0, "", new double[] {});
+        public static bool ApplyEffect(Entity target, string effect_name, double duration = 0.0, double strength = 1.0) => Native.Game(407, target?.Id ?? 0, 0, J(effect_name), new double[] {duration, strength}) != 0.0;
+        public static bool ApplyEffectForever(Entity target, string effect_name, double strength = 1.0) => Native.Game(408, target?.Id ?? 0, 0, J(effect_name), new double[] {strength}) != 0.0;
+        public static bool ApplyEffectFrom(Entity target, Entity source, string effect_name, double duration = 0.0, double strength = 1.0) => Native.Game(409, target?.Id ?? 0, source?.Id ?? 0, J(effect_name), new double[] {duration, strength}) != 0.0;
+        public static bool RemoveEffect(Entity target, string effect_name) => Native.Game(410, target?.Id ?? 0, 0, J(effect_name), new double[] {}) != 0.0;
+        public static int ClearEffects(Entity target) => (int)Native.Game(411, target?.Id ?? 0, 0, "", new double[] {});
+        public static bool HasEffect(Entity target, string effect_name) => Native.Game(412, target?.Id ?? 0, 0, J(effect_name), new double[] {}) != 0.0;
+        public static int EffectStacks(Entity target, string effect_name) => (int)Native.Game(413, target?.Id ?? 0, 0, J(effect_name), new double[] {});
+        public static double EffectTimeLeft(Entity target, string effect_name) => Native.Game(414, target?.Id ?? 0, 0, J(effect_name), new double[] {});
+        public static string EffectList(Entity target) => Native.GameText(415, target?.Id ?? 0, 0, "", new double[] {});
+        public static bool DefineEffect(string effect_name, string setting, string value) => Native.Game(416, 0, 0, J(effect_name, setting, value), new double[] {}) != 0.0;
+        public static bool Stagger(Entity target, double seconds = 0.5) => Native.Game(417, target?.Id ?? 0, 0, "", new double[] {seconds}) != 0.0;
+        public static double StaggerTimeLeft(Entity target) => Native.Game(418, target?.Id ?? 0, 0, "", new double[] {});
+        public static bool IsStunned(Entity target) => Native.Game(419, target?.Id ?? 0, 0, "", new double[] {}) != 0.0;
+        public static double MoveScale(Entity target) => Native.Game(420, target?.Id ?? 0, 0, "", new double[] {});
+        public static double Stat(Entity target, string stat_name) => Native.Game(421, target?.Id ?? 0, 0, J(stat_name), new double[] {});
+        public static bool SetStat(Entity target, string stat_name, double value) => Native.Game(422, target?.Id ?? 0, 0, J(stat_name), new double[] {value}) != 0.0;
+        public static double AddStat(Entity target, string stat_name, double amount) => Native.Game(423, target?.Id ?? 0, 0, J(stat_name), new double[] {amount});
+        public static double Eat(Entity target, double food, double saturation = 0.0) => Native.Game(424, target?.Id ?? 0, 0, "", new double[] {food, saturation});
+        public static double Drink(Entity target, double amount) => Native.Game(425, target?.Id ?? 0, 0, "", new double[] {amount});
+        public static bool UseStamina(Entity target, double amount) => Native.Game(426, target?.Id ?? 0, 0, "", new double[] {amount}) != 0.0;
+        public static double Resistance(Entity target, string damage_type) => Native.Game(427, target?.Id ?? 0, 0, J(damage_type), new double[] {});
+        public static bool SetResistance(Entity target, string damage_type, double value) => Native.Game(428, target?.Id ?? 0, 0, J(damage_type), new double[] {value}) != 0.0;
+        public static bool SetDamageFormula(Entity target, string formula) => Native.Game(429, target?.Id ?? 0, 0, J(formula), new double[] {}) != 0.0;
+        public static bool SetEffectFormula(Entity target, string formula) => Native.Game(430, target?.Id ?? 0, 0, J(formula), new double[] {}) != 0.0;
+        public static bool IsUnderwater(Entity target) => Native.Game(431, target?.Id ?? 0, 0, "", new double[] {}) != 0.0;
+        public static bool SetHealthSetting(Entity target, string setting, string value) => Native.Game(432, target?.Id ?? 0, 0, J(setting, value), new double[] {}) != 0.0;
+        public static string HealthSetting(Entity target, string setting) => Native.GameText(433, target?.Id ?? 0, 0, J(setting), new double[] {});
+        public static double ConvertUnits(double value, string from_unit, string to_unit) => Native.Game(434, 0, 0, J(from_unit, to_unit), new double[] {value});
+        public static double GiveItem(Entity target, string item, double amount = 1.0) => Native.Game(440, target?.Id ?? 0, 0, J(item), new double[] {amount});
+        public static double TakeItem(Entity target, string item, double amount = 1.0) => Native.Game(441, target?.Id ?? 0, 0, J(item), new double[] {amount});
+        public static double ItemCount(Entity target, string item) => Native.Game(442, target?.Id ?? 0, 0, J(item), new double[] {});
+        public static Entity SpawnItem(string item, double amount, double x, double y, double z, string look = "detailed") => new Entity(Native.GameEntity(443, 0, 0, J(item, look), new double[] {amount, x, y, z}));
+        public static Entity DropItem(Entity target, string list = "items", double index = 0.0, double amount = -1.0) => new Entity(Native.GameEntity(444, target?.Id ?? 0, 0, J(list), new double[] {index, amount}));
+        public static bool PickUp(Entity target, Entity pickup) => Native.Game(445, target?.Id ?? 0, pickup?.Id ?? 0, "", new double[] {}) != 0.0;
+        public static Entity NearestPickup(Entity target, double radius = 2.5) => new Entity(Native.GameEntity(446, target?.Id ?? 0, 0, "", new double[] {radius}));
+        public static bool DefineItem(string item, string setting, string value) => Native.Game(447, 0, 0, J(item, setting, value), new double[] {}) != 0.0;
+        public static string ItemSetting(string item, string setting) => Native.GameText(448, 0, 0, J(item, setting), new double[] {});
+        public static bool EquipItem(Entity target, string list, double index) => Native.Game(449, target?.Id ?? 0, 0, J(list), new double[] {index}) != 0.0;
+        public static bool UnequipItem(Entity target, string slot) => Native.Game(450, target?.Id ?? 0, 0, J(slot), new double[] {}) != 0.0;
+        public static bool HoldItem(Entity target, string hand, string list, double index) => Native.Game(451, target?.Id ?? 0, 0, J(hand, list), new double[] {index}) != 0.0;
+        public static string HeldItem(Entity target, string hand = "mainhand") => Native.GameText(452, target?.Id ?? 0, 0, J(hand), new double[] {});
+        public static bool HolsterItem(Entity target, string hand = "mainhand") => Native.Game(453, target?.Id ?? 0, 0, J(hand), new double[] {}) != 0.0;
+        public static bool DrawItem(Entity target, string slot, string hand = "mainhand") => Native.Game(454, target?.Id ?? 0, 0, J(slot, hand), new double[] {}) != 0.0;
+        public static bool SelectSlot(Entity target, double index) => Native.Game(455, target?.Id ?? 0, 0, "", new double[] {index}) != 0.0;
+        public static bool UseItem(Entity target, string list, double index) => Native.Game(456, target?.Id ?? 0, 0, J(list), new double[] {index}) != 0.0;
+        public static bool UseHeld(Entity target, bool pressed = true, bool held = false) => Native.Game(457, target?.Id ?? 0, 0, "", new double[] {pressed ? 1.0 : 0.0, held ? 1.0 : 0.0}) != 0.0;
+        public static bool ReleaseHeld(Entity target) => Native.Game(458, target?.Id ?? 0, 0, "", new double[] {}) != 0.0;
+        public static bool ReloadWeapon(Entity target) => Native.Game(459, target?.Id ?? 0, 0, "", new double[] {}) != 0.0;
+        public static bool MoveItem(Entity target, string list, double index, Entity to, string to_list, double to_index, double amount = -1.0) => Native.Game(460, target?.Id ?? 0, to?.Id ?? 0, J(list, to_list), new double[] {index, to_index, amount}) != 0.0;
+        public static string InventorySetting(Entity target, string setting) => Native.GameText(461, target?.Id ?? 0, 0, J(setting), new double[] {});
+        public static bool SetInventorySetting(Entity target, string setting, string value) => Native.Game(462, target?.Id ?? 0, 0, J(setting, value), new double[] {}) != 0.0;
+        public static string SlotItem(Entity target, string list, double index) => Native.GameText(463, target?.Id ?? 0, 0, J(list), new double[] {index});
+        public static double SlotAmount(Entity target, string list, double index) => Native.Game(464, target?.Id ?? 0, 0, J(list), new double[] {index});
+        public static void SetAim(Entity target, double ox, double oy, double oz, double dx, double dy, double dz) { Native.Game(465, target?.Id ?? 0, 0, "", new double[] {ox, oy, oz, dx, dy, dz}); }
+        public static bool SetStance(Entity target, string stance) => Native.Game(466, target?.Id ?? 0, 0, J(stance), new double[] {}) != 0.0;
+        public static void SetAiming(Entity target, bool on = true) { Native.Game(467, target?.Id ?? 0, 0, "", new double[] {on ? 1.0 : 0.0}); }
+        public static void SetBlocking(Entity target, bool on = true) { Native.Game(468, target?.Id ?? 0, 0, "", new double[] {on ? 1.0 : 0.0}); }
+        public static int FireWeapon(Entity target, string item, double ox, double oy, double oz, double dx, double dy, double dz, double power = 1.0) => (int)Native.Game(469, target?.Id ?? 0, 0, J(item), new double[] {ox, oy, oz, dx, dy, dz, power});
+        public static bool SetBallistics(string mode) => Native.Game(470, 0, 0, J(mode), new double[] {}) != 0.0;
+        public static double WornArmor(Entity target, string damage_type = "physical") => Native.Game(471, target?.Id ?? 0, 0, J(damage_type), new double[] {});
+        public static Entity StartWeather(string preset, double duration = -1.0, double fade_in = 2.0, double fade_out = 2.0) => new Entity(Native.GameEntity(472, 0, 0, J(preset), new double[] {duration, fade_in, fade_out}));
+        public static Entity StartWeatherAt(string preset, double x, double y, double z, double radius, double duration = -1.0, double fade_in = 2.0, double fade_out = 2.0) => new Entity(Native.GameEntity(473, 0, 0, J(preset), new double[] {x, y, z, radius, duration, fade_in, fade_out}));
+        public static bool StopWeather(Entity zone, double fade_out = 2.0) => Native.Game(474, zone?.Id ?? 0, 0, "", new double[] {fade_out}) != 0.0;
+        public static int StopAllWeather(double fade_out = 2.0) => (int)Native.Game(475, 0, 0, "", new double[] {fade_out});
+        public static bool SetClimate(Entity zone, string setting, string value) => Native.Game(476, zone?.Id ?? 0, 0, J(setting, value), new double[] {}) != 0.0;
+        public static double TemperatureAt(double x, double y, double z) => Native.Game(477, 0, 0, "", new double[] {x, y, z});
+        public static double WindXAt(double x, double y, double z) => Native.Game(478, 0, 0, "", new double[] {x, y, z});
+        public static double WindYAt(double x, double y, double z) => Native.Game(479, 0, 0, "", new double[] {x, y, z});
+        public static double WindZAt(double x, double y, double z) => Native.Game(480, 0, 0, "", new double[] {x, y, z});
+        public static double RainAt(double x, double y, double z) => Native.Game(481, 0, 0, "", new double[] {x, y, z});
+        public static double SnowAt(double x, double y, double z) => Native.Game(482, 0, 0, "", new double[] {x, y, z});
+        public static bool IsSheltered(double x, double y, double z) => Native.Game(483, 0, 0, "", new double[] {x, y, z}) != 0.0;
     }
 }

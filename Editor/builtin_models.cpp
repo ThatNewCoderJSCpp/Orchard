@@ -1,5 +1,7 @@
 #include "builtin_models.hpp"
 
+#include <orchard/items.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -234,6 +236,257 @@ MeshData build(const std::string& name) {
     return m;
 }
 
+
+C4 rgb(orchard::Vec3 c, float shade = 1.0f, float a = 1.0f) {
+    return {std::clamp(c.x * shade, 0.0f, 1.0f), std::clamp(c.y * shade, 0.0f, 1.0f), std::clamp(c.z * shade, 0.0f, 1.0f), a};
+}
+
+// Every held item points along -Z (the way the holder faces) with the grip at the origin.
+void item_gun(MeshData& m, const orchard::ItemDef& d, int q) {
+    const float L = std::clamp(d.length, 0.12f, 2.0f);
+    const C4 metal = rgb(d.color), dark = rgb(d.color, 0.6f), wood = rgb(d.accent);
+    const bool rifle = L > 0.45f;
+    const float body = rifle ? L * 0.45f : L * 0.7f;
+    box(m, {0.0f, 0.05f, -body * 0.5f + 0.05f}, {0.025f, 0.035f, body * 0.5f}, metal);
+    const float barrel_start = -body + 0.05f;
+    rod(m, {0.0f, 0.06f, barrel_start}, {0.0f, 0.06f, -L + 0.08f}, rifle ? 0.012f : 0.01f, dark, q >= 2 ? 12 : 6);
+    box(m, {0.0f, -0.04f, 0.0f}, {0.018f, 0.06f, 0.025f}, wood);
+    if (d.magazine > 1 && d.magazine < 200) box(m, {0.0f, -0.03f, -0.07f}, {0.014f, 0.05f, 0.02f}, dark);
+    if (rifle) box(m, {0.0f, 0.03f, 0.08f + L * 0.12f}, {0.02f, 0.045f, L * 0.13f}, wood);
+    if (q >= 1) {
+        box(m, {0.0f, 0.095f, -L + 0.11f}, {0.003f, 0.01f, 0.004f}, dark);
+        box(m, {0.0f, 0.09f, 0.02f}, {0.008f, 0.008f, 0.006f}, dark);
+        box(m, {0.0f, -0.005f, -0.03f}, {0.004f, 0.012f, 0.02f}, dark);
+    }
+    if (q >= 2) {
+        if (rifle) rod(m, {0.0f, 0.04f, barrel_start + 0.05f}, {0.0f, 0.04f, barrel_start - L * 0.25f}, 0.02f, wood, 10);
+        if (d.has("scoped") || d.category.find("Sniper") != std::string::npos) rod(m, {0.0f, 0.12f, -0.05f}, {0.0f, 0.12f, -0.3f}, 0.022f, dark, 14);
+        rod(m, {0.0f, 0.06f, -L + 0.08f}, {0.0f, 0.06f, -L + 0.06f}, rifle ? 0.016f : 0.013f, dark, 12);
+    }
+}
+
+void item_melee(MeshData& m, const orchard::ItemDef& d, int q) {
+    const float L = std::clamp(d.length, 0.1f, 3.0f);
+    const C4 blade = rgb(d.color), grip = rgb(d.accent), guard = rgb(d.accent, 0.7f);
+    const bool blunt = d.damage_type == "blunt" || d.has("blunt");
+    const bool polearm = L > 1.4f;
+    const float handle = polearm ? L * 0.8f : std::min(0.25f, L * 0.3f);
+    rod(m, {0.0f, 0.0f, handle * 0.25f}, {0.0f, 0.0f, -handle * 0.75f}, polearm ? 0.016f : 0.017f, grip, q >= 2 ? 10 : 6);
+    const float head0 = -handle * 0.75f, head1 = -L + handle * 0.25f;
+    if (blunt) {
+        const float hl = std::max(0.08f, (head0 - head1));
+        if (d.shape.find("hammer") != std::string::npos || d.shape.find("mace") != std::string::npos || d.shape.find("maul") != std::string::npos)
+            box(m, {0.0f, 0.0f, head1 + 0.05f}, {0.07f, 0.045f, 0.05f}, blade);
+        else
+            rod(m, {0.0f, 0.0f, head0}, {0.0f, 0.0f, head1}, std::min(0.035f, 0.012f + hl * 0.03f), blade, q >= 2 ? 10 : 6);
+        if (q >= 1 && d.shape.find("mace") != std::string::npos)
+            for (int i = 0; i < 6; ++i) {
+                const float a = two_pi * static_cast<float>(i) / 6.0f;
+                box(m, {std::cos(a) * 0.055f, std::sin(a) * 0.055f, head1 + 0.05f}, {0.012f, 0.012f, 0.012f}, blade);
+            }
+        return;
+    }
+    const bool axe = d.shape.find("axe") != std::string::npos || d.shape.find("hatchet") != std::string::npos;
+    if (axe) {
+        rod(m, {0.0f, 0.0f, head0}, {0.0f, 0.0f, head1}, 0.017f, grip, 6);
+        triangle(m, {0.004f, 0.0f, head1 + 0.02f}, {0.004f, 0.11f, head1 - 0.03f}, {0.004f, 0.11f, head1 + 0.09f}, blade);
+        triangle(m, {-0.004f, 0.0f, head1 + 0.02f}, {-0.004f, 0.11f, head1 + 0.09f}, {-0.004f, 0.11f, head1 - 0.03f}, blade);
+        return;
+    }
+    const float w = d.shape.find("rapier") != std::string::npos || d.shape.find("estoc") != std::string::npos ? 0.008f : d.shape.find("knife") != std::string::npos || d.shape.find("dagger") != std::string::npos ? 0.014f : 0.022f;
+    if (polearm) rod(m, {0.0f, 0.0f, head0}, {0.0f, 0.0f, head1 + 0.15f}, 0.015f, grip, 6);
+    const float b0 = polearm ? head1 + 0.15f : head0, b1 = head1;
+    const float curve = d.shape.find("katana") != std::string::npos || d.shape.find("saber") != std::string::npos || d.shape.find("scimitar") != std::string::npos ? 0.04f : 0.0f;
+    const int segs = q >= 2 ? 8 : q == 1 ? 4 : 1;
+    for (int i = 0; i < segs; ++i) {
+        const float t0 = static_cast<float>(i) / segs, t1 = static_cast<float>(i + 1) / segs;
+        const float z0 = b0 + (b1 - b0) * t0, z1 = b0 + (b1 - b0) * t1;
+        const float y0 = curve * t0 * t0, y1 = curve * t1 * t1;
+        const float w0 = w, w1 = i + 1 == segs ? 0.0f : w;
+        box(m, {0.0f, (y0 + y1) * 0.5f, (z0 + z1) * 0.5f}, {0.003f, (w0 + w1) * 0.5f, std::fabs(z1 - z0) * 0.5f}, blade);
+    }
+    if (!polearm) box(m, {0.0f, 0.0f, head0}, {0.012f, std::max(0.03f, w * 2.2f), 0.008f}, guard);
+    if (q >= 1 && !polearm) ellipsoid(m, {0.0f, 0.0f, handle * 0.27f}, {0.022f, 0.022f, 0.022f}, guard, 5, 8);
+}
+
+void item_bow(MeshData& m, const orchard::ItemDef& d, int q) {
+    const C4 wood = rgb(d.color), string{0.9f, 0.9f, 0.85f, 1.0f};
+    if (d.shape.find("crossbow") != std::string::npos) {
+        box(m, {0.0f, 0.0f, -0.25f}, {0.02f, 0.025f, 0.3f}, rgb(d.accent));
+        box(m, {0.0f, 0.02f, -0.5f}, {0.3f, 0.012f, 0.012f}, wood);
+        rod(m, {-0.3f, 0.02f, -0.5f}, {0.0f, 0.02f, -0.3f}, 0.002f, string, 4);
+        rod(m, {0.3f, 0.02f, -0.5f}, {0.0f, 0.02f, -0.3f}, 0.002f, string, 4);
+        return;
+    }
+    if (d.shape.find("sling") != std::string::npos || d.shape == "blowgun") {
+        rod(m, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -std::max(0.2f, d.length)}, 0.008f, wood, 6);
+        return;
+    }
+    const float half = std::clamp(d.length, 0.6f, 2.0f) * 0.5f;
+    const int segs = q >= 2 ? 12 : q == 1 ? 6 : 3;
+    V prev{0.0f, -half, 0.0f};
+    for (int i = 1; i <= segs; ++i) {
+        const float t = -1.0f + 2.0f * static_cast<float>(i) / segs;
+        const V cur{0.0f, t * half, -0.12f * (1.0f - t * t) - (d.shape.find("compound") != std::string::npos ? 0.02f : 0.0f)};
+        rod(m, prev, cur, 0.012f, wood, 6);
+        prev = cur;
+    }
+    rod(m, {0.0f, -half, 0.0f}, {0.0f, half, 0.0f}, 0.0015f, string, 4);
+}
+
+void item_magic(MeshData& m, const orchard::ItemDef& d, int q) {
+    const C4 wood = rgb(d.accent), glow = rgb(d.color, 1.2f);
+    if (d.shape == "staff") {
+        rod(m, {0.0f, 0.0f, 0.4f}, {0.0f, 0.0f, -1.3f}, 0.018f, wood, q >= 2 ? 10 : 6);
+        ellipsoid(m, {0.0f, 0.0f, -1.36f}, {0.06f, 0.06f, 0.06f}, glow, q >= 1 ? 8 : 4, q >= 1 ? 12 : 6);
+    } else if (d.shape == "wand") {
+        rod(m, {0.0f, 0.0f, 0.05f}, {0.0f, 0.0f, -0.3f}, 0.008f, wood, 6);
+        if (q >= 1) ellipsoid(m, {0.0f, 0.0f, -0.31f}, {0.012f, 0.012f, 0.012f}, glow, 4, 6);
+    } else if (d.shape == "tome") {
+        box(m, {0.0f, 0.0f, 0.0f}, {0.12f, 0.03f, 0.16f}, rgb(d.color, 0.7f));
+        if (q >= 1) box(m, {0.0f, 0.0f, 0.0f}, {0.115f, 0.032f, 0.155f}, {0.92f, 0.88f, 0.75f, 1.0f});
+    } else {
+        ellipsoid(m, {0.0f, 0.0f, 0.0f}, {0.07f, 0.07f, 0.07f}, glow, q >= 1 ? 10 : 5, q >= 1 ? 14 : 7);
+    }
+}
+
+void item_flask(MeshData& m, const orchard::ItemDef& d, int q, bool liquid_only) {
+    const bool bottle = d.kind == orchard::ItemKind::drink;
+    const float r = bottle ? 0.035f : 0.045f, h = bottle ? 0.2f : 0.09f;
+    const C4 liquid = rgb(d.color, 1.0f, q >= 2 ? 0.85f : 1.0f);
+    if (liquid_only) {
+        // The sloshing part: a flattened blob that the game tilts with motion.
+        ellipsoid(m, {0.0f, bottle ? h * 0.35f : r * 0.8f, 0.0f}, {r * 0.88f, bottle ? h * 0.33f : r * 0.62f, r * 0.88f}, liquid, 6, 12);
+        return;
+    }
+    const C4 glass = q >= 2 ? C4{0.85f, 0.92f, 0.95f, 0.3f} : liquid;
+    if (bottle) cone(m, 0.0f, h, r, r, q >= 1 ? 12 : 6, glass, 3u, 0.0f);
+    else ellipsoid(m, {0.0f, r, 0.0f}, {r, r, r}, glass, q >= 1 ? 8 : 4, q >= 1 ? 12 : 6);
+    const float top = bottle ? h : r * 1.9f;
+    cone(m, top, top + 0.04f, r * 0.35f, r * 0.3f, q >= 1 ? 10 : 5, glass, 5u, 0.0f);
+    cone(m, top + 0.04f, top + 0.06f, r * 0.33f, r * 0.33f, 6, rgb(d.accent), 7u, 0.0f);
+}
+
+void item_wear(MeshData& m, const orchard::ItemDef& d, int q, bool worn) {
+    const C4 c = rgb(d.color), a = rgb(d.accent);
+    const std::string& slot = d.wear;
+    if (!worn) {
+        // Folded or packed version for the ground.
+        if (d.kind == orchard::ItemKind::container) box(m, {0.0f, 0.15f, 0.0f}, {0.15f, 0.15f, 0.08f}, c);
+        else if (slot == "head") ellipsoid(m, {0.0f, 0.06f, 0.0f}, {0.11f, 0.07f, 0.12f}, c, 6, 10);
+        else if (slot == "feet") { box(m, {-0.06f, 0.04f, 0.0f}, {0.045f, 0.04f, 0.12f}, c); box(m, {0.06f, 0.04f, 0.0f}, {0.045f, 0.04f, 0.12f}, c); }
+        else if (slot == "ring" || slot == "neck" || slot == "eyes" || slot == "face") ellipsoid(m, {0.0f, 0.02f, 0.0f}, {0.03f, 0.015f, 0.03f}, c, 4, 8);
+        else box(m, {0.0f, 0.03f, 0.0f}, {0.2f, 0.03f, 0.15f}, c);
+        if (q >= 1 && d.kind == orchard::ItemKind::container) box(m, {0.0f, 0.15f, 0.085f}, {0.1f, 0.08f, 0.02f}, a);
+        return;
+    }
+    // Worn shells, sized for a 1.8 m humanoid with its feet at the origin of the anchor slot.
+    const float t = d.kind == orchard::ItemKind::armor ? 0.03f : 0.012f;
+    const int rs = q >= 2 ? 10 : 6, ss = q >= 2 ? 16 : 8;
+    if (slot == "head") ellipsoid(m, {0.0f, 0.0f, 0.0f}, {0.115f + t, 0.12f + t, 0.125f + t}, c, rs, ss);
+    else if (slot == "eyes") box(m, {0.0f, 0.0f, -0.12f}, {0.08f, 0.02f, 0.01f}, c);
+    else if (slot == "face") box(m, {0.0f, -0.04f, -0.12f}, {0.08f, 0.06f, 0.01f}, c);
+    else if (slot == "neck") rod(m, {0.0f, -0.03f, 0.0f}, {0.0f, 0.03f, 0.0f}, 0.065f, c, ss);
+    else if (slot == "torso" || slot == "vest" || slot == "over") {
+        const float g = slot == "over" ? 0.03f : slot == "vest" ? 0.02f : 0.0f;
+        box(m, {0.0f, 0.0f, 0.0f}, {0.19f + t + g, 0.27f + g, 0.11f + t + g}, c);
+        if (slot == "torso") { rod(m, {-0.22f, 0.2f, 0.0f}, {-0.26f, -0.1f, 0.0f}, 0.05f + t, c, rs); rod(m, {0.22f, 0.2f, 0.0f}, {0.26f, -0.1f, 0.0f}, 0.05f + t, c, rs); }
+        if (q >= 1 && d.kind == orchard::ItemKind::container) for (float x : {-0.1f, 0.0f, 0.1f}) box(m, {x, -0.05f, -0.13f - t}, {0.04f, 0.05f, 0.025f}, a);
+    } else if (slot == "back") {
+        box(m, {0.0f, 0.0f, 0.18f}, {0.16f, 0.24f, 0.09f}, c);
+        if (q >= 1) { box(m, {0.0f, -0.08f, 0.28f}, {0.12f, 0.08f, 0.02f}, a); rod(m, {-0.1f, 0.24f, 0.1f}, {-0.1f, -0.2f, 0.1f}, 0.012f, a, 4); rod(m, {0.1f, 0.24f, 0.1f}, {0.1f, -0.2f, 0.1f}, 0.012f, a, 4); }
+    } else if (slot == "hands") {
+        ellipsoid(m, {-0.3f, -0.35f, 0.0f}, {0.045f + t, 0.06f, 0.035f + t}, c, 5, 8);
+        ellipsoid(m, {0.3f, -0.35f, 0.0f}, {0.045f + t, 0.06f, 0.035f + t}, c, 5, 8);
+    } else if (slot == "waist") {
+        rod(m, {0.0f, -0.025f, 0.0f}, {0.0f, 0.025f, 0.0f}, 0.17f, c, ss);
+    } else if (slot == "legs") {
+        rod(m, {-0.09f, 0.0f, 0.0f}, {-0.09f, -0.8f, 0.0f}, 0.07f + t, c, rs);
+        rod(m, {0.09f, 0.0f, 0.0f}, {0.09f, -0.8f, 0.0f}, 0.07f + t, c, rs);
+    } else if (slot == "feet") {
+        box(m, {-0.09f, 0.05f, -0.04f}, {0.05f + t, 0.05f, 0.12f + t}, c);
+        box(m, {0.09f, 0.05f, -0.04f}, {0.05f + t, 0.05f, 0.12f + t}, c);
+    } else if (slot == "shoulders") {
+        ellipsoid(m, {-0.22f, 0.0f, 0.0f}, {0.08f, 0.05f, 0.09f}, c, 5, 8);
+        ellipsoid(m, {0.22f, 0.0f, 0.0f}, {0.08f, 0.05f, 0.09f}, c, 5, 8);
+    } else if (slot == "ring" || slot == "ring2") {
+        rod(m, {0.0f, -0.003f, 0.0f}, {0.0f, 0.003f, 0.0f}, 0.011f, c, 8);
+    } else {
+        box(m, {0.0f, 0.0f, 0.0f}, {0.06f, 0.08f, 0.03f}, c);
+    }
+}
+
+MeshData build_item(const orchard::ItemDef& d, const std::string& variant) {
+    MeshData m;
+    const int q = variant == "simple" ? 0 : variant == "realistic" ? 2 : 1;
+    using K = orchard::ItemKind;
+    if (variant == "liquid") {
+        item_flask(m, d, 2, true);
+        return m;
+    }
+    const bool worn = variant == "worn";
+    if (worn && d.kind != K::clothing && d.kind != K::armor && d.kind != K::trinket && d.kind != K::container && d.kind != K::holster && !d.wearable()) {
+        // Held in a hand: same mesh as on the ground, but with the grip at the origin.
+        MeshData held;
+        switch (d.kind) {
+        case K::gun: item_gun(held, d, 1); break;
+        case K::melee: case K::tool: item_melee(held, d, 1); break;
+        case K::bow: item_bow(held, d, 1); break;
+        case K::magic: item_magic(held, d, 1); break;
+        default: held = build_item(d, "detailed"); break;
+        }
+        return held;
+    }
+    if (d.wearable() && (worn || d.kind == K::clothing || d.kind == K::armor || d.kind == K::trinket || d.kind == K::container || d.kind == K::holster)) {
+        item_wear(m, d, worn ? 1 : q, worn);
+        if (worn) return m;
+    } else
+    switch (d.kind) {
+    case K::gun: item_gun(m, d, q); break;
+    case K::melee: case K::tool: item_melee(m, d, q); break;
+    case K::bow: item_bow(m, d, q); break;
+    case K::magic: item_magic(m, d, q); break;
+    case K::potion: case K::drink: item_flask(m, d, q, false); break;
+    case K::ammo: {
+        const int n = q >= 1 ? 5 : 1;
+        for (int i = 0; i < n; ++i) rod(m, {(i - n / 2) * 0.015f, 0.0f, 0.0f}, {(i - n / 2) * 0.015f, 0.0f, -std::max(0.03f, d.length)}, 0.005f, rgb(d.color), q >= 2 ? 8 : 4);
+        break;
+    }
+    case K::throwable:
+        if (d.shape == "knife" || d.shape == "dagger" || d.shape == "hatchet" || d.shape == "spear" || d.shape == "shuriken") item_melee(m, d, q);
+        else if (d.shape == "dynamite" || d.shape == "stick_grenade" || d.shape == "pipe") rod(m, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -std::max(0.12f, d.length)}, 0.02f, rgb(d.color), q >= 1 ? 10 : 5);
+        else if (d.shape == "bottle" || d.shape == "can") item_flask(m, d, q, false);
+        else ellipsoid(m, {0.0f, 0.04f, 0.0f}, {0.032f, 0.042f, 0.032f}, rgb(d.color), q >= 1 ? 6 : 3, q >= 1 ? 10 : 5);
+        if (q >= 1 && d.shape == "grenade") rod(m, {0.0f, 0.08f, 0.0f}, {0.0f, 0.095f, 0.0f}, 0.01f, rgb(d.accent), 6);
+        break;
+    case K::food:
+        if (d.shape == "can" || d.shape == "box" || d.shape == "bar") box(m, {0.0f, 0.04f, 0.0f}, {0.04f, 0.04f, d.shape == "bar" ? 0.07f : 0.04f}, rgb(d.color));
+        else if (d.shape == "carrot" || d.shape == "fish") rod(m, {0.0f, 0.03f, 0.08f}, {0.0f, 0.03f, -0.08f}, 0.025f, rgb(d.color), q >= 1 ? 8 : 4);
+        else ellipsoid(m, {0.0f, 0.04f, 0.0f}, {0.045f, 0.04f, 0.045f}, rgb(d.color), q >= 1 ? 6 : 3, q >= 1 ? 10 : 5);
+        break;
+    case K::medical:
+        if (d.shape == "syringe" || d.shape == "tube") rod(m, {0.0f, 0.0f, 0.06f}, {0.0f, 0.0f, -0.06f}, 0.01f, rgb(d.color), 6);
+        else box(m, {0.0f, 0.04f, 0.0f}, {0.08f, 0.04f, 0.06f}, rgb(d.color));
+        if (q >= 1 && d.shape == "medkit") { box(m, {0.0f, 0.081f, 0.0f}, {0.03f, 0.002f, 0.008f}, {0.9f, 0.1f, 0.1f, 1.0f}); box(m, {0.0f, 0.081f, 0.0f}, {0.008f, 0.002f, 0.03f}, {0.9f, 0.1f, 0.1f, 1.0f}); }
+        break;
+    default: {
+        const float L = std::clamp(d.length, 0.04f, 1.5f);
+        box(m, {0.0f, L * 0.25f, 0.0f}, {L * 0.5f, L * 0.25f, L * 0.4f}, rgb(d.color));
+        break;
+    }
+    }
+    if (m.positions.empty()) box(m, {0.0f, 0.05f, 0.0f}, {0.05f, 0.05f, 0.05f}, rgb(d.color));
+    // Lying on the ground the item's collider is centred on it, so centre the mesh too.
+    V lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+    for (V p : m.positions) {
+        lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+        hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+    }
+    const V c{(lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f};
+    for (V& p : m.positions) p = {p.x - c.x, p.y - c.y, p.z - c.z};
+    return m;
+}
+
 template <class T>
 void put(std::string& bin, const std::vector<T>& v) {
     while (bin.size() % 4) bin.push_back('\0');
@@ -249,8 +502,7 @@ const std::vector<std::string>& builtin_model_names() {
     return all;
 }
 
-std::string builtin_model_glb(const std::string& name) {
-    const MeshData m = build(name);
+static std::string glb_of(const MeshData& m, const std::string& name) {
     std::string bin;
     std::vector<std::size_t> offsets, lengths;
     auto add = [&](auto&& v) {
@@ -273,7 +525,9 @@ std::string builtin_model_glb(const std::string& name) {
     js << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Orchard\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],";
     js << "\"nodes\":[{\"name\":\"" << name << "\",\"mesh\":0}],";
     js << "\"meshes\":[{\"name\":\"" << name << "\",\"primitives\":[{\"attributes\":{\"POSITION\":0,\"NORMAL\":1,\"COLOR_0\":2},\"indices\":3,\"material\":0}]}],";
-    js << "\"materials\":[{\"name\":\"" << name << "\",\"pbrMetallicRoughness\":{\"metallicFactor\":0,\"roughnessFactor\":0.9}}],";
+    bool see_through = false;
+    for (const auto& c : m.colors) see_through = see_through || c[3] < 0.99f;
+    js << "\"materials\":[{\"name\":\"" << name << "\",\"pbrMetallicRoughness\":{\"metallicFactor\":0,\"roughnessFactor\":0.9}" << (see_through ? ",\"alphaMode\":\"BLEND\",\"doubleSided\":true" : "") << "}],";
     js << "\"buffers\":[{\"byteLength\":" << bin.size() << "}],\"bufferViews\":[";
     for (std::size_t i = 0; i < 4; ++i) js << (i ? "," : "") << "{\"buffer\":0,\"byteOffset\":" << offsets[i] << ",\"byteLength\":" << lengths[i] << ",\"target\":" << (i == 3 ? 34963 : 34962) << "}";
     js << "],\"accessors\":[";
@@ -297,6 +551,29 @@ std::string builtin_model_glb(const std::string& name) {
     u32(out, 0x004E4942u);
     out += bin;
     return out;
+}
+
+
+std::string builtin_model_glb(const std::string& name) {
+    return glb_of(build(name), name);
+}
+
+std::string item_model_glb(const ItemDef& def, const std::string& variant) {
+    return glb_of(build_item(def, variant), def.id + "-" + variant);
+}
+
+bool write_item_model(const ItemDef& def, const std::string& variant, const std::string& path, std::string* error) {
+    std::error_code ec;
+    const std::filesystem::path p(path);
+    if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
+    std::ofstream out(p, std::ios::binary | std::ios::trunc);
+    const std::string data = item_model_glb(def, variant);
+    out.write(data.data(), static_cast<std::streamsize>(data.size()));
+    if (!out) {
+        if (error) *error = "can't write " + path;
+        return false;
+    }
+    return true;
 }
 
 bool write_builtin_model(const std::string& name, const std::string& path, std::string* error) {

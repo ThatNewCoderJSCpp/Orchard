@@ -148,4 +148,83 @@ function o.secure_random_text(length, alphabet) if length == nil then length = 1
 function o.secure_token(byte_count) if byte_count == nil then byte_count = 32 end return gt(341, nil, nil, nil, byte_count) end
 function o.secure_hex(byte_count) if byte_count == nil then byte_count = 16 end return gt(342, nil, nil, nil, byte_count) end
 function o.secure_uuid() return gt(343, nil, nil, nil) end
+function o.apply_damage(target, amount, damage_type) if damage_type == nil then damage_type = "physical" end return g(400, target, nil, J(damage_type), amount) end
+function o.apply_damage_from(target, attacker, amount, damage_type, knock_x, knock_y, knock_z, stagger_time) if damage_type == nil then damage_type = "physical" end if knock_x == nil then knock_x = 0 end if knock_y == nil then knock_y = 0 end if knock_z == nil then knock_z = 0 end if stagger_time == nil then stagger_time = -1 end return g(401, target, attacker, J(damage_type), amount, knock_x, knock_y, knock_z, stagger_time) end
+function o.damage_over_time(target, amount, damage_type, duration, interval, forever) if damage_type == nil then damage_type = "physical" end if duration == nil then duration = 5 end if interval == nil then interval = 1 end if forever == nil then forever = false end g(402, target, nil, J(damage_type), amount, duration, interval, (forever and 1 or 0)) end
+function o.damage_over_time_from(target, attacker, amount, damage_type, duration, interval, forever, knock_x, knock_y, knock_z, push_repeat, stagger_time, stack, damage_key) if damage_type == nil then damage_type = "physical" end if duration == nil then duration = 5 end if interval == nil then interval = 1 end if forever == nil then forever = false end if knock_x == nil then knock_x = 0 end if knock_y == nil then knock_y = 0 end if knock_z == nil then knock_z = 0 end if push_repeat == nil then push_repeat = 0 end if stagger_time == nil then stagger_time = -1 end if stack == nil then stack = false end if damage_key == nil then damage_key = "" end g(403, target, attacker, J(damage_type, damage_key), amount, duration, interval, (forever and 1 or 0), knock_x, knock_y, knock_z, push_repeat, stagger_time, (stack and 1 or 0)) end
+function o.stop_damage_over_time(target, damage_key) if damage_key == nil then damage_key = "" end return g(404, target, nil, J(damage_key)) ~= 0 end
+function o.damage_over_time_count(target) return math.floor(g(405, target, nil, nil)) end
+function o.last_damage_type(target) return gt(406, target, nil, nil) end
+function o.apply_effect(target, effect_name, duration, strength) if duration == nil then duration = 0 end if strength == nil then strength = 1 end return g(407, target, nil, J(effect_name), duration, strength) ~= 0 end
+function o.apply_effect_forever(target, effect_name, strength) if strength == nil then strength = 1 end return g(408, target, nil, J(effect_name), strength) ~= 0 end
+function o.apply_effect_from(target, source, effect_name, duration, strength) if duration == nil then duration = 0 end if strength == nil then strength = 1 end return g(409, target, source, J(effect_name), duration, strength) ~= 0 end
+function o.remove_effect(target, effect_name) return g(410, target, nil, J(effect_name)) ~= 0 end
+function o.clear_effects(target) return math.floor(g(411, target, nil, nil)) end
+function o.has_effect(target, effect_name) return g(412, target, nil, J(effect_name)) ~= 0 end
+function o.effect_stacks(target, effect_name) return math.floor(g(413, target, nil, J(effect_name))) end
+function o.effect_time_left(target, effect_name) return g(414, target, nil, J(effect_name)) end
+function o.effect_list(target) return gt(415, target, nil, nil) end
+function o.define_effect(effect_name, setting, value) return g(416, nil, nil, J(effect_name, setting, value)) ~= 0 end
+function o.stagger(target, seconds) if seconds == nil then seconds = 0.5 end return g(417, target, nil, nil, seconds) ~= 0 end
+function o.stagger_time_left(target) return g(418, target, nil, nil) end
+function o.is_stunned(target) return g(419, target, nil, nil) ~= 0 end
+function o.move_scale(target) return g(420, target, nil, nil) end
+function o.stat(target, stat_name) return g(421, target, nil, J(stat_name)) end
+function o.set_stat(target, stat_name, value) return g(422, target, nil, J(stat_name), value) ~= 0 end
+function o.add_stat(target, stat_name, amount) return g(423, target, nil, J(stat_name), amount) end
+function o.eat(target, food, saturation) if saturation == nil then saturation = 0 end return g(424, target, nil, nil, food, saturation) end
+function o.drink(target, amount) return g(425, target, nil, nil, amount) end
+function o.use_stamina(target, amount) return g(426, target, nil, nil, amount) ~= 0 end
+function o.resistance(target, damage_type) return g(427, target, nil, J(damage_type)) end
+function o.set_resistance(target, damage_type, value) return g(428, target, nil, J(damage_type), value) ~= 0 end
+function o.set_damage_formula(target, formula) return g(429, target, nil, J(formula)) ~= 0 end
+function o.set_effect_formula(target, formula) return g(430, target, nil, J(formula)) ~= 0 end
+function o.is_underwater(target) return g(431, target, nil, nil) ~= 0 end
+function o.set_health_setting(target, setting, value) return g(432, target, nil, J(setting, value)) ~= 0 end
+function o.health_setting(target, setting) return gt(433, target, nil, J(setting)) end
+function o.convert_units(value, from_unit, to_unit) return g(434, nil, nil, J(from_unit, to_unit), value) end
+function o.give_item(target, item, amount) if amount == nil then amount = 1 end return g(440, target, nil, J(item), amount) end
+function o.take_item(target, item, amount) if amount == nil then amount = 1 end return g(441, target, nil, J(item), amount) end
+function o.item_count(target, item) return g(442, target, nil, J(item)) end
+function o.spawn_item(item, amount, x, y, z, look) if look == nil then look = "detailed" end return ge(443, nil, nil, J(item, look), amount, x, y, z) end
+function o.drop_item(target, list, index, amount) if list == nil then list = "items" end if index == nil then index = 0 end if amount == nil then amount = -1 end return ge(444, target, nil, J(list), index, amount) end
+function o.pick_up(target, pickup) return g(445, target, pickup, nil) ~= 0 end
+function o.nearest_pickup(target, radius) if radius == nil then radius = 2.5 end return ge(446, target, nil, nil, radius) end
+function o.define_item(item, setting, value) return g(447, nil, nil, J(item, setting, value)) ~= 0 end
+function o.item_setting(item, setting) return gt(448, nil, nil, J(item, setting)) end
+function o.equip_item(target, list, index) return g(449, target, nil, J(list), index) ~= 0 end
+function o.unequip_item(target, slot) return g(450, target, nil, J(slot)) ~= 0 end
+function o.hold_item(target, hand, list, index) return g(451, target, nil, J(hand, list), index) ~= 0 end
+function o.held_item(target, hand) if hand == nil then hand = "mainhand" end return gt(452, target, nil, J(hand)) end
+function o.holster_item(target, hand) if hand == nil then hand = "mainhand" end return g(453, target, nil, J(hand)) ~= 0 end
+function o.draw_item(target, slot, hand) if hand == nil then hand = "mainhand" end return g(454, target, nil, J(slot, hand)) ~= 0 end
+function o.select_slot(target, index) return g(455, target, nil, nil, index) ~= 0 end
+function o.use_item(target, list, index) return g(456, target, nil, J(list), index) ~= 0 end
+function o.use_held(target, pressed, held) if pressed == nil then pressed = true end if held == nil then held = false end return g(457, target, nil, nil, (pressed and 1 or 0), (held and 1 or 0)) ~= 0 end
+function o.release_held(target) return g(458, target, nil, nil) ~= 0 end
+function o.reload_weapon(target) return g(459, target, nil, nil) ~= 0 end
+function o.move_item(target, list, index, to, to_list, to_index, amount) if amount == nil then amount = -1 end return g(460, target, to, J(list, to_list), index, to_index, amount) ~= 0 end
+function o.inventory_setting(target, setting) return gt(461, target, nil, J(setting)) end
+function o.set_inventory_setting(target, setting, value) return g(462, target, nil, J(setting, value)) ~= 0 end
+function o.slot_item(target, list, index) return gt(463, target, nil, J(list), index) end
+function o.slot_amount(target, list, index) return g(464, target, nil, J(list), index) end
+function o.set_aim(target, ox, oy, oz, dx, dy, dz) g(465, target, nil, nil, ox, oy, oz, dx, dy, dz) end
+function o.set_stance(target, stance) return g(466, target, nil, J(stance)) ~= 0 end
+function o.set_aiming(target, on) if on == nil then on = true end g(467, target, nil, nil, (on and 1 or 0)) end
+function o.set_blocking(target, on) if on == nil then on = true end g(468, target, nil, nil, (on and 1 or 0)) end
+function o.fire_weapon(target, item, ox, oy, oz, dx, dy, dz, power) if power == nil then power = 1 end return math.floor(g(469, target, nil, J(item), ox, oy, oz, dx, dy, dz, power)) end
+function o.set_ballistics(mode) return g(470, nil, nil, J(mode)) ~= 0 end
+function o.worn_armor(target, damage_type) if damage_type == nil then damage_type = "physical" end return g(471, target, nil, J(damage_type)) end
+function o.start_weather(preset, duration, fade_in, fade_out) if duration == nil then duration = -1 end if fade_in == nil then fade_in = 2 end if fade_out == nil then fade_out = 2 end return ge(472, nil, nil, J(preset), duration, fade_in, fade_out) end
+function o.start_weather_at(preset, x, y, z, radius, duration, fade_in, fade_out) if duration == nil then duration = -1 end if fade_in == nil then fade_in = 2 end if fade_out == nil then fade_out = 2 end return ge(473, nil, nil, J(preset), x, y, z, radius, duration, fade_in, fade_out) end
+function o.stop_weather(zone, fade_out) if fade_out == nil then fade_out = 2 end return g(474, zone, nil, nil, fade_out) ~= 0 end
+function o.stop_all_weather(fade_out) if fade_out == nil then fade_out = 2 end return math.floor(g(475, nil, nil, nil, fade_out)) end
+function o.set_climate(zone, setting, value) return g(476, zone, nil, J(setting, value)) ~= 0 end
+function o.temperature_at(x, y, z) return g(477, nil, nil, nil, x, y, z) end
+function o.wind_x_at(x, y, z) return g(478, nil, nil, nil, x, y, z) end
+function o.wind_y_at(x, y, z) return g(479, nil, nil, nil, x, y, z) end
+function o.wind_z_at(x, y, z) return g(480, nil, nil, nil, x, y, z) end
+function o.rain_at(x, y, z) return g(481, nil, nil, nil, x, y, z) end
+function o.snow_at(x, y, z) return g(482, nil, nil, nil, x, y, z) end
+function o.is_sheltered(x, y, z) return g(483, nil, nil, nil, x, y, z) ~= 0 end
 )LUA"

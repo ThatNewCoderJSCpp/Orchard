@@ -880,7 +880,7 @@ struct AiWorld::Impl {
         }
         Vec3 wish{};
         bool jump = false;
-        const float speed = a.run ? c->run_speed : c->walk_speed;
+        const float speed = (a.run ? c->run_speed : c->walk_speed) * (game ? game->move_scale(a.e) : 1.0f);
         if (a.want_move && flat_dist(p, a.goal, f2) <= std::max(0.25f, a.reach) && std::fabs(p.y - a.goal.y) < 2.5f) a.want_move = false;
         if (a.want_move && speed > 0.0f) {
             NavGrid& nav = nav_of(a);
@@ -1028,7 +1028,7 @@ struct AiWorld::Impl {
         Mover m;
         m.position = p;
         m.velocity = a.velocity;
-        m.max_speed = a.run ? c->run_speed : c->walk_speed;
+        m.max_speed = (a.run ? c->run_speed : c->walk_speed) * (game ? game->move_scale(a.e) : 1.0f);
         m.radius = c->radius;
         Vec3 steer_v{};
         if (a.want_move) steer_v = arrive(m, a.goal, 2.0f, a.reach * 0.5f);
@@ -1094,17 +1094,56 @@ struct AiWorld::Impl {
         if (!facing(a, tp, c->ranged ? 12.0f : 35.0f)) return Status::running;
         if (m && time - m->spotted_at < c->reaction) return Status::running;
         if (time < a.next_attack) return Status::running;
+        if (game && game->stunned(a.e)) return Status::running;
         a.next_attack = time + 1.0 / std::max(0.05f, c->attack_rate) * rng.range(0.85, 1.15);
         if (c->ranged) {
             shoot(a, tp + Vec3{0.0f, 1.0f, 0.0f}, false);
         } else {
-            if (game && c->attack_damage != 0.0f) game->damage(a.target, c->attack_damage, a.e);
-            if (physics && physics->has_body(a.target)) physics->impulse(a.target, flat_dir(pos(a.e), tp, flat2d()) * (c->attack_damage * 4.0f) + Vec3{0.0f, c->attack_damage, 0.0f});
+            strike(a, a.target, a.target, flat_dir(pos(a.e), tp, flat2d()), 0.15f);
             event(a, "attack");
             play(c->attack_sound, pos(a.e), a.e, 1.0f);
             noise(pos(a.e), 6.0f, a.e, "combat");
         }
         return Status::success;
+    }
+
+    void strike(AgentRt& a, Entity victim, Entity body, Vec3 dir, float lift) {
+        const Agent* c = cfg(a);
+        const ItemDef* weapon = game ? game->held_def(a.e) : nullptr;
+        if (weapon && weapon->kind != ItemKind::melee) weapon = nullptr;
+        float dmg = weapon ? weapon->damage : c->attack_damage, knock = weapon ? weapon->knockback : c->attack_knockback;
+        if (game && (!c->damage_formula.empty() || !c->knockback_formula.empty())) {
+            const float dist = length(pos(victim) - pos(a.e));
+            auto vars = [&](const std::string& name, double& out) {
+                if (name == "damage") out = c->attack_damage;
+                else if (name == "knockback") out = c->attack_knockback;
+                else if (name == "distance") out = dist;
+                else if (name == "health") out = game->health(a.e);
+                else if (name == "max_health") out = game->max_health(a.e);
+                else if (name == "health_fraction") out = game->max_health(a.e) > 0.0f ? game->health(a.e) / game->max_health(a.e) : 0.0f;
+                else if (name == "target_health") out = game->health(victim);
+                else if (name == "target_max_health") out = game->max_health(victim);
+                else if (name == "target_mass") out = physics ? physics->mass(body) : 0.0f;
+                else if (name == "ranged") out = c->ranged ? 1.0 : 0.0;
+                else return false;
+                return true;
+            };
+            dmg = game->evaluate(c->damage_formula, vars, dmg);
+            knock = std::max(0.0f, game->evaluate(c->knockback_formula, vars, knock));
+        }
+        const Vec3 impulse = dir * knock + Vec3{0.0f, knock * lift, 0.0f};
+        if (game) {
+            Damage d;
+            d.amount = dmg;
+            d.type = weapon && !weapon->damage_type.empty() ? weapon->damage_type : c->damage_type.empty() ? (c->ranged ? "projectile" : "melee") : c->damage_type;
+            d.attacker = a.e;
+            d.knockback = impulse;
+            game->apply_damage(victim, d);
+            if (!c->hit_effect.empty() && dmg > 0.0f && rng.range(0.0, 1.0) < c->hit_effect_chance) game->apply_effect(victim, c->hit_effect, c->hit_effect_time, 1.0f, a.e);
+            if (weapon && !weapon->effect.empty() && rng.range(0.0, 1.0) < weapon->effect_chance) game->apply_effect(victim, weapon->effect, weapon->effect_time, 1.0f, a.e);
+        } else if (physics && scene->alive(body) && physics->has_body(body) && knock > 0.0f) {
+            physics->impulse(body, impulse);
+        }
     }
 
     void shoot(AgentRt& a, Vec3 aim, bool suppress) {
@@ -1120,6 +1159,26 @@ struct AiWorld::Impl {
             dir.z = 0.0f;
             dir = normalize(dir);
         }
+        if (game)
+            if (ItemStack* held = game->held(a.e)) {
+                const ItemDef* w = game->item_def(held->item);
+                if (w && (w->kind == ItemKind::gun || w->kind == ItemKind::bow || w->kind == ItemKind::magic)) {
+                    if (w->magazine > 0 && held->loaded < 1.0f) {
+                        if (game->count(a.e, w->ammo) >= 1.0f) game->reload(a.e);
+                        else held->loaded = static_cast<float>(w->magazine);
+                        return;
+                    }
+                    ItemDef shot = *w;
+                    shot.spread = std::max(w->spread, (1.0f - acc) * 6.0f);
+                    game->fire(a.e, from, dir, shot, 1.0f);
+                    if (w->magazine > 0) held->loaded -= 1.0f;
+                    event(a, suppress ? "suppress" : "shoot");
+                    play(c->attack_sound, from, a.e, 1.0f);
+                    if (!c->shoot_effect.empty()) game->effect(c->shoot_effect, from, 0.6f);
+                    noise(from, 45.0f, a.e, "gunshot");
+                    return;
+                }
+            }
         if (c->magazine > 0) --a.ammo;
         event(a, suppress ? "suppress" : "shoot");
         play(c->attack_sound, from, a.e, 1.0f);
@@ -1141,8 +1200,7 @@ struct AiWorld::Impl {
             Entity victim = hit;
             for (const Actor& o : actors)
                 if (same_actor(hit, o.e)) victim = o.e;
-            if (game && c->attack_damage != 0.0f) game->damage(victim, c->attack_damage, a.e);
-            if (physics->has_body(scene->body_owner(hit))) physics->impulse(scene->body_owner(hit), dir * (c->attack_damage * 2.0f));
+            strike(a, victim, scene->body_owner(hit), dir, 0.0f);
             if (game) game->effect("impact", hp, 0.5f);
             for (auto& [id, o] : agents)
                 if (o.e != a.e && length(pos(o.e) - hp) < 3.0f) {

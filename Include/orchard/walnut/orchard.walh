@@ -248,6 +248,85 @@ extern "C++" from "<orchard/script/script_lib.hpp>" {
         static function secure_token(short float: byte_count) -> string;
         static function secure_hex(short float: byte_count) -> string;
         static function secure_uuid() -> string;
+        static function apply_damage(const NativeEntity&: target, short float: amount, const string&: damage_type) -> short float;
+        static function apply_damage_from(const NativeEntity&: target, const NativeEntity&: attacker, short float: amount, const string&: damage_type, short float: knock_x, short float: knock_y, short float: knock_z, short float: stagger_time) -> short float;
+        static function damage_over_time(const NativeEntity&: target, short float: amount, const string&: damage_type, short float: duration, short float: interval, bool: forever) -> void;
+        static function damage_over_time_from(const NativeEntity&: target, const NativeEntity&: attacker, short float: amount, const string&: damage_type, short float: duration, short float: interval, bool: forever, short float: knock_x, short float: knock_y, short float: knock_z, short float: push_repeat, short float: stagger_time, bool: stack, const string&: damage_key) -> void;
+        static function stop_damage_over_time(const NativeEntity&: target, const string&: damage_key) -> bool;
+        static function damage_over_time_count(const NativeEntity&: target) -> long int;
+        static function last_damage_type(const NativeEntity&: target) -> string;
+        static function apply_effect(const NativeEntity&: target, const string&: effect_name, short float: duration, short float: strength) -> bool;
+        static function apply_effect_forever(const NativeEntity&: target, const string&: effect_name, short float: strength) -> bool;
+        static function apply_effect_from(const NativeEntity&: target, const NativeEntity&: source, const string&: effect_name, short float: duration, short float: strength) -> bool;
+        static function remove_effect(const NativeEntity&: target, const string&: effect_name) -> bool;
+        static function clear_effects(const NativeEntity&: target) -> long int;
+        static function has_effect(const NativeEntity&: target, const string&: effect_name) -> bool;
+        static function effect_stacks(const NativeEntity&: target, const string&: effect_name) -> long int;
+        static function effect_time_left(const NativeEntity&: target, const string&: effect_name) -> short float;
+        static function effect_list(const NativeEntity&: target) -> string;
+        static function define_effect(const string&: effect_name, const string&: setting, const string&: value) -> bool;
+        static function stagger(const NativeEntity&: target, short float: seconds) -> bool;
+        static function stagger_time_left(const NativeEntity&: target) -> short float;
+        static function is_stunned(const NativeEntity&: target) -> bool;
+        static function move_scale(const NativeEntity&: target) -> short float;
+        static function stat(const NativeEntity&: target, const string&: stat_name) -> short float;
+        static function set_stat(const NativeEntity&: target, const string&: stat_name, short float: value) -> bool;
+        static function add_stat(const NativeEntity&: target, const string&: stat_name, short float: amount) -> short float;
+        static function eat(const NativeEntity&: target, short float: food, short float: saturation) -> short float;
+        static function drink(const NativeEntity&: target, short float: amount) -> short float;
+        static function use_stamina(const NativeEntity&: target, short float: amount) -> bool;
+        static function resistance(const NativeEntity&: target, const string&: damage_type) -> short float;
+        static function set_resistance(const NativeEntity&: target, const string&: damage_type, short float: value) -> bool;
+        static function set_damage_formula(const NativeEntity&: target, const string&: formula) -> bool;
+        static function set_effect_formula(const NativeEntity&: target, const string&: formula) -> bool;
+        static function is_underwater(const NativeEntity&: target) -> bool;
+        static function set_health_setting(const NativeEntity&: target, const string&: setting, const string&: value) -> bool;
+        static function health_setting(const NativeEntity&: target, const string&: setting) -> string;
+        static function convert_units(short float: value, const string&: from_unit, const string&: to_unit) -> short float;
+        static function give_item(const NativeEntity&: target, const string&: item, short float: amount) -> short float;
+        static function take_item(const NativeEntity&: target, const string&: item, short float: amount) -> short float;
+        static function item_count(const NativeEntity&: target, const string&: item) -> short float;
+        static function spawn_item(const string&: item, short float: amount, short float: x, short float: y, short float: z, const string&: look) -> NativeEntity;
+        static function drop_item(const NativeEntity&: target, const string&: list, short float: index, short float: amount) -> NativeEntity;
+        static function pick_up(const NativeEntity&: target, const NativeEntity&: pickup) -> bool;
+        static function nearest_pickup(const NativeEntity&: target, short float: radius) -> NativeEntity;
+        static function define_item(const string&: item, const string&: setting, const string&: value) -> bool;
+        static function item_setting(const string&: item, const string&: setting) -> string;
+        static function equip_item(const NativeEntity&: target, const string&: list, short float: index) -> bool;
+        static function unequip_item(const NativeEntity&: target, const string&: slot) -> bool;
+        static function hold_item(const NativeEntity&: target, const string&: hand, const string&: list, short float: index) -> bool;
+        static function held_item(const NativeEntity&: target, const string&: hand) -> string;
+        static function holster_item(const NativeEntity&: target, const string&: hand) -> bool;
+        static function draw_item(const NativeEntity&: target, const string&: slot, const string&: hand) -> bool;
+        static function select_slot(const NativeEntity&: target, short float: index) -> bool;
+        static function use_item(const NativeEntity&: target, const string&: list, short float: index) -> bool;
+        static function use_held(const NativeEntity&: target, bool: pressed, bool: held) -> bool;
+        static function release_held(const NativeEntity&: target) -> bool;
+        static function reload_weapon(const NativeEntity&: target) -> bool;
+        static function move_item(const NativeEntity&: target, const string&: list, short float: index, const NativeEntity&: to, const string&: to_list, short float: to_index, short float: amount) -> bool;
+        static function inventory_setting(const NativeEntity&: target, const string&: setting) -> string;
+        static function set_inventory_setting(const NativeEntity&: target, const string&: setting, const string&: value) -> bool;
+        static function slot_item(const NativeEntity&: target, const string&: list, short float: index) -> string;
+        static function slot_amount(const NativeEntity&: target, const string&: list, short float: index) -> short float;
+        static function set_aim(const NativeEntity&: target, short float: ox, short float: oy, short float: oz, short float: dx, short float: dy, short float: dz) -> void;
+        static function set_stance(const NativeEntity&: target, const string&: stance) -> bool;
+        static function set_aiming(const NativeEntity&: target, bool: on) -> void;
+        static function set_blocking(const NativeEntity&: target, bool: on) -> void;
+        static function fire_weapon(const NativeEntity&: target, const string&: item, short float: ox, short float: oy, short float: oz, short float: dx, short float: dy, short float: dz, short float: power) -> long int;
+        static function set_ballistics(const string&: mode) -> bool;
+        static function worn_armor(const NativeEntity&: target, const string&: damage_type) -> short float;
+        static function start_weather(const string&: preset, short float: duration, short float: fade_in, short float: fade_out) -> NativeEntity;
+        static function start_weather_at(const string&: preset, short float: x, short float: y, short float: z, short float: radius, short float: duration, short float: fade_in, short float: fade_out) -> NativeEntity;
+        static function stop_weather(const NativeEntity&: zone, short float: fade_out) -> bool;
+        static function stop_all_weather(short float: fade_out) -> long int;
+        static function set_climate(const NativeEntity&: zone, const string&: setting, const string&: value) -> bool;
+        static function temperature_at(short float: x, short float: y, short float: z) -> short float;
+        static function wind_x_at(short float: x, short float: y, short float: z) -> short float;
+        static function wind_y_at(short float: x, short float: y, short float: z) -> short float;
+        static function wind_z_at(short float: x, short float: y, short float: z) -> short float;
+        static function rain_at(short float: x, short float: y, short float: z) -> short float;
+        static function snow_at(short float: x, short float: y, short float: z) -> short float;
+        static function is_sheltered(short float: x, short float: y, short float: z) -> bool;
     } end class NativeLib
 } end extern
 
@@ -1406,4 +1485,330 @@ function secure_hex(short float: byte_count) -> string {
 function secure_uuid() -> string {
     return NativeLib::secure_uuid();
 } end function secure_uuid
+
+function apply_damage(const Entity&: target, short float: amount, const string&: damage_type) -> short float {
+    return NativeLib::apply_damage(target.raw, amount, damage_type);
+} end function apply_damage
+
+function apply_damage_from(const Entity&: target, const Entity&: attacker, short float: amount, const string&: damage_type, short float: knock_x, short float: knock_y, short float: knock_z, short float: stagger_time) -> short float {
+    return NativeLib::apply_damage_from(target.raw, attacker.raw, amount, damage_type, knock_x, knock_y, knock_z, stagger_time);
+} end function apply_damage_from
+
+function damage_over_time(const Entity&: target, short float: amount, const string&: damage_type, short float: duration, short float: interval, bool: forever) -> void {
+    NativeLib::damage_over_time(target.raw, amount, damage_type, duration, interval, forever);
+} end function damage_over_time
+
+function damage_over_time_from(const Entity&: target, const Entity&: attacker, short float: amount, const string&: damage_type, short float: duration, short float: interval, bool: forever, short float: knock_x, short float: knock_y, short float: knock_z, short float: push_repeat, short float: stagger_time, bool: stack, const string&: damage_key) -> void {
+    NativeLib::damage_over_time_from(target.raw, attacker.raw, amount, damage_type, duration, interval, forever, knock_x, knock_y, knock_z, push_repeat, stagger_time, stack, damage_key);
+} end function damage_over_time_from
+
+function stop_damage_over_time(const Entity&: target, const string&: damage_key) -> bool {
+    return NativeLib::stop_damage_over_time(target.raw, damage_key);
+} end function stop_damage_over_time
+
+function damage_over_time_count(const Entity&: target) -> long int {
+    return NativeLib::damage_over_time_count(target.raw);
+} end function damage_over_time_count
+
+function last_damage_type(const Entity&: target) -> string {
+    return NativeLib::last_damage_type(target.raw);
+} end function last_damage_type
+
+function apply_effect(const Entity&: target, const string&: effect_name, short float: duration, short float: strength) -> bool {
+    return NativeLib::apply_effect(target.raw, effect_name, duration, strength);
+} end function apply_effect
+
+function apply_effect_forever(const Entity&: target, const string&: effect_name, short float: strength) -> bool {
+    return NativeLib::apply_effect_forever(target.raw, effect_name, strength);
+} end function apply_effect_forever
+
+function apply_effect_from(const Entity&: target, const Entity&: source, const string&: effect_name, short float: duration, short float: strength) -> bool {
+    return NativeLib::apply_effect_from(target.raw, source.raw, effect_name, duration, strength);
+} end function apply_effect_from
+
+function remove_effect(const Entity&: target, const string&: effect_name) -> bool {
+    return NativeLib::remove_effect(target.raw, effect_name);
+} end function remove_effect
+
+function clear_effects(const Entity&: target) -> long int {
+    return NativeLib::clear_effects(target.raw);
+} end function clear_effects
+
+function has_effect(const Entity&: target, const string&: effect_name) -> bool {
+    return NativeLib::has_effect(target.raw, effect_name);
+} end function has_effect
+
+function effect_stacks(const Entity&: target, const string&: effect_name) -> long int {
+    return NativeLib::effect_stacks(target.raw, effect_name);
+} end function effect_stacks
+
+function effect_time_left(const Entity&: target, const string&: effect_name) -> short float {
+    return NativeLib::effect_time_left(target.raw, effect_name);
+} end function effect_time_left
+
+function effect_list(const Entity&: target) -> string {
+    return NativeLib::effect_list(target.raw);
+} end function effect_list
+
+function define_effect(const string&: effect_name, const string&: setting, const string&: value) -> bool {
+    return NativeLib::define_effect(effect_name, setting, value);
+} end function define_effect
+
+function stagger(const Entity&: target, short float: seconds) -> bool {
+    return NativeLib::stagger(target.raw, seconds);
+} end function stagger
+
+function stagger_time_left(const Entity&: target) -> short float {
+    return NativeLib::stagger_time_left(target.raw);
+} end function stagger_time_left
+
+function is_stunned(const Entity&: target) -> bool {
+    return NativeLib::is_stunned(target.raw);
+} end function is_stunned
+
+function move_scale(const Entity&: target) -> short float {
+    return NativeLib::move_scale(target.raw);
+} end function move_scale
+
+function stat(const Entity&: target, const string&: stat_name) -> short float {
+    return NativeLib::stat(target.raw, stat_name);
+} end function stat
+
+function set_stat(const Entity&: target, const string&: stat_name, short float: value) -> bool {
+    return NativeLib::set_stat(target.raw, stat_name, value);
+} end function set_stat
+
+function add_stat(const Entity&: target, const string&: stat_name, short float: amount) -> short float {
+    return NativeLib::add_stat(target.raw, stat_name, amount);
+} end function add_stat
+
+function eat(const Entity&: target, short float: food, short float: saturation) -> short float {
+    return NativeLib::eat(target.raw, food, saturation);
+} end function eat
+
+function drink(const Entity&: target, short float: amount) -> short float {
+    return NativeLib::drink(target.raw, amount);
+} end function drink
+
+function use_stamina(const Entity&: target, short float: amount) -> bool {
+    return NativeLib::use_stamina(target.raw, amount);
+} end function use_stamina
+
+function resistance(const Entity&: target, const string&: damage_type) -> short float {
+    return NativeLib::resistance(target.raw, damage_type);
+} end function resistance
+
+function set_resistance(const Entity&: target, const string&: damage_type, short float: value) -> bool {
+    return NativeLib::set_resistance(target.raw, damage_type, value);
+} end function set_resistance
+
+function set_damage_formula(const Entity&: target, const string&: formula) -> bool {
+    return NativeLib::set_damage_formula(target.raw, formula);
+} end function set_damage_formula
+
+function set_effect_formula(const Entity&: target, const string&: formula) -> bool {
+    return NativeLib::set_effect_formula(target.raw, formula);
+} end function set_effect_formula
+
+function is_underwater(const Entity&: target) -> bool {
+    return NativeLib::is_underwater(target.raw);
+} end function is_underwater
+
+function set_health_setting(const Entity&: target, const string&: setting, const string&: value) -> bool {
+    return NativeLib::set_health_setting(target.raw, setting, value);
+} end function set_health_setting
+
+function health_setting(const Entity&: target, const string&: setting) -> string {
+    return NativeLib::health_setting(target.raw, setting);
+} end function health_setting
+
+function convert_units(short float: value, const string&: from_unit, const string&: to_unit) -> short float {
+    return NativeLib::convert_units(value, from_unit, to_unit);
+} end function convert_units
+function give_item(const Entity&: target, const string&: item, short float: amount) -> short float {
+    return NativeLib::give_item(target.raw, item, amount);
+} end function give_item
+
+function take_item(const Entity&: target, const string&: item, short float: amount) -> short float {
+    return NativeLib::take_item(target.raw, item, amount);
+} end function take_item
+
+function item_count(const Entity&: target, const string&: item) -> short float {
+    return NativeLib::item_count(target.raw, item);
+} end function item_count
+
+function spawn_item(const string&: item, short float: amount, short float: x, short float: y, short float: z, const string&: look) -> Entity {
+    Entity: out;
+    out.raw = NativeLib::spawn_item(item, amount, x, y, z, look);
+    return out;
+} end function spawn_item
+
+function drop_item(const Entity&: target, const string&: list, short float: index, short float: amount) -> Entity {
+    Entity: out;
+    out.raw = NativeLib::drop_item(target.raw, list, index, amount);
+    return out;
+} end function drop_item
+
+function pick_up(const Entity&: target, const Entity&: pickup) -> bool {
+    return NativeLib::pick_up(target.raw, pickup.raw);
+} end function pick_up
+
+function nearest_pickup(const Entity&: target, short float: radius) -> Entity {
+    Entity: out;
+    out.raw = NativeLib::nearest_pickup(target.raw, radius);
+    return out;
+} end function nearest_pickup
+
+function define_item(const string&: item, const string&: setting, const string&: value) -> bool {
+    return NativeLib::define_item(item, setting, value);
+} end function define_item
+
+function item_setting(const string&: item, const string&: setting) -> string {
+    return NativeLib::item_setting(item, setting);
+} end function item_setting
+
+function equip_item(const Entity&: target, const string&: list, short float: index) -> bool {
+    return NativeLib::equip_item(target.raw, list, index);
+} end function equip_item
+
+function unequip_item(const Entity&: target, const string&: slot) -> bool {
+    return NativeLib::unequip_item(target.raw, slot);
+} end function unequip_item
+
+function hold_item(const Entity&: target, const string&: hand, const string&: list, short float: index) -> bool {
+    return NativeLib::hold_item(target.raw, hand, list, index);
+} end function hold_item
+
+function held_item(const Entity&: target, const string&: hand) -> string {
+    return NativeLib::held_item(target.raw, hand);
+} end function held_item
+
+function holster_item(const Entity&: target, const string&: hand) -> bool {
+    return NativeLib::holster_item(target.raw, hand);
+} end function holster_item
+
+function draw_item(const Entity&: target, const string&: slot, const string&: hand) -> bool {
+    return NativeLib::draw_item(target.raw, slot, hand);
+} end function draw_item
+
+function select_slot(const Entity&: target, short float: index) -> bool {
+    return NativeLib::select_slot(target.raw, index);
+} end function select_slot
+
+function use_item(const Entity&: target, const string&: list, short float: index) -> bool {
+    return NativeLib::use_item(target.raw, list, index);
+} end function use_item
+
+function use_held(const Entity&: target, bool: pressed, bool: held) -> bool {
+    return NativeLib::use_held(target.raw, pressed, held);
+} end function use_held
+
+function release_held(const Entity&: target) -> bool {
+    return NativeLib::release_held(target.raw);
+} end function release_held
+
+function reload_weapon(const Entity&: target) -> bool {
+    return NativeLib::reload_weapon(target.raw);
+} end function reload_weapon
+
+function move_item(const Entity&: target, const string&: list, short float: index, const Entity&: to, const string&: to_list, short float: to_index, short float: amount) -> bool {
+    return NativeLib::move_item(target.raw, list, index, to.raw, to_list, to_index, amount);
+} end function move_item
+
+function inventory_setting(const Entity&: target, const string&: setting) -> string {
+    return NativeLib::inventory_setting(target.raw, setting);
+} end function inventory_setting
+
+function set_inventory_setting(const Entity&: target, const string&: setting, const string&: value) -> bool {
+    return NativeLib::set_inventory_setting(target.raw, setting, value);
+} end function set_inventory_setting
+
+function slot_item(const Entity&: target, const string&: list, short float: index) -> string {
+    return NativeLib::slot_item(target.raw, list, index);
+} end function slot_item
+
+function slot_amount(const Entity&: target, const string&: list, short float: index) -> short float {
+    return NativeLib::slot_amount(target.raw, list, index);
+} end function slot_amount
+
+function set_aim(const Entity&: target, short float: ox, short float: oy, short float: oz, short float: dx, short float: dy, short float: dz) -> void {
+    NativeLib::set_aim(target.raw, ox, oy, oz, dx, dy, dz);
+} end function set_aim
+
+function set_stance(const Entity&: target, const string&: stance) -> bool {
+    return NativeLib::set_stance(target.raw, stance);
+} end function set_stance
+
+function set_aiming(const Entity&: target, bool: on) -> void {
+    NativeLib::set_aiming(target.raw, on);
+} end function set_aiming
+
+function set_blocking(const Entity&: target, bool: on) -> void {
+    NativeLib::set_blocking(target.raw, on);
+} end function set_blocking
+
+function fire_weapon(const Entity&: target, const string&: item, short float: ox, short float: oy, short float: oz, short float: dx, short float: dy, short float: dz, short float: power) -> long int {
+    return NativeLib::fire_weapon(target.raw, item, ox, oy, oz, dx, dy, dz, power);
+} end function fire_weapon
+
+function set_ballistics(const string&: mode) -> bool {
+    return NativeLib::set_ballistics(mode);
+} end function set_ballistics
+
+function worn_armor(const Entity&: target, const string&: damage_type) -> short float {
+    return NativeLib::worn_armor(target.raw, damage_type);
+} end function worn_armor
+
+function start_weather(const string&: preset, short float: duration, short float: fade_in, short float: fade_out) -> Entity {
+    Entity: out;
+    out.raw = NativeLib::start_weather(preset, duration, fade_in, fade_out);
+    return out;
+} end function start_weather
+
+function start_weather_at(const string&: preset, short float: x, short float: y, short float: z, short float: radius, short float: duration, short float: fade_in, short float: fade_out) -> Entity {
+    Entity: out;
+    out.raw = NativeLib::start_weather_at(preset, x, y, z, radius, duration, fade_in, fade_out);
+    return out;
+} end function start_weather_at
+
+function stop_weather(const Entity&: zone, short float: fade_out) -> bool {
+    return NativeLib::stop_weather(zone.raw, fade_out);
+} end function stop_weather
+
+function stop_all_weather(short float: fade_out) -> long int {
+    return NativeLib::stop_all_weather(fade_out);
+} end function stop_all_weather
+
+function set_climate(const Entity&: zone, const string&: setting, const string&: value) -> bool {
+    return NativeLib::set_climate(zone.raw, setting, value);
+} end function set_climate
+
+function temperature_at(short float: x, short float: y, short float: z) -> short float {
+    return NativeLib::temperature_at(x, y, z);
+} end function temperature_at
+
+function wind_x_at(short float: x, short float: y, short float: z) -> short float {
+    return NativeLib::wind_x_at(x, y, z);
+} end function wind_x_at
+
+function wind_y_at(short float: x, short float: y, short float: z) -> short float {
+    return NativeLib::wind_y_at(x, y, z);
+} end function wind_y_at
+
+function wind_z_at(short float: x, short float: y, short float: z) -> short float {
+    return NativeLib::wind_z_at(x, y, z);
+} end function wind_z_at
+
+function rain_at(short float: x, short float: y, short float: z) -> short float {
+    return NativeLib::rain_at(x, y, z);
+} end function rain_at
+
+function snow_at(short float: x, short float: y, short float: z) -> short float {
+    return NativeLib::snow_at(x, y, z);
+} end function snow_at
+
+function is_sheltered(short float: x, short float: y, short float: z) -> bool {
+    return NativeLib::is_sheltered(x, y, z);
+} end function is_sheltered
+
 export this

@@ -43,6 +43,7 @@ std::optional<Agent> Agent::preset(const std::string& b) {
         a.reaction = 0.6f;
         a.attack_range = 1.3f;
         a.attack_damage = b == "runner" ? 8.0f : 15.0f;
+        a.attack_knockback = b == "runner" ? 25.0f : 40.0f;
         a.attack_rate = 0.8f;
         a.flee_health = 0.0f;
         a.aggression = 1.0f;
@@ -56,8 +57,10 @@ std::optional<Agent> Agent::preset(const std::string& b) {
     if (b == "guard" || b == "soldier" || b == "stealth-guard") {
         a.team = "enemies";
         a.ranged = true;
+        a.damage_type = "projectile";
         a.attack_range = 22.0f;
         a.attack_damage = 12.0f;
+        a.attack_knockback = 3.0f;
         a.attack_rate = b == "soldier" ? 5.0f : 2.5f;
         a.accuracy = b == "soldier" ? 0.7f : 0.55f;
         a.magazine = b == "soldier" ? 30 : 12;
@@ -71,6 +74,7 @@ std::optional<Agent> Agent::preset(const std::string& b) {
         a.team = "enemies";
         a.attack_range = 1.6f;
         a.attack_damage = 18.0f;
+        a.attack_knockback = 80.0f;
         a.attack_rate = 1.2f;
         a.run_speed = 5.5f;
         a.shoot_effect.clear();
@@ -87,6 +91,7 @@ std::optional<Agent> Agent::preset(const std::string& b) {
         a.reaction = 0.2f;
         a.attack_range = 1.8f;
         a.attack_damage = 1000.0f;
+        a.attack_knockback = 250.0f;
         a.attack_rate = 0.5f;
         a.flee_health = 0.0f;
         a.height = 2.4f;
@@ -103,6 +108,7 @@ std::optional<Agent> Agent::preset(const std::string& b) {
         a.sight_angle = 300.0f;
         a.hearing = 2.0f;
         a.attack_damage = 0.0f;
+        a.attack_knockback = 0.0f;
         a.height = 1.2f;
         a.eye_height = 1.1f;
         a.flee_health = 1.0f;
@@ -117,6 +123,10 @@ std::optional<Agent> Agent::preset(const std::string& b) {
         a.sight_range = 35.0f;
         a.attack_range = 1.5f;
         a.attack_damage = 30.0f;
+        a.attack_knockback = 120.0f;
+        a.hit_effect = "bleeding";
+        a.hit_effect_time = 6.0f;
+        a.hit_effect_chance = 0.4f;
         a.height = 1.1f;
         a.eye_height = 0.9f;
         a.flee_health = 0.1f;
@@ -126,8 +136,10 @@ std::optional<Agent> Agent::preset(const std::string& b) {
     if (b == "companion") {
         a.team = "player";
         a.ranged = true;
+        a.damage_type = "projectile";
         a.attack_range = 20.0f;
         a.attack_damage = 10.0f;
+        a.attack_knockback = 3.0f;
         a.attack_rate = 2.0f;
         a.accuracy = 0.65f;
         a.run_speed = 5.5f;
@@ -139,6 +151,7 @@ std::optional<Agent> Agent::preset(const std::string& b) {
         a.walk_speed = 1.3f;
         a.run_speed = 5.0f;
         a.attack_damage = 0.0f;
+        a.attack_knockback = 0.0f;
         a.flee_health = 1.0f;
         a.shoot_effect.clear();
         return a;
@@ -149,8 +162,10 @@ std::optional<Agent> Agent::preset(const std::string& b) {
         a.walk_speed = 3.0f;
         a.run_speed = 9.0f;
         a.ranged = true;
+        a.damage_type = "projectile";
         a.attack_range = 15.0f;
         a.attack_damage = 6.0f;
+        a.attack_knockback = 2.0f;
         a.attack_rate = 3.0f;
         a.accuracy = 0.5f;
         a.sight_angle = 220.0f;
@@ -164,8 +179,10 @@ std::optional<Agent> Agent::preset(const std::string& b) {
         a.walk_speed = 0.0f;
         a.run_speed = 0.0f;
         a.ranged = true;
+        a.damage_type = "projectile";
         a.attack_range = 30.0f;
         a.attack_damage = 8.0f;
+        a.attack_knockback = 3.0f;
         a.attack_rate = 6.0f;
         a.accuracy = 0.75f;
         a.magazine = 0;

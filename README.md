@@ -156,6 +156,12 @@ They also have the gameplay helpers you'd find in Unity, Unreal, GMod or Roblox 
 |---|---|
 | Health | `health`, `max_health`, `has_health`, `set_health`, `set_max_health`, `add_health` / `heal`, `damage` (with an optional attacker), `kill`, `is_dead`, `revive`, `set_invulnerable`, `damage_taken` (this tick), `died` (true the tick it died), `last_attacker` |
 | Fire and blasts | `ignite` (seconds), `extinguish`, `is_burning`, `explode` (point, radius, push, damage, attacker), `push_away` (a blast with no damage or effect) |
+| Typed damage | `apply_damage` (target, amount, type), `apply_damage_from` (target, attacker, amount, type, push x/y/z in N·s, stagger seconds: -1 works it out from the push), `last_damage_type`, `resistance`, `set_resistance`, `set_damage_formula`, `set_effect_formula`, `set_health_setting` / `health_setting` (any health setting by name, e.g. `armor_mode`, `armor_formula`, `shield_types`, `resist`) |
+| Passive damage | `damage_over_time` (target, amount, type, duration, interval, forever), `damage_over_time_from` (also attacker, push x/y/z, push repeat 0 once / 1 every pulse / 2 continuous, stagger, stack, key), `stop_damage_over_time` (by type or key, empty = all), `damage_over_time_count` |
+| Effects | `apply_effect` (target, name, duration: 0 = the effect's own, strength), `apply_effect_forever`, `apply_effect_from`, `remove_effect`, `clear_effects`, `has_effect`, `effect_stacks`, `effect_time_left` (-1 = forever), `effect_list`, `define_effect` (name, setting, value) |
+| Stagger | `stagger` (seconds), `stagger_time_left`, `is_stunned`, `move_scale` |
+| Survival | `stat` / `set_stat` / `add_stat` (any survival or health number by name: stamina, hunger, saturation, thirst, breath, temperature, ambient, carried, armor, shield, ...; `weight` and `encumbrance` are read only), `eat` (food, saturation), `drink`, `use_stamina`, `is_underwater` |
+| Units | `convert_units` (value, from, to): kg, g, lb, oz, st, t; C, F, K; m/s, km/h, mph, ft/s, kn; m, cm, mm, km, in, ft, yd, mi; N*s, lbf*s, lb*ft/s |
 | Effects | `play_effect` (name, point, scale), `attach_effect` (name, entity, scale) |
 | Tags | `add_tag`, `remove_tag`, `has_tag`, `find_tagged`, `nearest_tagged` |
 | Moving and maths | `distance`, `teleport`, `look_at` (a point or an entity), `random`, `random_int`, `clamp`, `lerp`, `move_towards` |
@@ -455,6 +461,88 @@ In Play the terrain is one heightfield collider that follows the hills exactly, 
 ### Health, fire and explosions
 
 Tick **Has health** in the inspector (under **Health and tags**) to let something be hurt. It has a health value and a max, can heal over time after a delay, can be invulnerable, can be hurt by hard hits (`impact`: speed changes over 7 m/s hurt, more the harder), and can be **flammable**: fire from explosions or `ignite` burns it, does damage every second and spreads to flammable things nearby. **When health runs out** it does nothing, disappears, explodes (blast radius, push and damage: other explosive things in range go off too), shatters or respawns where it started after a delay. Right-click → **Physics object** has an **Explosive barrel** and a **Wooden crate** ready to go. **Tags** (comma separated) let scripts find groups of things.
+
+### Damage, effects and stagger
+
+Damage has a **type**: physical, melee, projectile, explosion, fire, cold, poison, bleed, shock, acid, fall, drown, starve, thirst, magic, true, or any name you make up. **Resistances** are written `fire=0.5, poison=1, cold=-0.5`: 0.5 halves that type, 1 makes it immune and a negative number is a weakness. A resistance named after an effect (`stunned=0.5`) shortens it, and 1 blocks it. **True** damage ignores both.
+
+**Armor** works however you choose in **How armor works**:
+
+- **Diminishing**: damage × constant / (constant + armor), so armor equal to the constant halves it (the constant is yours to set).
+- **Percent**: armor is the percent blocked, up to a cap.
+- **Flat**: each hit loses the armor value, but at least a set share always gets through.
+- **Formula**: your own maths, e.g. `max(amount - armor * 0.5, amount * 0.2)`.
+- **None**: armor does nothing by itself (handle it in a script).
+
+You choose which damage types armor blocks (`all` means everything but true damage), and it can **wear down** as it blocks. A **shield** soaks up damage before health: it can take all or a share of each hit, only certain types, or follow a formula (`amount * shield_fraction` makes it weaker as it drains), and recharges after a delay without damage. The order is resistances and effects, then armor, then the damage formula, then the shield, then health. Scripts can change any of it while the game runs with `set_health_setting` (`set_health_setting(self, "armor_formula", "amount * 0.8")`).
+
+Damage can be **instant** or **passive** (damage over time). Passive damage lasts a duration or forever, and hits every **interval** (that amount each pulse) or smoothly (that amount per second when the interval is 0). Its **push** (in N·s) can happen once, on every pulse or continuously. The same passive damage refreshes instead of stacking unless you ask it to stack.
+
+A hard enough push **staggers**: if the push would knock something faster than its **poise** (m/s, 1 by default) it's staggered for a moment. It can't attack or jump and moves at a third of its speed. A grenade a metre away staggers a person briefly; a hunter's swipe staggers for about half a second. **Stagger time multiplier** 0 means it never staggers.
+
+**Effects** are named, timed (or forever) states that can stack: poison, bleeding, burning, shocked, frozen, chilled, warm, slowed, stunned, staggered, regeneration, haste, strength, weakness, resistance, vulnerable, exhausted, well_fed and food_poisoning. Each can hurt (a damage type, per second or per interval), heal, change speed, jump height, damage taken, damage dealt, stamina recovery, hunger and warmth, stun, and show a particle effect. `define_effect` changes any of these or makes new effects (`define_effect("venom", "damage", "3")`). **Strength** scales an effect and each stack adds to its damage and healing.
+
+**Formulas** let you do your own maths without a script. A health's **damage formula** changes each hit after armor and resistance (`amount * (1 + is_fire)`, `amount * (1 + staggered)`, `min(amount, 25)`). Its **effect formula** changes how long effects last (`duration * 0.5`, return 0 to block one). An agent's **damage** and **knockback formulas** work out each hit (`damage * (1 + distance / 10)`, `knockback * (1 + (target_health < 20))`). Formulas can use `random(a, b)`, `min`, `max`, `clamp`, `pow`, comparisons and `and`/`or`; the inspector lists the names each one can read.
+
+Agents also have a **damage type** (melee, or projectile when they shoot) and can cause an **effect on hit** with a chance (predators make you bleed).
+
+### Survival
+
+Tick **Has survival stats** for a player (the physical player has them, with health that respawns). Each part can be turned off:
+
+- **Stamina**: sprinting uses it every second and jumping uses some per jump. When it runs out you can't sprint until you have a little back, and it recovers after a short rest.
+- **Hunger**: food and saturation like Minecraft. Tiredness builds slowly at rest, faster sprinting and jumping, and every 4 uses up saturation first, then food. With nearly full food you heal (which makes you tired); with none you starve.
+- **Thirst**: water drains, faster while sprinting; with none you dehydrate.
+- **Breath**: under water (the head is below a fluid's surface) breath runs down and then you drown. It comes back quickly in air.
+- **Weight**: optional. Set what it can carry; the extra weight scripts add (`carried`) and the mass of any child entity tagged `item` count. Below a light load there's no penalty, then it slows down to a set speed at full load, can't sprint or jump over the limit and can't move at all at the overload (150% by default). Carrying more uses more stamina and makes you hungrier when sprinting.
+- **Temperature**: the body cools when the air (plus clothing warmth and warming or chilling effects, and fire) is below the comfortable range and heats above it. Below 35 C cold hurts, above 40 C heat does.
+
+Scripts and graphs read and change all of it with `stat`/`set_stat`/`add_stat` (`set_stat(self, "ambient", -10)` for a snowy area), `eat`, `drink` and `use_stamina`. The **Grapher** has a **Health & Survival** group: Apply Damage (with a **passive** toggle, a duration with a **forever** toggle, the interval and the push repeat), Apply Effect (with a **forever** toggle), Remove Effect, Define Effect, Stop Passive Damage, Stagger, Heal, Eat, Drink, Get/Set/Change Stat, and checks for effects, stagger, health, damage taken and the last damage type. Leave **target** empty for the graph's own entity, or name another. There's also Set Health Setting, Health Setting and Convert Units.
+
+### Items, inventories and the hotbar
+
+Right-click → **Items, weapons and loot** has a library of several hundred ready-made items, sorted into groups: **Guns** (pistols, revolvers, SMGs, assault, battle, semi-auto, bolt- and lever-action rifles, sniper rifles, shotguns, machine guns, launchers, black powder, sci-fi), **Ammo**, **Melee** (Roman, Greek, samurai, medieval, Viking and Norse, world, modern sharp, modern blunt, fantasy, unarmed), **Bows** (bows, crossbows, slings), **Throwables** (grenades, explosives, incendiary, utility, throwing blades and spears, improvised), **Magic** (staves, wands, tomes, orbs, scrolls), **Potions**, **Food**, **Drinks**, **Medical**, **Clothing**, **Armor** (modern, Roman, samurai, medieval), **Trinkets**, **Containers** (backpacks, rigs and belts, pouches and bags), **Holsters & Slings**, **Tools**, **Keys** and **Materials**. Picking one drops a pickup in the scene. There's also a **Storage chest** and a Tarkov-style **Locker**. Every item can be changed or new ones made with `define_item` (or the Define Item node), and custom items are saved with the scene.
+
+Tick **Has an inventory** for players, chests, NPCs or anything that carries things (the physical player has one). **Works like** fills in every setting from a preset, and you can change any of them afterwards:
+
+- **Minecraft** and **Terraria**: slots with stacks and a hotbar of its own.
+- **Tarkov** and **Ghosts of Tabor**: a grid where items take up several cells and can be rotated (R while dragging), a weight limit, rigs and backpacks that open beside it, and holsters.
+- **DayZ**: a grid plus worn clothing and bags with their own space.
+- **No Room In Hell**: a weight-limited list with a few quick slots.
+- **Saints and Sinners** and **Into the Radius**: backpack style, limited by what fits (litres), with a few body slots and holsters.
+- **Resident Evil**, **Diablo**, **Skyrim** (weight list) and **Zelda** (pouches by kind), or **custom**.
+
+The style can be **slots**, **grid**, **weight** (a list limited by weight), **volume** (a list limited by litres) or **pouches** (grouped by kind). You choose the rows, columns, cell size, gap, background opacity, screen position (and a nudge), the title, and the keys that open it (any number, comma separated, or none). **Stacks** are measured by count (whole items, like Minecraft), weight or volume (for liquids and loose things), so amounts can be fractions unless **whole counts** is on. The **stack limit** caps every stack (0 means each item's own limit, and it can't go below 0). The **hotbar** can be off, or have any number of slots, its own position, size and gap, be vertical, use number keys and the mouse wheel. Worn **bags and rigs** show next to the inventory or open with their own key.
+
+While playing, the preset's key opens the inventory (E for Minecraft, Tab for Tarkov, I for Skyrim...). Drag items between cells, panels and chests, right-click to use or wear (or take off), shift-click to send across to an open chest, drag outside the panels to drop, and press a number key over an item to put it on the hotbar. **F** picks up or opens what's in front of you, **G** drops, **R** reloads, **H** holsters and draws, number keys and the wheel pick hotbar slots, **left mouse** uses or attacks and **right mouse** aims or blocks. Every key can be changed per inventory.
+
+### Clothing, armor, holsters and hands
+
+Items can be **worn**: head, eyes, face, neck, shoulders, torso, vest, back, over, hands, waist, legs, feet, two rings and a side slot. Worn things show on the body (a texture on the item is used on them), add **armor** for the damage types they cover, **warmth** (body temperature), extra **carrying** and **trinket** effects that last while they're worn. Everyone has a **main hand** and an **off hand**. **Putting a weapon away** can need a holster, sling or big enough bag on the body (Inventory → *Putting away a weapon needs…*): a pistol fits a hip, thigh or shoulder holster, a rifle a sling or back slot, a sword a scabbard. Without the requirement anything can be put away. AI characters use whatever weapon they hold.
+
+### Weapons and ballistics
+
+Guns have damage, rate, magazine and ammo, reload time, muzzle speed, spread, recoil, pellets, penetration, automatic fire and their own ballistics. Melee weapons have reach, rate, stamina use and block; bows draw up power the longer you hold; throwables have fuses and blast radii; magic uses mana and casts bolts, areas or self spells; potions, food, drinks and medicine heal, feed, cure and give effects. **Ballistics** can be set for the whole game, per inventory or per weapon:
+
+- **Hitscan**: instant, with a tracer.
+- **Cone**: instant within an accuracy cone that widens when moving and narrows crouching, prone or aiming (if **stance affects accuracy** is on).
+- **Travel**: the bullet is simulated and takes time to arrive, with tracers that follow the real path (like Gears of War: E-Day).
+- **Drop**: travel plus gravity.
+- **Realistic**: drop plus air drag, wind (from the climate), penetration through thin things and ricochets off steep hits.
+
+All of it works in 2D too, aiming at the mouse.
+
+Each item has three **looks**: simple, detailed and realistic. Realistic potions and drinks have liquid inside that sloshes as you move. Item meshes are made for you in `Assets/Models/Items` the first time they're needed; replace those files with your own models if you like.
+
+### Weather and climate
+
+Right-click → **Weather and climate zones** adds weather that covers the whole world or a box you can move and size. Presets: clear, warm, hot, heatwave, cool, cold, freezing, breeze, windy, gale, rain, storm, thunderstorm, drizzle, snow, blizzard, fog, sandstorm (or custom). A zone has a temperature (set, or added to the world's), wind with gusts, rain, snow, fog, humidity and lightning, and a **lifetime**: it can wait, build up, last a while (or forever), die down, start again, or switch to another preset after. Zones fade out over their edge and the higher priority wins where they overlap. Weather warms or chills bodies (wind chill, clothing warmth), pushes light things and bullets with the wind, makes people **wet** unless they're sheltered or wearing something waterproof, and shows rain, snow and lightning.
+
+Scripts and graphs start and stop weather (`start_weather("storm", 120, 10, 20)`, `start_weather_at("blizzard", x, y, z, radius, ...)`, `stop_weather`, `stop_all_weather`), change any setting (`set_climate(zone, "temperature", "-5")`) and read what it's like anywhere (`temperature_at`, `wind_x_at`, `rain_at`, `snow_at`, `is_sheltered`). The **Grapher** has **Items**, **Weapons** and **Weather** groups with a node for each of these.
+
+### Units
+
+The inspector has **unit** drop-downs next to the numbers they change: weight (kg, g, lb, oz, stone, tonnes) for collider mass and carrying, temperature (C, F, K) for survival, speed (m/s, km/h, mph, ft/s, knots) for cameras, agents and poise, distance (m, cm, mm, km, in, ft, yd, mi) for agents, cameras, sounds, lights, blast radius and head height, and knockback (N·s, lbf·s, lb·ft/s). Picking one changes them everywhere in the editor for this project. They only change what the editor shows: scenes, the game and scripts always use metres, kilograms, seconds and Celsius, and `convert_units` converts in scripts.
 
 ### Particles
 

@@ -1,6 +1,7 @@
 #include <xylem/xylem.hpp>
 #include <orchard/effects.hpp>
 #include <orchard/gameplay.hpp>
+#include <orchard/units.hpp>
 #include <orchard/ai/world.hpp>
 #include <orchard/graph.hpp>
 
@@ -572,6 +573,114 @@ void test_detailed_player_walks_hills() {
     }
 }
 
+void test_sprinting_over_hills() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity te = s.create("Terrain");
+    orchard::Terrain& t = s.add_terrain(te);
+    t = orchard::terrain_preset("hills");
+    orchard::TerrainHeights heights;
+    orchard::generate_heights(t, heights);
+    s.transform(te)->position = orchard::Vec3{0.0f, -heights.height_at(0.0f, 0.0f), 0.0f};
+    const orchard::Entity p = orchard::add_humanoid(s, orchard::HumanoidKind::detailed, {}, "Player");
+    orchard::Body& b = *s.body(p);
+    b.set(orchard::body_sleep, false);
+    b.continuous = orchard::BodyContinuous::on;
+    std::vector<orchard::Entity> todo{p};
+    while (!todo.empty()) {
+        const orchard::Entity at = todo.back();
+        todo.pop_back();
+        if (std::vector<orchard::Collider>* cs = s.colliders(at))
+            for (orchard::Collider& c : *cs) {
+                c.friction = 0.0f;
+                c.friction_combine = orchard::CombineMode::minimum;
+            }
+        for (orchard::Entity ch : s.children(at)) todo.push_back(ch);
+    }
+    s.transform(p)->position = orchard::Vec3{0.0f, 0.3f, 0.0f};
+    xylem::World w(orchard::Dimension::three_d);
+    w.build(s);
+    int air = 0, slow = 0, frames = 0, steps = 0;
+    float lift = 0.0f;
+    orchard::Vec3 prev = s.transform(p)->position;
+    orchard::Vec3 window = prev;
+    for (int i = 0; i < 60 * 12; ++i) {
+        const float a = static_cast<float>(i) / 60.0f * 0.5f;
+        xylem::CharacterMove mv;
+        mv.wish = orchard::Vec3{std::cos(a), 0.0f, std::sin(a)} * 15.0f;
+        mv.ride_height = 0.05f;
+        const xylem::CharacterState st = w.move_character(p, mv, 1.0f / 60.0f);
+        steps += w.step(1.0f / 60.0f);
+        const orchard::Vec3 at = s.transform(p)->position;
+        prev = at;
+        if (i < 60) continue;
+        ++frames;
+        if (!st.grounded) ++air;
+        if (i % 15 == 0) {
+            orchard::Vec3 d = at - window;
+            d.y = 0.0f;
+            if (orchard::length(d) * 4.0f < 15.0f * 0.6f) ++slow;
+            window = at;
+        }
+        float down = -1.0f;
+        w.raycast_ignoring(p, at + orchard::Vec3{0.0f, 2.0f, 0.0f}, orchard::Vec3{0.0f, -1.0f, 0.0f}, 50.0f, nullptr, nullptr, &down);
+        if (down >= 0.0f) lift = std::max(lift, down - 2.0f);
+    }
+    check(air < frames / 50, "sprinting over hills at 15 m/s stays on the ground (" + str(static_cast<float>(air)) + " of " + str(static_cast<float>(frames)) + " frames in the air)");
+    check(slow < 2, "and keeps its speed instead of stopping and starting (" + str(static_cast<float>(slow)) + " slow quarter-seconds, " + str(static_cast<float>(steps)) + " physics steps)");
+    check(lift < 0.6f, "and is never thrown off a slope like a ramp (highest " + str(lift) + " m above the ground)");
+}
+
+void test_characters_collide_without_launching() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity ground = s.create("Ground");
+    s.transform(ground)->position = {0.0f, -0.5f, 0.0f};
+    s.add_body(ground).type = orchard::BodyType::fixed;
+    s.add_collider(ground)->size = {80.0f, 1.0f, 80.0f};
+    auto person = [&s](const char* name, orchard::Vec3 at) {
+        const orchard::Entity e = orchard::add_humanoid(s, orchard::HumanoidKind::detailed, {}, name);
+        orchard::Body& b = *s.body(e);
+        b.set(orchard::body_sleep, false);
+        b.continuous = orchard::BodyContinuous::on;
+        std::vector<orchard::Entity> todo{e};
+        while (!todo.empty()) {
+            const orchard::Entity at2 = todo.back();
+            todo.pop_back();
+            if (std::vector<orchard::Collider>* cs = s.colliders(at2))
+                for (orchard::Collider& c : *cs) {
+                    c.friction = 0.0f;
+                    c.friction_combine = orchard::CombineMode::minimum;
+                }
+            for (orchard::Entity ch : s.children(at2)) todo.push_back(ch);
+        }
+        s.transform(e)->position = at;
+        return e;
+    };
+    for (float offset : {0.0f, 0.25f}) {
+        const orchard::Entity player = person("Player", {-10.0f, 0.1f, 0.0f});
+        const orchard::Entity runner = person("Runner", {10.0f, 0.1f, offset});
+        xylem::World w(orchard::Dimension::three_d);
+        w.build(s);
+        float top = 0.0f, fastest = 0.0f;
+        for (int i = 0; i < 60 * 3; ++i) {
+            const orchard::Vec3 pp = s.transform(player)->position, rp = s.transform(runner)->position;
+            orchard::Vec3 toward = rp - pp;
+            toward.y = 0.0f;
+            const orchard::Vec3 dir = orchard::length(toward) > 1e-3f ? orchard::normalize(toward) : orchard::Vec3{1.0f, 0.0f, 0.0f};
+            xylem::CharacterMove a;
+            a.wish = dir * 15.0f;
+            a.ride_height = 0.05f;
+            w.move_character(player, a, 1.0f / 60.0f);
+            w.walk(runner, dir * -6.0f, false, 0.0f, 1.0f / 60.0f);
+            w.step(1.0f / 60.0f);
+            top = std::max({top, s.transform(player)->position.y, s.transform(runner)->position.y});
+            fastest = std::max({fastest, w.velocity(player).y, w.velocity(runner).y});
+        }
+        check(top < 0.5f, "a player sprinting into a running character isn't launched, and neither is it (highest " + str(top) + " m, fastest upward " + str(fastest) + " m/s, offset " + str(offset) + ")");
+        s.destroy(player);
+        s.destroy(runner);
+    }
+}
+
 void test_triangle_prism_lands() {
     for (orchard::Dimension dim : {orchard::Dimension::three_d, orchard::Dimension::two_d}) {
         orchard::Scene s(dim);
@@ -715,6 +824,7 @@ void test_gameplay_explosions() {
     const orchard::Entity ground = add_box(s, "Ground", {0.0f, -0.5f, 0.0f}, false);
     (*s.colliders(ground))[0].size = {60.0f, 1.0f, 60.0f};
     const orchard::Entity near = add_box(s, "Near", {2.0f, 0.5f, 0.0f});
+    (*s.colliders(near))[0].density = 0.05f;
     s.add_health(near);
     const orchard::Entity barrel = add_box(s, "Barrel", {-3.0f, 0.5f, 0.0f});
     orchard::Health& bh = s.add_health(barrel);
@@ -961,6 +1071,534 @@ void test_ai_zombie_chases_and_bites() {
     check(spotted, "it reports a spotted event");
 }
 
+void test_ai_heavy_hit_does_not_launch() {
+    AiScene a;
+    const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+    const orchard::Entity h = a.agent("hunter", {0.0f, 0.05f, 6.0f});
+    a.s.transform(h)->rotation = orchard::from_euler({0.0f, 180.0f, 0.0f});
+    a.s.health(p)->on_death = orchard::DeathAction::nothing;
+    a.start();
+    float top = 0.0f;
+    a.run(6.0, [&] { top = std::max(top, a.pos(p).y); });
+    check(a.g.health(p) < 100.0f, "a hunter reaches the player and hits them (" + str(a.g.health(p)) + " health left)");
+    check(top < 1.0f, "and its huge damage doesn't fling the player into the air (highest " + str(top) + " m)");
+}
+
+void test_grenade_does_not_throw_people() {
+    AiScene a;
+    const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+    orchard::Collider& pc = (*a.s.colliders(p))[0];
+    pc.mass = 80.0f;
+    pc.lock(orchard::collider_lock_mass, true);
+    a.s.health(p)->on_death = orchard::DeathAction::nothing;
+    const orchard::Entity crate = a.s.create("Crate");
+    a.s.transform(crate)->position = {-1.5f, 0.5f, 0.0f};
+    a.s.add_body(crate);
+    orchard::Collider* cc = a.s.add_collider(crate);
+    cc->size = {0.6f, 0.6f, 0.6f};
+    cc->mass = 10.0f;
+    cc->lock(orchard::collider_lock_mass, true);
+    a.start();
+    a.run(0.2);
+    a.g.explode({-1.0f, 0.1f, 0.0f}, 4.5f, 15000.0f, 90.0f);
+    const float kick = orchard::length(a.w->velocity(p));
+    const float toss = orchard::length(a.w->velocity(crate));
+    float top = 0.0f;
+    a.run(2.0, [&] { top = std::max(top, a.pos(p).y); });
+    check(a.g.health(p) < 100.0f, "a grenade going off a metre away hurts the player (" + str(a.g.health(p)) + " health left)");
+    check(kick < 3.0f, "but only staggers them, like a real blast would (" + str(kick) + " m/s)");
+    check(top < 0.3f, "and doesn't throw them into the air (highest " + str(top) + " m)");
+    check(toss > kick * 2.0f, "while a light crate next to it gets blown away (" + str(toss) + " m/s)");
+}
+
+void test_ai_knockback_is_separate_from_damage() {
+    auto shove = [](float damage, float knockback, float& lost) {
+        AiScene a;
+        const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+        orchard::Collider& pc = (*a.s.colliders(p))[0];
+        pc.mass = 80.0f;
+        pc.lock(orchard::collider_lock_mass, true);
+        a.s.health(p)->on_death = orchard::DeathAction::nothing;
+        a.s.health(p)->max = a.s.health(p)->value = 100000.0f;
+        const orchard::Entity h = a.agent("brawler", {0.0f, 0.05f, 4.0f});
+        a.s.transform(h)->rotation = orchard::from_euler({0.0f, 180.0f, 0.0f});
+        a.s.agent(h)->attack_damage = damage;
+        a.s.agent(h)->attack_knockback = knockback;
+        a.start();
+        float fastest = 0.0f;
+        a.run(4.0, [&] {
+            const orchard::Vec3 v = a.w->velocity(p);
+            fastest = std::max(fastest, std::sqrt(v.x * v.x + v.z * v.z));
+        });
+        lost = 100000.0f - a.g.health(p);
+        return fastest;
+    };
+    float lost_soft = 0.0f, lost_hard = 0.0f;
+    const float soft = shove(1000.0f, 0.0f, lost_soft);
+    const float hard = shove(1.0f, 400.0f, lost_hard);
+    check(lost_soft >= 1000.0f && lost_hard >= 1.0f, "the brawler lands its hits in both cases (" + str(lost_soft) + ", " + str(lost_hard) + " damage)");
+    check(soft < 1.0f, "a hit that does lots of damage but has no knockback doesn't shove the player (" + str(soft) + " m/s)");
+    check(hard > 3.0f, "a weak hit with lots of knockback does (" + str(hard) + " m/s)");
+}
+
+struct Arena {
+    orchard::Scene s{orchard::Dimension::three_d};
+    std::unique_ptr<xylem::World> w;
+    orchard::Gameplay g;
+    double t = 0.0;
+
+    Arena() {
+        const orchard::Entity ground = s.create("Ground");
+        s.transform(ground)->position = {0.0f, -0.5f, 0.0f};
+        s.add_body(ground).type = orchard::BodyType::fixed;
+        s.add_collider(ground)->size = {60.0f, 1.0f, 60.0f};
+    }
+
+    orchard::Entity person(const char* name, orchard::Vec3 at) {
+        const orchard::Entity e = s.create(name);
+        s.transform(e)->position = at;
+        orchard::Body& b = s.add_body(e);
+        b.set(orchard::body_lock_rotation_x, true);
+        b.set(orchard::body_lock_rotation_z, true);
+        b.set(orchard::body_sleep, false);
+        orchard::Collider* c = s.add_collider(e, orchard::ColliderShape::capsule);
+        c->size = {0.5f, 1.8f, 0.5f};
+        c->offset = {0.0f, 0.9f, 0.0f};
+        c->mass = 80.0f;
+        c->lock(orchard::collider_lock_mass, true);
+        s.add_health(e);
+        return e;
+    }
+
+    void start() {
+        w = std::make_unique<xylem::World>(s.dimension());
+        w->build(s);
+        g.start(&s, w.get());
+    }
+
+    void run(double seconds, const std::function<void()>& each = {}) {
+        const int n = static_cast<int>(seconds * 60.0 + 0.5);
+        for (int i = 0; i < n; ++i) {
+            t += 1.0 / 60.0;
+            w->step(1.0f / 60.0f);
+            g.tick(1.0 / 60.0, t);
+            if (each) each();
+        }
+    }
+};
+
+void test_damage_types_and_resistances() {
+    Arena a;
+    const orchard::Entity p = a.person("P", {0.0f, 0.05f, 0.0f});
+    orchard::Health& h = *a.s.health(p);
+    h.armor = 100.0f;
+    h.resist["fire"] = 0.5f;
+    h.resist["poison"] = 1.0f;
+    h.resist["cold"] = -0.5f;
+    a.start();
+    orchard::Damage d;
+    d.amount = 20.0f;
+    d.type = "melee";
+    check(near(a.g.apply_damage(p, d), 90.0f, 0.01f), "armor 100 halves a melee hit (" + str(a.g.health(p)) + ")");
+    d.type = "fire";
+    check(near(a.g.apply_damage(p, d), 80.0f, 0.01f), "fire resistance 0.5 halves fire and armor doesn't block it (" + str(a.g.health(p)) + ")");
+    d.type = "cold";
+    check(near(a.g.apply_damage(p, d), 50.0f, 0.01f), "a negative resistance is a weakness (" + str(a.g.health(p)) + ")");
+    d.type = "poison";
+    check(near(a.g.apply_damage(p, d), 50.0f, 0.01f), "resistance 1 is immunity");
+    check(!a.g.apply_effect(p, "poison", 5.0f), "and blocks effects of that kind too");
+    d.type = "true";
+    d.amount = 10.0f;
+    check(near(a.g.apply_damage(p, d), 40.0f, 0.01f), "true damage ignores armor and resistance");
+    check(a.g.last_damage_type(p) == "true", "the last damage type is remembered");
+    h.damage_formula = "amount * (1 + is_fire) + 2 * has_slowed";
+    a.g.apply_effect(p, "slowed", 5.0f);
+    d.type = "fire";
+    d.amount = 10.0f;
+    check(near(a.g.apply_damage(p, d), 28.0f, 0.01f), "damage formulas can read the type and effects (" + str(a.g.health(p)) + ")");
+    const orchard::Health copy = h;
+    std::string err;
+    const std::optional<orchard::Scene> loaded = orchard::Scene::load(a.s.save(), &err);
+    check(loaded.has_value(), "a scene with resistances loads: " + err);
+    const orchard::Scene& back = loaded ? *loaded : a.s;
+    const orchard::Health* bh = back.health(back.find("P"));
+    check(bh && bh->armor == 100.0f && bh->resist == copy.resist && bh->damage_formula == copy.damage_formula && bh->poise == copy.poise, "armor, resistances and formulas save and load");
+}
+
+void test_passive_damage() {
+    Arena a;
+    const orchard::Entity p = a.person("P", {0.0f, 0.05f, 0.0f});
+    a.start();
+    orchard::Damage d;
+    d.amount = 5.0f;
+    d.type = "poison";
+    d.duration = 2.0f;
+    d.interval = 0.5f;
+    a.g.apply_damage(p, d);
+    check(a.g.damage_over_time_count(p) == 1, "passive damage is tracked");
+    a.run(2.5);
+    check(near(a.g.health(p), 80.0f, 0.01f), "pulsed passive damage hits every interval for its duration (" + str(a.g.health(p)) + ")");
+    check(a.g.damage_over_time_count(p) == 0, "and then stops");
+    orchard::Damage burn;
+    burn.amount = 4.0f;
+    burn.type = "fire";
+    burn.duration = -1.0f;
+    a.g.apply_damage(p, burn);
+    a.run(2.0);
+    check(near(a.g.health(p), 72.0f, 0.2f), "smooth passive damage is per second (" + str(a.g.health(p)) + ")");
+    a.run(3.0);
+    check(a.g.damage_over_time_count(p) == 1 && a.g.health(p) < 61.0f, "forever lasts until stopped (" + str(a.g.health(p)) + ")");
+    check(a.g.stop_damage(p, "fire") && a.g.damage_over_time_count(p) == 0, "stopping passive damage by type");
+    a.g.apply_damage(p, burn);
+    a.g.apply_damage(p, burn);
+    check(a.g.damage_over_time_count(p) == 1, "the same passive damage refreshes instead of stacking");
+    burn.stack = true;
+    a.g.apply_damage(p, burn);
+    check(a.g.damage_over_time_count(p) == 2, "unless asked to stack");
+    a.g.stop_damage(p, "");
+
+    Arena b;
+    const orchard::Entity q = b.person("Q", {0.0f, 0.05f, 0.0f});
+    b.s.health(q)->poise = 100.0f;
+    b.start();
+    b.run(0.3);
+    orchard::Damage shove;
+    shove.amount = 0.0f;
+    shove.duration = 1.0f;
+    shove.interval = 0.25f;
+    shove.knockback = {40.0f, 0.0f, 0.0f};
+    shove.push = orchard::PushRepeat::every_pulse;
+    b.g.apply_damage(q, shove);
+    int kicks = 0;
+    float last = 0.0f;
+    b.run(1.2, [&] {
+        const float v = b.w->velocity(q).x;
+        if (v > last + 0.3f) ++kicks;
+        last = v;
+    });
+    check(kicks >= 3 && kicks <= 5, "a push can repeat every pulse (" + str(static_cast<float>(kicks)) + " kicks)");
+    Arena c;
+    const orchard::Entity r = c.person("R", {0.0f, 0.05f, 0.0f});
+    c.start();
+    c.run(0.3);
+    orchard::Damage once = shove;
+    once.push = orchard::PushRepeat::once;
+    c.g.apply_damage(r, once);
+    int c_kicks = 0;
+    float c_last = 0.0f;
+    c.run(1.2, [&] {
+        const float v = c.w->velocity(r).x;
+        if (v > c_last + 0.3f) ++c_kicks;
+        c_last = v;
+    });
+    check(c_kicks == 1, "or happen only once (" + str(static_cast<float>(c_kicks)) + " kicks)");
+}
+
+void test_stagger_and_effects() {
+    Arena a;
+    const orchard::Entity p = a.person("P", {0.0f, 0.05f, 0.0f});
+    const orchard::Entity tank = a.person("Tank", {5.0f, 0.05f, 0.0f});
+    a.s.health(tank)->poise = 50.0f;
+    a.start();
+    a.run(0.3);
+    orchard::Damage punch;
+    punch.amount = 5.0f;
+    punch.type = "melee";
+    punch.knockback = {320.0f, 0.0f, 0.0f};
+    a.g.apply_damage(p, punch);
+    a.g.apply_damage(tank, punch);
+    check(a.g.staggered(p) > 0.3f && a.g.stunned(p), "a hard shove staggers someone (" + str(a.g.staggered(p)) + " s)");
+    check(a.g.move_scale(p) < 0.5f, "and slows them while staggered");
+    check(a.g.staggered(tank) == 0.0f, "but not someone with lots of poise");
+    a.run(1.5);
+    check(a.g.staggered(p) == 0.0f && !a.g.stunned(p), "stagger wears off");
+    check(a.g.apply_effect(p, "poison", 4.0f) && a.g.apply_effect(p, "poison", 4.0f), "effects can be applied twice");
+    check(a.g.effect_stacks(p, "poison") == 2, "and stack up to their limit");
+    const float before = a.g.health(p);
+    a.run(0.95);
+    check(near(before - a.g.health(p), 4.0f, 0.01f), "stacked poison hurts more (" + str(before - a.g.health(p)) + ")");
+    check(a.g.apply_effect(p, "slowed", -1.0f) && a.g.effect_time_left(p, "slowed") < 0.0f, "effects can last forever");
+    check(near(a.g.move_scale(p), 0.6f, 0.01f), "slowed slows (" + str(a.g.move_scale(p)) + ")");
+    check(a.g.apply_effect(p, "haste", 5.0f, 2.0f) && near(a.g.move_scale(p), 0.6f * 1.6f, 0.01f), "strength scales an effect");
+    a.run(6.0);
+    check(a.g.effect_stacks(p, "slowed") == 1 && a.g.effect_stacks(p, "haste") == 0 && a.g.effect_stacks(p, "poison") == 0, "timed effects end and forever ones stay");
+    check(a.g.remove_effect(p, "slowed") && a.g.effects(p).empty(), "effects can be removed");
+    check(a.g.set_effect_value("venom", "damage", "3") && a.g.set_effect_value("venom", "interval", "0.5") && a.g.set_effect_value("venom", "particle", "electric"), "new effects can be defined");
+    const float pre = a.g.health(p);
+    a.g.apply_effect(p, "venom", 1.0f);
+    a.run(1.2);
+    check(near(pre - a.g.health(p), 6.0f, 0.01f), "custom effects hurt on their own interval (" + str(pre - a.g.health(p)) + ")");
+    a.g.apply_effect(p, "burning", 2.0f);
+    check(a.g.burning(p) && a.g.effect_stacks(p, "burning") == 1, "burning is an effect too");
+    a.g.remove_effect(p, "burning");
+    check(!a.g.burning(p), "and putting it out removes it");
+    a.s.health(p)->effect_formula = "duration * 0.5 * (1 - is_stunned)";
+    a.g.apply_effect(p, "frozen", 4.0f);
+    check(near(a.g.effect_time_left(p, "frozen"), 2.0f, 0.01f), "effect formulas change how long effects last");
+    check(!a.g.apply_effect(p, "stunned", 4.0f), "and can block them");
+    a.g.apply_effect(p, "strength", 10.0f);
+    orchard::Damage hit;
+    hit.amount = 10.0f;
+    hit.type = "melee";
+    hit.attacker = p;
+    const float tank_before = a.g.health(tank);
+    a.g.apply_damage(tank, hit);
+    check(near(tank_before - a.g.health(tank), 15.0f, 0.01f), "an attacker's strength effect raises their damage");
+}
+
+void test_survival() {
+    Arena a;
+    const orchard::Entity p = a.person("P", {0.0f, 0.05f, 0.0f});
+    orchard::Survival& sv = a.s.add_survival(p);
+    sv.hunger_on = true;
+    sv.thirst_on = true;
+    sv.temperature_on = true;
+    a.start();
+    orchard::Exertion e = a.g.exert(p, 4.0f, 9.0f, true, true, false, 0.5f);
+    check(e.sprinting && e.speed == 9.0f, "sprinting is allowed with stamina");
+    check(near(a.g.stat(p, "stamina"), 92.5f, 0.01f), "and uses it (" + str(a.g.stat(p, "stamina")) + ")");
+    for (int i = 0; i < 20; ++i) e = a.g.exert(p, 4.0f, 9.0f, true, true, false, 0.5f);
+    check(!e.sprinting && e.speed == 4.0f && a.g.stat(p, "stamina") == 0.0f, "running out of stamina stops sprinting");
+    a.g.set_stat(p, "stamina", 10.0f);
+    e = a.g.exert(p, 4.0f, 9.0f, true, true, false, 0.0f);
+    check(!e.sprinting, "sprinting needs a little stamina to start again");
+    e = a.g.exert(p, 4.0f, 9.0f, false, true, true, 0.1f);
+    check(e.can_jump, "jumping is allowed with enough stamina");
+    a.g.jumped(p);
+    check(near(a.g.stat(p, "stamina"), 0.0f, 0.01f), "and each jump costs stamina");
+    check(!a.g.exert(p, 4.0f, 9.0f, false, true, true, 0.1f).can_jump, "too tired to jump");
+    a.run(2.0);
+    check(a.g.stat(p, "stamina") > 15.0f, "stamina comes back after a short rest (" + str(a.g.stat(p, "stamina")) + ")");
+    a.g.apply_effect(p, "frozen", 5.0f);
+    e = a.g.exert(p, 4.0f, 9.0f, false, true, true, 0.1f);
+    check(near(e.speed, 1.6f, 0.01f) && near(e.jump, 0.5f, 0.01f), "effects slow walking and jumping");
+    a.g.remove_effect(p, "frozen");
+
+    a.g.set_stat(p, "saturation", 1.0f);
+    a.g.set_stat(p, "hunger", 1.0f);
+    a.g.set_stat(p, "idle_exhaustion", 8.0f);
+    a.run(0.6);
+    check(a.g.stat(p, "saturation") == 0.0f && a.g.stat(p, "hunger") <= 1.0f, "saturation is used up before food");
+    a.run(1.0);
+    check(a.g.stat(p, "hunger") == 0.0f, "then food runs out");
+    float hp = a.g.health(p);
+    a.run(2.0);
+    check(near(hp - a.g.health(p), 2.0f, 0.1f) && a.g.last_damage_type(p) == "starve", "starving hurts (" + str(hp - a.g.health(p)) + ")");
+    a.g.set_stat(p, "idle_exhaustion", 0.0f);
+    check(a.g.eat(p, 20.0f, 5.0f) == 20.0f && a.g.stat(p, "saturation") == 5.0f, "eating fills food and saturation");
+    hp = a.g.health(p);
+    a.run(2.0);
+    check(a.g.health(p) > hp + 1.5f && a.g.stat(p, "saturation") < 5.0f, "being fed heals and uses up saturation (" + str(a.g.stat(p, "saturation")) + ")");
+
+    a.g.set_stat(p, "thirst", 0.0f);
+    hp = a.g.health(p);
+    a.run(1.0);
+    check(a.g.last_damage_type(p) == "thirst" || a.g.health(p) < hp + 1.0f, "no water hurts");
+    check(a.g.drink(p, 50.0f) == 50.0f, "drinking refills water");
+    a.g.set_stat(p, "ambient", -20.0f);
+    a.run(4.0);
+    check(a.g.stat(p, "temperature") < 36.5f, "cold air cools the body (" + str(a.g.stat(p, "temperature")) + ")");
+    a.g.apply_effect(p, "warm", 30.0f, 3.0f);
+    const float cold = a.g.stat(p, "temperature");
+    a.run(4.0);
+    check(a.g.stat(p, "temperature") > cold, "warming effects heat it back up");
+    a.g.set_stat(p, "ambient", 20.0f);
+
+    sv.temperature_on = false;
+    sv.hunger_on = false;
+    sv.thirst_on = false;
+    sv.max_stamina = 150.0f;
+    std::string err;
+    const std::optional<orchard::Scene> loaded = orchard::Scene::load(a.s.save(), &err);
+    check(loaded.has_value(), "a scene with survival stats loads: " + err);
+    const orchard::Scene& back = loaded ? *loaded : a.s;
+    const orchard::Survival* bs = back.survival(back.find("P"));
+    check(bs && bs->max_stamina == 150.0f && !bs->hunger_on && bs->breath_on, "survival stats save and load");
+    check(!a.g.set_stat(p, "nonsense", 1.0f), "unknown stats are refused");
+}
+
+void test_drowning() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    ground(s, 20.0f);
+    const orchard::Entity pool = s.create("Pool");
+    s.transform(pool)->position = {0.0f, 1.5f, 0.0f};
+    orchard::Fluid& f = s.add_fluid(pool);
+    f.level = orchard::FluidLevel::still;
+    f.size = {6.0f, 3.0f, 6.0f};
+    f.fill = 1.0f;
+    const orchard::Entity diver = s.create("Diver");
+    s.transform(diver)->position = {0.0f, 0.1f, 0.0f};
+    s.add_health(diver);
+    orchard::Survival& sv = s.add_survival(diver);
+    sv.max_breath = sv.breath = 2.0f;
+    const orchard::Entity walker = s.create("Walker");
+    s.transform(walker)->position = {12.0f, 0.1f, 0.0f};
+    s.add_health(walker);
+    s.add_survival(walker).max_breath = 2.0f;
+    xylem::World w(orchard::Dimension::three_d);
+    w.build(s);
+    orchard::Gameplay g;
+    g.start(&s, &w);
+    check(g.underwater(diver) && !g.underwater(walker), "a head under water is noticed");
+    double t = 0.0;
+    for (int i = 0; i < 240; ++i) {
+        t += 1.0 / 60.0;
+        w.step(1.0f / 60.0f);
+        g.tick(1.0 / 60.0, t);
+    }
+    check(g.stat(diver, "breath") == 0.0f && g.health(diver) < 85.0f && g.last_damage_type(diver) == "drown", "holding breath too long drowns (" + str(g.health(diver)) + ")");
+    check(g.health(walker) == 100.0f && g.stat(walker, "breath") == 2.0f, "breathing air is fine");
+}
+
+void test_ai_attack_settings() {
+    AiScene a;
+    const orchard::Entity p = a.player({0.0f, 0.05f, 0.0f});
+    a.s.health(p)->on_death = orchard::DeathAction::nothing;
+    a.s.health(p)->max = a.s.health(p)->value = 100000.0f;
+    const orchard::Entity h = a.agent("brawler", {0.0f, 0.05f, 4.0f});
+    a.s.transform(h)->rotation = orchard::from_euler({0.0f, 180.0f, 0.0f});
+    orchard::Agent& ag = *a.s.agent(h);
+    ag.attack_damage = 10.0f;
+    ag.damage_type = "cold";
+    ag.damage_formula = "damage * 3";
+    ag.hit_effect = "chilled";
+    ag.hit_effect_chance = 1.0f;
+    a.start();
+    a.run(4.0);
+    const float lost = 100000.0f - a.g.health(p);
+    check(lost >= 30.0f && std::fmod(lost, 30.0f) < 0.01f, "agents use their damage formula (" + str(lost) + ")");
+    check(a.g.last_damage_type(p) == "cold", "and their damage type");
+    check(a.g.effect_stacks(p, "chilled") == 1, "and can cause effects on hit");
+    a.g.stagger(h, 3.0f);
+    const float now = a.g.health(p);
+    a.run(1.5);
+    check(a.g.health(p) == now, "a staggered agent can't attack");
+    std::string err;
+    const std::optional<orchard::Scene> loaded = orchard::Scene::load(a.s.save(), &err);
+    check(loaded.has_value(), "agents with attack settings load: " + err);
+    const orchard::Scene& back = loaded ? *loaded : a.s;
+    const orchard::Agent* bag = back.agent(back.find("brawler"));
+    check(bag && bag->damage_type == "cold" && bag->hit_effect == "chilled" && bag->damage_formula == "damage * 3", "attack settings save and load");
+}
+
+void test_armor_and_shields() {
+    Arena a;
+    const orchard::Entity p = a.person("P", {0.0f, 0.05f, 0.0f});
+    orchard::Health& h = *a.s.health(p);
+    h.armor = 30.0f;
+    a.start();
+    orchard::Damage d;
+    d.amount = 50.0f;
+    d.type = "melee";
+    auto hit = [&](float amount, const std::string& type) {
+        a.g.set_health(p, 100.0f);
+        d.amount = amount;
+        d.type = type;
+        return 100.0f - a.g.apply_damage(p, d);
+    };
+    h.armor_mode = "flat";
+    check(near(hit(50.0f, "melee"), 20.0f, 0.01f), "flat armor takes its value off each hit");
+    check(near(hit(20.0f, "melee"), 2.0f, 0.01f), "but always lets a little through (" + str(hit(20.0f, "melee")) + ")");
+    h.armor_mode = "percent";
+    check(near(hit(50.0f, "melee"), 35.0f, 0.01f), "percent armor blocks that share");
+    h.armor = 200.0f;
+    check(near(hit(50.0f, "melee"), 5.0f, 0.01f), "up to its cap");
+    h.armor = 30.0f;
+    h.armor_mode = "diminishing";
+    h.armor_constant = 30.0f;
+    check(near(hit(50.0f, "melee"), 25.0f, 0.01f), "diminishing armor halves damage at its constant");
+    h.armor_mode = "formula";
+    h.armor_formula = "max(amount - armor * 0.5, amount * 0.2) * (1 + is_projectile)";
+    check(near(hit(50.0f, "melee"), 35.0f, 0.01f), "armor can be your own formula");
+    h.armor_types = "melee,projectile";
+    check(near(hit(50.0f, "projectile"), 70.0f, 0.01f), "which can read the damage type");
+    check(near(hit(50.0f, "fire"), 50.0f, 0.01f), "armor only blocks the types it's set to");
+    h.armor_types = "all";
+    check(near(hit(50.0f, "fire"), 35.0f, 0.01f) && near(hit(50.0f, "true"), 50.0f, 0.01f), "all means everything except true damage");
+    h.armor_mode = "none";
+    check(near(hit(50.0f, "melee"), 50.0f, 0.01f), "armor can do nothing");
+    h.armor_mode = "flat";
+    h.armor_wear = 0.5f;
+    hit(50.0f, "melee");
+    check(near(h.armor, 15.0f, 0.01f), "armor can wear down as it blocks (" + str(h.armor) + ")");
+    h.armor = 0.0f;
+    h.armor_wear = 0.0f;
+    check(a.g.set_health_setting(p, "armor_mode", "percent") && h.armor_mode == "percent" && !a.g.set_health_setting(p, "armor_mode", "magic"), "scripts can change how armor works");
+    check(a.g.set_health_setting(p, "armor", "12") && a.g.stat(p, "armor") == 12.0f && a.g.health_setting(p, "armor_mode") == "percent", "and read it back");
+    h.armor = 0.0f;
+
+    h.max_shield = 40.0f;
+    h.shield = 40.0f;
+    check(near(hit(30.0f, "melee"), 0.0f, 0.01f) && near(h.shield, 10.0f, 0.01f), "a shield soaks up hits before health");
+    check(near(hit(30.0f, "melee"), 20.0f, 0.01f) && h.shield == 0.0f, "until it runs out");
+    h.shield = 40.0f;
+    h.shield_absorb = 0.5f;
+    check(near(hit(30.0f, "melee"), 15.0f, 0.01f) && near(h.shield, 25.0f, 0.01f), "a shield can take only part of each hit");
+    h.shield_types = "projectile";
+    check(near(hit(30.0f, "melee"), 30.0f, 0.01f), "and only some damage types");
+    h.shield_types.clear();
+    h.shield = 40.0f;
+    h.shield_formula = "amount * shield_fraction";
+    check(near(hit(20.0f, "melee"), 0.0f, 0.01f) && near(hit(20.0f, "melee"), 10.0f, 0.01f), "shields can be your own formula (weaker as they drain)");
+    check(near(hit(10.0f, "true"), 10.0f, 0.01f), "true damage goes straight through shields");
+    h.shield = 0.0f;
+    h.shield_regen = 10.0f;
+    h.shield_delay = 1.0f;
+    hit(1.0f, "melee");
+    a.run(0.9);
+    check(h.shield == 0.0f, "shields wait before recharging");
+    a.run(1.2);
+    check(h.shield > 9.0f && h.shield < 12.0f, "then recharge (" + str(h.shield) + ")");
+    std::string err;
+    const std::optional<orchard::Scene> loaded = orchard::Scene::load(a.s.save(), &err);
+    const orchard::Health* bh = loaded ? loaded->health(loaded->find("P")) : nullptr;
+    check(bh && bh->armor_mode == "percent" && bh->max_shield == 40.0f && bh->shield_formula == h.shield_formula && bh->shield_types.empty() && bh->armor_types == "all" && bh->shield_regen == 10.0f, "armor and shield settings save and load");
+}
+
+void test_encumbrance() {
+    Arena a;
+    const orchard::Entity p = a.person("P", {0.0f, 0.05f, 0.0f});
+    a.s.add_survival(p).weight_on = true;
+    a.s.survival(p)->carry_limit = 40.0f;
+    const orchard::Entity pack = a.s.create("Pack", p);
+    a.s.add_tag(pack, "item");
+    orchard::Collider* c = a.s.add_collider(pack);
+    c->size = {0.2f, 0.2f, 0.2f};
+    c->mass = 10.0f;
+    c->lock(orchard::collider_lock_mass, true);
+    a.start();
+    check(near(a.g.carried_weight(p), 10.0f, 0.01f), "things tagged item count as carried (" + str(a.g.carried_weight(p)) + " kg)");
+    check(a.g.move_scale(p) == 1.0f, "a light load doesn't slow you");
+    a.g.set_stat(p, "carried", 20.0f);
+    check(near(a.g.encumbrance(p), 0.75f, 0.01f) && near(a.g.move_scale(p), 0.75f, 0.01f), "a heavy load slows you (" + str(a.g.move_scale(p)) + ")");
+    orchard::Exertion e = a.g.exert(p, 4.0f, 9.0f, true, true, true, 0.1f);
+    check(e.sprinting && near(e.speed, 6.75f, 0.01f) && e.can_jump, "you can still sprint and jump under your limit");
+    a.g.set_stat(p, "carried", 40.0f);
+    e = a.g.exert(p, 4.0f, 9.0f, true, true, true, 0.1f);
+    check(!e.sprinting && !e.can_jump && e.speed > 0.0f, "over your limit you can't sprint or jump but can still walk (" + str(e.speed) + ")");
+    a.g.set_stat(p, "carried", 60.0f);
+    check(a.g.move_scale(p) == 0.0f, "far over it you can't move");
+    a.g.set_stat(p, "carried", 20.0f);
+    const float before = a.g.stat(p, "stamina");
+    a.g.exert(p, 4.0f, 9.0f, true, true, false, 1.0f);
+    check(near(before - a.g.stat(p, "stamina"), 15.0f * 1.75f, 0.01f), "carrying more uses more stamina (" + str(before - a.g.stat(p, "stamina")) + ")");
+    a.s.survival(p)->weight_on = false;
+    check(a.g.move_scale(p) == 1.0f && a.g.encumbrance(p) == 0.0f, "weight is optional (" + str(a.g.move_scale(p)) + ", " + str(a.g.encumbrance(p)) + ")");
+    check(near(a.g.stat(p, "weight"), 30.0f, 0.01f), "the weight stat is what you carry");
+}
+
+void test_units() {
+    check(near(static_cast<float>(*orchard::convert_units(1.0, "lb", "kg")), 0.45359237f, 1e-6f), "pounds to kilograms");
+    check(near(static_cast<float>(*orchard::convert_units(100.0, "C", "F")), 212.0f, 1e-4f), "Celsius to Fahrenheit");
+    check(near(static_cast<float>(*orchard::convert_units(0.0, "C", "K")), 273.15f, 1e-4f), "Celsius to kelvin");
+    check(near(static_cast<float>(*orchard::convert_units(36.0, "km/h", "m/s")), 10.0f, 1e-4f), "km/h to m/s");
+    check(near(static_cast<float>(*orchard::convert_units(1.0, "mi", "ft")), 5280.0f, 1e-2f), "miles to feet");
+    check(near(static_cast<float>(*orchard::convert_units(1.0, "lbf*s", "N*s")), 4.448222f, 1e-4f), "pound-force seconds to newton seconds");
+    check(!orchard::convert_units(1.0, "kg", "m").has_value(), "units of different kinds don't convert");
+    check(near(static_cast<float>(orchard::from_si(5.0, orchard::UnitKind::temperature_change, "F")), 9.0f, 1e-4f), "a temperature change converts without the offset");
+    check(near(static_cast<float>(orchard::from_si(9.0, orchard::UnitKind::per_degree, "F")), 5.0f, 1e-4f), "damage per degree converts the other way");
+}
+
 void test_ai_walks_around_walls() {
     AiScene a;
     a.wall({0.0f, 1.5f, 5.0f}, {12.0f, 3.0f, 0.5f});
@@ -1157,9 +1795,205 @@ void test_ai_director() {
     check(d.wants_backoff(), "a hunter seen up close too long is told to back off");
 }
 
+void test_inventories() {
+    orchard::ItemCatalog cat;
+    check(orchard::item_library().size() > 300, "the item library has hundreds of items (" + str(static_cast<float>(orchard::item_library().size())) + ")");
+    std::set<std::string> ids;
+    bool unique = true;
+    for (const orchard::ItemDef& d : orchard::item_library()) unique = unique && ids.insert(d.id).second && !d.name.empty() && !d.category.empty();
+    check(unique, "every library item has its own id, a name and a category");
+    for (const std::string& p : orchard::inventory_presets()) {
+        orchard::Inventory inv;
+        check(orchard::apply_inventory_preset(inv, p), "the " + p + " preset applies");
+    }
+    // Minecraft: counts, stacks of 64, whole items only.
+    orchard::Inventory mc;
+    orchard::apply_inventory_preset(mc, "minecraft");
+    check(orchard::inventory_add(cat, mc, "apple", 100.0f) == 100.0f, "100 apples fit in a Minecraft inventory");
+    int stacks = 0;
+    for (const orchard::ItemStack& s : mc.items) stacks += s.item == "apple" ? 1 : 0;
+    for (const orchard::ItemStack& s : mc.hotbar_items) stacks += s.item == "apple" ? 1 : 0;
+    const orchard::ItemDef* apple = cat.find("apple");
+    check(apple && stacks >= 2, "they split into stacks (" + str(static_cast<float>(stacks)) + ")");
+    mc.stack_limit = 0.0f;
+    check(apple && orchard::stack_cap(mc, *apple) == static_cast<float>(apple->max_stack), "a stack limit of 0 uses the item's own");
+    mc.stack_limit = 5.0f;
+    check(apple && orchard::stack_cap(mc, *apple) == 5.0f, "a stack limit caps every stack");
+    orchard::set_inventory_field(mc, "stack_limit", "-3");
+    check(mc.stack_limit == 0.0f, "stack limits can't go negative");
+    check(orchard::inventory_take(cat, mc, "apple", 30.0f) == 30.0f && orchard::inventory_count(mc, "apple") == 70.0f, "taking apples leaves the rest");
+    // Weight and volume measured stacks allow fractions.
+    orchard::Inventory dz;
+    orchard::apply_inventory_preset(dz, "dayz");
+    dz.stack_measure = "volume";
+    dz.whole_counts = false;
+    dz.stack_limit = 2.5f;
+    const float poured = orchard::inventory_add(cat, dz, "water", 1.75f);
+    check(near(poured, 1.75f, 1e-4f) && near(orchard::inventory_count(dz, "water"), 1.75f, 1e-4f), "liquids are carried as fractions (" + str(poured) + " L)");
+    // Tarkov: grid placement and the weight limit.
+    orchard::Inventory tk;
+    orchard::apply_inventory_preset(tk, "tarkov");
+    tk.columns = 4;
+    tk.rows = 4;
+    tk.max_weight = 3.0f;
+    check(orchard::inventory_add(cat, tk, "glock17", 1.0f) == 1.0f, "a pistol fits in a grid inventory");
+    check(!tk.items.empty() && tk.items[0].x >= 0 && tk.items[0].y >= 0, "and gets a place on the grid");
+    int placed = 0;
+    for (int i = 0; i < 20; ++i) placed += orchard::inventory_add(cat, tk, "glock17", 1.0f) > 0.0f ? 1 : 0;
+    check(placed < 20, "a full grid or a weight limit stops more going in (" + str(static_cast<float>(placed)) + " more fit)");
+    check(orchard::inventory_weight(cat, tk) <= tk.max_weight + 1e-3f, "the weight limit is respected (" + str(orchard::inventory_weight(cat, tk)) + " kg)");
+    // Stack text round trip.
+    orchard::ItemStack st;
+    st.item = "rucksack";
+    st.amount = 1.0f;
+    st.x = 2;
+    st.y = 1;
+    st.loaded = 3.0f;
+    orchard::ItemStack inner;
+    inner.item = "bandage";
+    inner.amount = 4.0f;
+    st.contents.push_back(inner);
+    const std::optional<orchard::ItemStack> back = orchard::parse_stack(orchard::stack_text(st));
+    check(back && back->item == "rucksack" && back->x == 2 && back->y == 1 && back->contents.size() == 1 && back->contents[0].amount == 4.0f, "stacks with contents survive being written out");
+}
+
+void test_holsters_and_weapons(bool flat) {
+    orchard::Scene s(flat ? orchard::Dimension::two_d : orchard::Dimension::three_d);
+    const orchard::Entity ground = s.create("Ground");
+    s.transform(ground)->position = {0.0f, -0.5f, 0.0f};
+    s.add_body(ground).type = orchard::BodyType::fixed;
+    s.add_collider(ground)->size = {60.0f, 1.0f, 60.0f};
+    auto person = [&](const char* name, orchard::Vec3 at) {
+        const orchard::Entity e = s.create(name);
+        s.transform(e)->position = at;
+        orchard::Body& b = s.add_body(e);
+        b.set(orchard::body_lock_rotation_x, true);
+        b.set(orchard::body_lock_rotation_y, flat);
+        b.set(orchard::body_lock_rotation_z, true);
+        orchard::Collider* c = s.add_collider(e, orchard::ColliderShape::capsule);
+        c->size = {0.5f, 1.8f, 0.5f};
+        c->offset = {0.0f, 0.9f, 0.0f};
+        s.add_health(e);
+        return e;
+    };
+    const orchard::Entity p = person("P", {0.0f, 0.05f, 0.0f});
+    const orchard::Entity target = person("T", flat ? orchard::Vec3{6.0f, 0.05f, 0.0f} : orchard::Vec3{0.0f, 0.05f, -6.0f});
+    orchard::Inventory& inv = s.add_inventory(p);
+    orchard::apply_inventory_preset(inv, "tarkov");
+    inv.require_holsters = true;
+    xylem::World w(s.dimension());
+    w.build(s);
+    orchard::Gameplay g;
+    g.start(&s, &w);
+    g.give(p, "glock17", 1.0f);
+    g.give(p, "9mm", 34.0f);
+    check(g.count(p, "9mm") == 34.0f, "ammo goes into the inventory");
+    int gun_index = -1;
+    for (std::size_t i = 0; i < inv.items.size(); ++i)
+        if (inv.items[i].item == "glock17") gun_index = static_cast<int>(i);
+    check(gun_index >= 0 && g.hold(p, "mainhand", "items", gun_index), "the pistol goes into the hand");
+    check(g.held_def(p) && g.held_def(p)->id == "glock17", "and it's what the player holds");
+    check(!g.holster(p), "with holsters required, a pistol can't be put away without one");
+    g.give(p, "hip_holster", 1.0f);
+    for (std::size_t i = 0; i < inv.items.size(); ++i)
+        if (inv.items[i].item == "hip_holster") g.equip(p, "items", static_cast<int>(i));
+    check(g.holster(p), "wearing a hip holster lets it be put away");
+    check(!g.held(p) || g.held(p)->empty(), "and the hand is empty afterwards");
+    const std::vector<std::string> slots = g.holster_slots(p);
+    check(!slots.empty() && g.draw(p, slots.front()), "drawing takes it back out");
+    g.reload(p);
+    double t = 0.0;
+    for (int i = 0; i < 180; ++i) {
+        t += 1.0 / 60.0;
+        w.step(1.0f / 60.0f);
+        g.tick(1.0 / 60.0, t);
+    }
+    check(g.held(p) && g.held(p)->loaded > 0.0f, "reloading fills the magazine from the ammo carried (" + str(g.held(p) ? g.held(p)->loaded : 0.0f) + ")");
+    const float before = g.health(target);
+    const orchard::Vec3 eye = g.position(p) + orchard::Vec3{0.0f, flat ? 0.9f : 1.5f, 0.0f};
+    const orchard::Vec3 to = g.position(target) + orchard::Vec3{0.0f, 0.9f, 0.0f};
+    g.set_aim(p, eye, orchard::normalize(to - eye));
+    for (const orchard::Ballistics mode : {orchard::Ballistics::hitscan, orchard::Ballistics::travel, orchard::Ballistics::realistic}) {
+        g.set_ballistics(mode);
+        g.set_health(target, 100.0f);
+        const orchard::ItemDef& gun = *g.item_def("glock17");
+        orchard::ItemDef exact = gun;
+        exact.spread = 0.0f;
+        g.fire(p, eye, orchard::normalize(to - eye), exact, 1.0f);
+        for (int i = 0; i < 60; ++i) {
+            t += 1.0 / 60.0;
+            w.step(1.0f / 60.0f);
+            g.tick(1.0 / 60.0, t);
+        }
+        check(g.health(target) < 100.0f, std::string(flat ? "2D " : "3D ") + orchard::to_string(mode) + " ballistics hit a target 6 m away (" + str(g.health(target)) + ")");
+    }
+    static_cast<void>(before);
+    // Drop and pick up again.
+    std::string list = "worn:mainhand";
+    const orchard::Entity dropped = g.drop_item(p, list, 0);
+    check(s.alive(dropped) && s.pickup(dropped), "dropping makes a pickup in the world");
+    check(g.pick_up(p, dropped) && g.count(p, "glock17") >= 1.0f, "and it can be picked up again");
+}
+
+void test_climate_zones() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity cold = s.create("Cold");
+    s.transform(cold)->position = {10.0f, 0.0f, 0.0f};
+    orchard::Climate& c = s.add_climate(cold);
+    check(orchard::apply_climate_preset(c, "blizzard"), "the blizzard preset applies");
+    c.global = false;
+    c.size = {6.0f, 6.0f, 6.0f};
+    c.blend = 1.0f;
+    xylem::World w(s.dimension());
+    w.build(s);
+    orchard::Gameplay g;
+    g.start(&s, &w);
+    double t = 0.0;
+    for (int i = 0; i < 10; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+    const orchard::ClimateSample in = g.climate_at({10.0f, 1.0f, 0.0f});
+    const orchard::ClimateSample out = g.climate_at({-20.0f, 1.0f, 0.0f});
+    check(in.temperature < out.temperature - 5.0f, "inside a blizzard zone it's colder (" + str(in.temperature) + " vs " + str(out.temperature) + ")");
+    check(in.snow > 0.3f && out.snow == 0.0f, "and it only snows inside it");
+    const orchard::Entity rain = g.start_weather("rain", 2.0f, 0.5f, 0.5f);
+    for (int i = 0; i < 60; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+    check(g.climate_at({-20.0f, 1.0f, 0.0f}).rain > 0.3f, "start_weather makes it rain everywhere");
+    for (int i = 0; i < 240; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+    check(!s.alive(rain) || g.climate_at({-20.0f, 1.0f, 0.0f}).rain < 0.05f, "and the rain ends after its duration and fade");
+    check(g.set_climate(cold, "temperature", "35") && g.climate_at({10.0f, 1.0f, 0.0f}).temperature > 25.0f, "scripts can change a zone's settings");
+    const std::optional<orchard::Scene> loaded = orchard::Scene::load(s.save());
+    check(loaded && loaded->climate(loaded->find("Cold")) && loaded->climate(loaded->find("Cold"))->preset == "blizzard", "climate zones are saved with the scene");
+}
+
+void test_items_save() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity p = s.create("P");
+    orchard::Inventory& inv = s.add_inventory(p);
+    orchard::apply_inventory_preset(inv, "saints_and_sinners");
+    orchard::inventory_add(s.items(), inv, "bandage", 3.0f);
+    inv.worn["back"] = orchard::ItemStack{};
+    inv.worn["back"].item = "daypack";
+    inv.worn["back"].amount = 1.0f;
+    s.items().define("my_blade").damage = 77.0f;
+    s.items().define("my_blade").name = "My blade";
+    const orchard::Entity drop = s.create("Drop");
+    s.add_pickup(drop).stack.item = "my_blade";
+    s.pickup(drop)->stack.amount = 1.0f;
+    std::string err;
+    const std::optional<orchard::Scene> back = orchard::Scene::load(s.save(), &err);
+    check(back.has_value(), "a scene with items loads (" + err + ")");
+    if (!back) return;
+    const orchard::Inventory* bi = back->inventory(back->find("P"));
+    check(bi && bi->preset == "saints_and_sinners" && orchard::inventory_count(*bi, "bandage") == 3.0f, "inventories and their items are saved");
+    check(bi && bi->worn.count("back") && bi->worn.at("back").item == "daypack", "worn items are saved");
+    check(back->items().find("my_blade") && back->items().find("my_blade")->damage == 77.0f, "custom items are saved with the scene");
+    check(back->pickup(back->find("Drop")) && back->pickup(back->find("Drop"))->stack.item == "my_blade", "pickups are saved");
+}
+
 int main() {
     test_running_stays_down();
     test_detailed_player_walks_hills();
+    test_sprinting_over_hills();
+    test_characters_collide_without_launching();
     test_triangle_prism_lands();
     test_flattened_play();
     test_balls_settle();
@@ -1182,6 +2016,23 @@ int main() {
     test_sprinting();
     test_render_smoothing();
     test_ai_zombie_chases_and_bites();
+    test_ai_heavy_hit_does_not_launch();
+    test_grenade_does_not_throw_people();
+    test_ai_knockback_is_separate_from_damage();
+    test_damage_types_and_resistances();
+    test_passive_damage();
+    test_stagger_and_effects();
+    test_survival();
+    test_drowning();
+    test_ai_attack_settings();
+    test_armor_and_shields();
+    test_inventories();
+    test_holsters_and_weapons(false);
+    test_holsters_and_weapons(true);
+    test_climate_zones();
+    test_items_save();
+    test_encumbrance();
+    test_units();
     test_ai_walks_around_walls();
     test_ai_guard_shoots();
     test_ai_stealth_suspicion();

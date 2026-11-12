@@ -96,6 +96,7 @@ private:
     const Link* link_from(int node, const std::string& pin) const;
     std::string expression(int node, const std::string& pin, int depth, std::vector<std::string>& errors) const;
     std::string input(const Node& n, const PinDef& pin, int depth, std::vector<std::string>& errors) const;
+    std::string who(const Node& n, int depth, std::vector<std::string>& errors) const;
     void statements(int node, const std::string& out_pin, int indent, int depth, std::string& code, std::vector<std::string>& errors) const;
 
     void behavior_lines(int node, int depth, const std::string& extra, std::string& out, std::vector<int>& line_nodes, std::vector<std::string>& errors) const;

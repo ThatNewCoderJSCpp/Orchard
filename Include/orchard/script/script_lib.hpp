@@ -195,6 +195,85 @@ public:
     static std::string secure_token(double byte_count = 32.0) { return lib_text(ORCHARD_GAME_SECURE_TOKEN, Entity(), Entity(), std::vector<double>{static_cast<double>(byte_count)}, std::string()); }
     static std::string secure_hex(double byte_count = 16.0) { return lib_text(ORCHARD_GAME_SECURE_HEX, Entity(), Entity(), std::vector<double>{static_cast<double>(byte_count)}, std::string()); }
     static std::string secure_uuid() { return lib_text(ORCHARD_GAME_SECURE_UUID, Entity(), Entity(), std::vector<double>{}, std::string()); }
+    static double apply_damage(const Entity& target, double amount, const std::string& damage_type = "physical") { return lib_number(ORCHARD_GAME_APPLY_DAMAGE, target, Entity(), std::vector<double>{static_cast<double>(amount)}, lib_join({damage_type})); }
+    static double apply_damage_from(const Entity& target, const Entity& attacker, double amount, const std::string& damage_type = "physical", double knock_x = 0.0, double knock_y = 0.0, double knock_z = 0.0, double stagger_time = -1.0) { return lib_number(ORCHARD_GAME_APPLY_DAMAGE_FROM, target, attacker, std::vector<double>{static_cast<double>(amount), static_cast<double>(knock_x), static_cast<double>(knock_y), static_cast<double>(knock_z), static_cast<double>(stagger_time)}, lib_join({damage_type})); }
+    static void damage_over_time(const Entity& target, double amount, const std::string& damage_type = "physical", double duration = 5.0, double interval = 1.0, bool forever = false) { lib_number(ORCHARD_GAME_DAMAGE_OVER_TIME, target, Entity(), std::vector<double>{static_cast<double>(amount), static_cast<double>(duration), static_cast<double>(interval), static_cast<double>(forever)}, lib_join({damage_type})); }
+    static void damage_over_time_from(const Entity& target, const Entity& attacker, double amount, const std::string& damage_type = "physical", double duration = 5.0, double interval = 1.0, bool forever = false, double knock_x = 0.0, double knock_y = 0.0, double knock_z = 0.0, double push_repeat = 0.0, double stagger_time = -1.0, bool stack = false, const std::string& damage_key = "") { lib_number(ORCHARD_GAME_DAMAGE_OVER_TIME_FROM, target, attacker, std::vector<double>{static_cast<double>(amount), static_cast<double>(duration), static_cast<double>(interval), static_cast<double>(forever), static_cast<double>(knock_x), static_cast<double>(knock_y), static_cast<double>(knock_z), static_cast<double>(push_repeat), static_cast<double>(stagger_time), static_cast<double>(stack)}, lib_join({damage_type, damage_key})); }
+    static bool stop_damage_over_time(const Entity& target, const std::string& damage_key = "") { return lib_number(ORCHARD_GAME_STOP_DAMAGE, target, Entity(), std::vector<double>{}, lib_join({damage_key})) != 0.0; }
+    static long long damage_over_time_count(const Entity& target) { return static_cast<long long>(lib_number(ORCHARD_GAME_DAMAGE_OVER_TIME_COUNT, target, Entity(), std::vector<double>{}, std::string())); }
+    static std::string last_damage_type(const Entity& target) { return lib_text(ORCHARD_GAME_LAST_DAMAGE_TYPE, target, Entity(), std::vector<double>{}, std::string()); }
+    static bool apply_effect(const Entity& target, const std::string& effect_name, double duration = 0.0, double strength = 1.0) { return lib_number(ORCHARD_GAME_APPLY_EFFECT, target, Entity(), std::vector<double>{static_cast<double>(duration), static_cast<double>(strength)}, lib_join({effect_name})) != 0.0; }
+    static bool apply_effect_forever(const Entity& target, const std::string& effect_name, double strength = 1.0) { return lib_number(ORCHARD_GAME_APPLY_EFFECT_FOREVER, target, Entity(), std::vector<double>{static_cast<double>(strength)}, lib_join({effect_name})) != 0.0; }
+    static bool apply_effect_from(const Entity& target, const Entity& source, const std::string& effect_name, double duration = 0.0, double strength = 1.0) { return lib_number(ORCHARD_GAME_APPLY_EFFECT_FROM, target, source, std::vector<double>{static_cast<double>(duration), static_cast<double>(strength)}, lib_join({effect_name})) != 0.0; }
+    static bool remove_effect(const Entity& target, const std::string& effect_name) { return lib_number(ORCHARD_GAME_REMOVE_EFFECT, target, Entity(), std::vector<double>{}, lib_join({effect_name})) != 0.0; }
+    static long long clear_effects(const Entity& target) { return static_cast<long long>(lib_number(ORCHARD_GAME_CLEAR_EFFECTS, target, Entity(), std::vector<double>{}, std::string())); }
+    static bool has_effect(const Entity& target, const std::string& effect_name) { return lib_number(ORCHARD_GAME_HAS_EFFECT, target, Entity(), std::vector<double>{}, lib_join({effect_name})) != 0.0; }
+    static long long effect_stacks(const Entity& target, const std::string& effect_name) { return static_cast<long long>(lib_number(ORCHARD_GAME_EFFECT_STACKS, target, Entity(), std::vector<double>{}, lib_join({effect_name}))); }
+    static double effect_time_left(const Entity& target, const std::string& effect_name) { return lib_number(ORCHARD_GAME_EFFECT_TIME_LEFT, target, Entity(), std::vector<double>{}, lib_join({effect_name})); }
+    static std::string effect_list(const Entity& target) { return lib_text(ORCHARD_GAME_EFFECT_LIST, target, Entity(), std::vector<double>{}, std::string()); }
+    static bool define_effect(const std::string& effect_name, const std::string& setting, const std::string& value) { return lib_number(ORCHARD_GAME_DEFINE_EFFECT, Entity(), Entity(), std::vector<double>{}, lib_join({effect_name, setting, value})) != 0.0; }
+    static bool stagger(const Entity& target, double seconds = 0.5) { return lib_number(ORCHARD_GAME_STAGGER, target, Entity(), std::vector<double>{static_cast<double>(seconds)}, std::string()) != 0.0; }
+    static double stagger_time_left(const Entity& target) { return lib_number(ORCHARD_GAME_STAGGER_TIME_LEFT, target, Entity(), std::vector<double>{}, std::string()); }
+    static bool is_stunned(const Entity& target) { return lib_number(ORCHARD_GAME_IS_STUNNED, target, Entity(), std::vector<double>{}, std::string()) != 0.0; }
+    static double move_scale(const Entity& target) { return lib_number(ORCHARD_GAME_MOVE_SCALE, target, Entity(), std::vector<double>{}, std::string()); }
+    static double stat(const Entity& target, const std::string& stat_name) { return lib_number(ORCHARD_GAME_STAT, target, Entity(), std::vector<double>{}, lib_join({stat_name})); }
+    static bool set_stat(const Entity& target, const std::string& stat_name, double value) { return lib_number(ORCHARD_GAME_SET_STAT, target, Entity(), std::vector<double>{static_cast<double>(value)}, lib_join({stat_name})) != 0.0; }
+    static double add_stat(const Entity& target, const std::string& stat_name, double amount) { return lib_number(ORCHARD_GAME_ADD_STAT, target, Entity(), std::vector<double>{static_cast<double>(amount)}, lib_join({stat_name})); }
+    static double eat(const Entity& target, double food, double saturation = 0.0) { return lib_number(ORCHARD_GAME_EAT, target, Entity(), std::vector<double>{static_cast<double>(food), static_cast<double>(saturation)}, std::string()); }
+    static double drink(const Entity& target, double amount) { return lib_number(ORCHARD_GAME_DRINK, target, Entity(), std::vector<double>{static_cast<double>(amount)}, std::string()); }
+    static bool use_stamina(const Entity& target, double amount) { return lib_number(ORCHARD_GAME_USE_STAMINA, target, Entity(), std::vector<double>{static_cast<double>(amount)}, std::string()) != 0.0; }
+    static double resistance(const Entity& target, const std::string& damage_type) { return lib_number(ORCHARD_GAME_RESISTANCE, target, Entity(), std::vector<double>{}, lib_join({damage_type})); }
+    static bool set_resistance(const Entity& target, const std::string& damage_type, double value) { return lib_number(ORCHARD_GAME_SET_RESISTANCE, target, Entity(), std::vector<double>{static_cast<double>(value)}, lib_join({damage_type})) != 0.0; }
+    static bool set_damage_formula(const Entity& target, const std::string& formula) { return lib_number(ORCHARD_GAME_SET_DAMAGE_FORMULA, target, Entity(), std::vector<double>{}, lib_join({formula})) != 0.0; }
+    static bool set_effect_formula(const Entity& target, const std::string& formula) { return lib_number(ORCHARD_GAME_SET_EFFECT_FORMULA, target, Entity(), std::vector<double>{}, lib_join({formula})) != 0.0; }
+    static bool is_underwater(const Entity& target) { return lib_number(ORCHARD_GAME_IS_UNDERWATER, target, Entity(), std::vector<double>{}, std::string()) != 0.0; }
+    static bool set_health_setting(const Entity& target, const std::string& setting, const std::string& value) { return lib_number(ORCHARD_GAME_SET_HEALTH_SETTING, target, Entity(), std::vector<double>{}, lib_join({setting, value})) != 0.0; }
+    static std::string health_setting(const Entity& target, const std::string& setting) { return lib_text(ORCHARD_GAME_HEALTH_SETTING, target, Entity(), std::vector<double>{}, lib_join({setting})); }
+    static double convert_units(double value, const std::string& from_unit, const std::string& to_unit) { return lib_number(ORCHARD_GAME_CONVERT_UNITS, Entity(), Entity(), std::vector<double>{static_cast<double>(value)}, lib_join({from_unit, to_unit})); }
+    static double give_item(const Entity& target, const std::string& item, double amount = 1.0) { return lib_number(ORCHARD_GAME_GIVE_ITEM, target, Entity(), std::vector<double>{static_cast<double>(amount)}, lib_join({item})); }
+    static double take_item(const Entity& target, const std::string& item, double amount = 1.0) { return lib_number(ORCHARD_GAME_TAKE_ITEM, target, Entity(), std::vector<double>{static_cast<double>(amount)}, lib_join({item})); }
+    static double item_count(const Entity& target, const std::string& item) { return lib_number(ORCHARD_GAME_ITEM_COUNT, target, Entity(), std::vector<double>{}, lib_join({item})); }
+    static Entity spawn_item(const std::string& item, double amount, double x, double y, double z, const std::string& look = "detailed") { return lib_entity(ORCHARD_GAME_SPAWN_ITEM, Entity(), Entity(), std::vector<double>{static_cast<double>(amount), static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, lib_join({item, look})); }
+    static Entity drop_item(const Entity& target, const std::string& list = "items", double index = 0.0, double amount = -1.0) { return lib_entity(ORCHARD_GAME_DROP_ITEM, target, Entity(), std::vector<double>{static_cast<double>(index), static_cast<double>(amount)}, lib_join({list})); }
+    static bool pick_up(const Entity& target, const Entity& pickup) { return lib_number(ORCHARD_GAME_PICK_UP, target, pickup, std::vector<double>{}, std::string()) != 0.0; }
+    static Entity nearest_pickup(const Entity& target, double radius = 2.5) { return lib_entity(ORCHARD_GAME_NEAREST_PICKUP, target, Entity(), std::vector<double>{static_cast<double>(radius)}, std::string()); }
+    static bool define_item(const std::string& item, const std::string& setting, const std::string& value) { return lib_number(ORCHARD_GAME_DEFINE_ITEM, Entity(), Entity(), std::vector<double>{}, lib_join({item, setting, value})) != 0.0; }
+    static std::string item_setting(const std::string& item, const std::string& setting) { return lib_text(ORCHARD_GAME_ITEM_SETTING, Entity(), Entity(), std::vector<double>{}, lib_join({item, setting})); }
+    static bool equip_item(const Entity& target, const std::string& list, double index) { return lib_number(ORCHARD_GAME_EQUIP_ITEM, target, Entity(), std::vector<double>{static_cast<double>(index)}, lib_join({list})) != 0.0; }
+    static bool unequip_item(const Entity& target, const std::string& slot) { return lib_number(ORCHARD_GAME_UNEQUIP_ITEM, target, Entity(), std::vector<double>{}, lib_join({slot})) != 0.0; }
+    static bool hold_item(const Entity& target, const std::string& hand, const std::string& list, double index) { return lib_number(ORCHARD_GAME_HOLD_ITEM, target, Entity(), std::vector<double>{static_cast<double>(index)}, lib_join({hand, list})) != 0.0; }
+    static std::string held_item(const Entity& target, const std::string& hand = "mainhand") { return lib_text(ORCHARD_GAME_HELD_ITEM, target, Entity(), std::vector<double>{}, lib_join({hand})); }
+    static bool holster_item(const Entity& target, const std::string& hand = "mainhand") { return lib_number(ORCHARD_GAME_HOLSTER_ITEM, target, Entity(), std::vector<double>{}, lib_join({hand})) != 0.0; }
+    static bool draw_item(const Entity& target, const std::string& slot, const std::string& hand = "mainhand") { return lib_number(ORCHARD_GAME_DRAW_ITEM, target, Entity(), std::vector<double>{}, lib_join({slot, hand})) != 0.0; }
+    static bool select_slot(const Entity& target, double index) { return lib_number(ORCHARD_GAME_SELECT_SLOT, target, Entity(), std::vector<double>{static_cast<double>(index)}, std::string()) != 0.0; }
+    static bool use_item(const Entity& target, const std::string& list, double index) { return lib_number(ORCHARD_GAME_USE_ITEM, target, Entity(), std::vector<double>{static_cast<double>(index)}, lib_join({list})) != 0.0; }
+    static bool use_held(const Entity& target, bool pressed = true, bool held = false) { return lib_number(ORCHARD_GAME_USE_HELD, target, Entity(), std::vector<double>{static_cast<double>(pressed), static_cast<double>(held)}, std::string()) != 0.0; }
+    static bool release_held(const Entity& target) { return lib_number(ORCHARD_GAME_RELEASE_HELD, target, Entity(), std::vector<double>{}, std::string()) != 0.0; }
+    static bool reload_weapon(const Entity& target) { return lib_number(ORCHARD_GAME_RELOAD_WEAPON, target, Entity(), std::vector<double>{}, std::string()) != 0.0; }
+    static bool move_item(const Entity& target, const std::string& list, double index, const Entity& to, const std::string& to_list, double to_index, double amount = -1.0) { return lib_number(ORCHARD_GAME_MOVE_ITEM, target, to, std::vector<double>{static_cast<double>(index), static_cast<double>(to_index), static_cast<double>(amount)}, lib_join({list, to_list})) != 0.0; }
+    static std::string inventory_setting(const Entity& target, const std::string& setting) { return lib_text(ORCHARD_GAME_INVENTORY_SETTING, target, Entity(), std::vector<double>{}, lib_join({setting})); }
+    static bool set_inventory_setting(const Entity& target, const std::string& setting, const std::string& value) { return lib_number(ORCHARD_GAME_SET_INVENTORY_SETTING, target, Entity(), std::vector<double>{}, lib_join({setting, value})) != 0.0; }
+    static std::string slot_item(const Entity& target, const std::string& list, double index) { return lib_text(ORCHARD_GAME_SLOT_ITEM, target, Entity(), std::vector<double>{static_cast<double>(index)}, lib_join({list})); }
+    static double slot_amount(const Entity& target, const std::string& list, double index) { return lib_number(ORCHARD_GAME_SLOT_AMOUNT, target, Entity(), std::vector<double>{static_cast<double>(index)}, lib_join({list})); }
+    static void set_aim(const Entity& target, double ox, double oy, double oz, double dx, double dy, double dz) { lib_number(ORCHARD_GAME_SET_AIM, target, Entity(), std::vector<double>{static_cast<double>(ox), static_cast<double>(oy), static_cast<double>(oz), static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)}, std::string()); }
+    static bool set_stance(const Entity& target, const std::string& stance) { return lib_number(ORCHARD_GAME_SET_STANCE, target, Entity(), std::vector<double>{}, lib_join({stance})) != 0.0; }
+    static void set_aiming(const Entity& target, bool on = true) { lib_number(ORCHARD_GAME_SET_AIMING, target, Entity(), std::vector<double>{static_cast<double>(on)}, std::string()); }
+    static void set_blocking(const Entity& target, bool on = true) { lib_number(ORCHARD_GAME_SET_BLOCKING, target, Entity(), std::vector<double>{static_cast<double>(on)}, std::string()); }
+    static long long fire_weapon(const Entity& target, const std::string& item, double ox, double oy, double oz, double dx, double dy, double dz, double power = 1.0) { return static_cast<long long>(lib_number(ORCHARD_GAME_FIRE_WEAPON, target, Entity(), std::vector<double>{static_cast<double>(ox), static_cast<double>(oy), static_cast<double>(oz), static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz), static_cast<double>(power)}, lib_join({item}))); }
+    static bool set_ballistics(const std::string& mode) { return lib_number(ORCHARD_GAME_SET_BALLISTICS, Entity(), Entity(), std::vector<double>{}, lib_join({mode})) != 0.0; }
+    static double worn_armor(const Entity& target, const std::string& damage_type = "physical") { return lib_number(ORCHARD_GAME_WORN_ARMOR, target, Entity(), std::vector<double>{}, lib_join({damage_type})); }
+    static Entity start_weather(const std::string& preset, double duration = -1.0, double fade_in = 2.0, double fade_out = 2.0) { return lib_entity(ORCHARD_GAME_START_WEATHER, Entity(), Entity(), std::vector<double>{static_cast<double>(duration), static_cast<double>(fade_in), static_cast<double>(fade_out)}, lib_join({preset})); }
+    static Entity start_weather_at(const std::string& preset, double x, double y, double z, double radius, double duration = -1.0, double fade_in = 2.0, double fade_out = 2.0) { return lib_entity(ORCHARD_GAME_START_WEATHER_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z), static_cast<double>(radius), static_cast<double>(duration), static_cast<double>(fade_in), static_cast<double>(fade_out)}, lib_join({preset})); }
+    static bool stop_weather(const Entity& zone, double fade_out = 2.0) { return lib_number(ORCHARD_GAME_STOP_WEATHER, zone, Entity(), std::vector<double>{static_cast<double>(fade_out)}, std::string()) != 0.0; }
+    static long long stop_all_weather(double fade_out = 2.0) { return static_cast<long long>(lib_number(ORCHARD_GAME_STOP_ALL_WEATHER, Entity(), Entity(), std::vector<double>{static_cast<double>(fade_out)}, std::string())); }
+    static bool set_climate(const Entity& zone, const std::string& setting, const std::string& value) { return lib_number(ORCHARD_GAME_SET_CLIMATE, zone, Entity(), std::vector<double>{}, lib_join({setting, value})) != 0.0; }
+    static double temperature_at(double x, double y, double z) { return lib_number(ORCHARD_GAME_TEMPERATURE_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()); }
+    static double wind_x_at(double x, double y, double z) { return lib_number(ORCHARD_GAME_WIND_X_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()); }
+    static double wind_y_at(double x, double y, double z) { return lib_number(ORCHARD_GAME_WIND_Y_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()); }
+    static double wind_z_at(double x, double y, double z) { return lib_number(ORCHARD_GAME_WIND_Z_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()); }
+    static double rain_at(double x, double y, double z) { return lib_number(ORCHARD_GAME_RAIN_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()); }
+    static double snow_at(double x, double y, double z) { return lib_number(ORCHARD_GAME_SNOW_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()); }
+    static bool is_sheltered(double x, double y, double z) { return lib_number(ORCHARD_GAME_IS_SHELTERED, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()) != 0.0; }
 
 private:
     static std::vector<double>& buffer() {
@@ -347,6 +426,85 @@ inline std::string secure_random_text(double length = 16.0, const std::string& a
 inline std::string secure_token(double byte_count = 32.0) { return Lib::secure_token(byte_count); }
 inline std::string secure_hex(double byte_count = 16.0) { return Lib::secure_hex(byte_count); }
 inline std::string secure_uuid() { return Lib::secure_uuid(); }
+inline double apply_damage(const Entity& target, double amount, const std::string& damage_type = "physical") { return Lib::apply_damage(target, amount, damage_type); }
+inline double apply_damage_from(const Entity& target, const Entity& attacker, double amount, const std::string& damage_type = "physical", double knock_x = 0.0, double knock_y = 0.0, double knock_z = 0.0, double stagger_time = -1.0) { return Lib::apply_damage_from(target, attacker, amount, damage_type, knock_x, knock_y, knock_z, stagger_time); }
+inline void damage_over_time(const Entity& target, double amount, const std::string& damage_type = "physical", double duration = 5.0, double interval = 1.0, bool forever = false) { Lib::damage_over_time(target, amount, damage_type, duration, interval, forever); }
+inline void damage_over_time_from(const Entity& target, const Entity& attacker, double amount, const std::string& damage_type = "physical", double duration = 5.0, double interval = 1.0, bool forever = false, double knock_x = 0.0, double knock_y = 0.0, double knock_z = 0.0, double push_repeat = 0.0, double stagger_time = -1.0, bool stack = false, const std::string& damage_key = "") { Lib::damage_over_time_from(target, attacker, amount, damage_type, duration, interval, forever, knock_x, knock_y, knock_z, push_repeat, stagger_time, stack, damage_key); }
+inline bool stop_damage_over_time(const Entity& target, const std::string& damage_key = "") { return Lib::stop_damage_over_time(target, damage_key); }
+inline long long damage_over_time_count(const Entity& target) { return Lib::damage_over_time_count(target); }
+inline std::string last_damage_type(const Entity& target) { return Lib::last_damage_type(target); }
+inline bool apply_effect(const Entity& target, const std::string& effect_name, double duration = 0.0, double strength = 1.0) { return Lib::apply_effect(target, effect_name, duration, strength); }
+inline bool apply_effect_forever(const Entity& target, const std::string& effect_name, double strength = 1.0) { return Lib::apply_effect_forever(target, effect_name, strength); }
+inline bool apply_effect_from(const Entity& target, const Entity& source, const std::string& effect_name, double duration = 0.0, double strength = 1.0) { return Lib::apply_effect_from(target, source, effect_name, duration, strength); }
+inline bool remove_effect(const Entity& target, const std::string& effect_name) { return Lib::remove_effect(target, effect_name); }
+inline long long clear_effects(const Entity& target) { return Lib::clear_effects(target); }
+inline bool has_effect(const Entity& target, const std::string& effect_name) { return Lib::has_effect(target, effect_name); }
+inline long long effect_stacks(const Entity& target, const std::string& effect_name) { return Lib::effect_stacks(target, effect_name); }
+inline double effect_time_left(const Entity& target, const std::string& effect_name) { return Lib::effect_time_left(target, effect_name); }
+inline std::string effect_list(const Entity& target) { return Lib::effect_list(target); }
+inline bool define_effect(const std::string& effect_name, const std::string& setting, const std::string& value) { return Lib::define_effect(effect_name, setting, value); }
+inline bool stagger(const Entity& target, double seconds = 0.5) { return Lib::stagger(target, seconds); }
+inline double stagger_time_left(const Entity& target) { return Lib::stagger_time_left(target); }
+inline bool is_stunned(const Entity& target) { return Lib::is_stunned(target); }
+inline double move_scale(const Entity& target) { return Lib::move_scale(target); }
+inline double stat(const Entity& target, const std::string& stat_name) { return Lib::stat(target, stat_name); }
+inline bool set_stat(const Entity& target, const std::string& stat_name, double value) { return Lib::set_stat(target, stat_name, value); }
+inline double add_stat(const Entity& target, const std::string& stat_name, double amount) { return Lib::add_stat(target, stat_name, amount); }
+inline double eat(const Entity& target, double food, double saturation = 0.0) { return Lib::eat(target, food, saturation); }
+inline double drink(const Entity& target, double amount) { return Lib::drink(target, amount); }
+inline bool use_stamina(const Entity& target, double amount) { return Lib::use_stamina(target, amount); }
+inline double resistance(const Entity& target, const std::string& damage_type) { return Lib::resistance(target, damage_type); }
+inline bool set_resistance(const Entity& target, const std::string& damage_type, double value) { return Lib::set_resistance(target, damage_type, value); }
+inline bool set_damage_formula(const Entity& target, const std::string& formula) { return Lib::set_damage_formula(target, formula); }
+inline bool set_effect_formula(const Entity& target, const std::string& formula) { return Lib::set_effect_formula(target, formula); }
+inline bool is_underwater(const Entity& target) { return Lib::is_underwater(target); }
+inline bool set_health_setting(const Entity& target, const std::string& setting, const std::string& value) { return Lib::set_health_setting(target, setting, value); }
+inline std::string health_setting(const Entity& target, const std::string& setting) { return Lib::health_setting(target, setting); }
+inline double convert_units(double value, const std::string& from_unit, const std::string& to_unit) { return Lib::convert_units(value, from_unit, to_unit); }
+inline double give_item(const Entity& target, const std::string& item, double amount = 1.0) { return Lib::give_item(target, item, amount); }
+inline double take_item(const Entity& target, const std::string& item, double amount = 1.0) { return Lib::take_item(target, item, amount); }
+inline double item_count(const Entity& target, const std::string& item) { return Lib::item_count(target, item); }
+inline Entity spawn_item(const std::string& item, double amount, double x, double y, double z, const std::string& look = "detailed") { return Lib::spawn_item(item, amount, x, y, z, look); }
+inline Entity drop_item(const Entity& target, const std::string& list = "items", double index = 0.0, double amount = -1.0) { return Lib::drop_item(target, list, index, amount); }
+inline bool pick_up(const Entity& target, const Entity& pickup) { return Lib::pick_up(target, pickup); }
+inline Entity nearest_pickup(const Entity& target, double radius = 2.5) { return Lib::nearest_pickup(target, radius); }
+inline bool define_item(const std::string& item, const std::string& setting, const std::string& value) { return Lib::define_item(item, setting, value); }
+inline std::string item_setting(const std::string& item, const std::string& setting) { return Lib::item_setting(item, setting); }
+inline bool equip_item(const Entity& target, const std::string& list, double index) { return Lib::equip_item(target, list, index); }
+inline bool unequip_item(const Entity& target, const std::string& slot) { return Lib::unequip_item(target, slot); }
+inline bool hold_item(const Entity& target, const std::string& hand, const std::string& list, double index) { return Lib::hold_item(target, hand, list, index); }
+inline std::string held_item(const Entity& target, const std::string& hand = "mainhand") { return Lib::held_item(target, hand); }
+inline bool holster_item(const Entity& target, const std::string& hand = "mainhand") { return Lib::holster_item(target, hand); }
+inline bool draw_item(const Entity& target, const std::string& slot, const std::string& hand = "mainhand") { return Lib::draw_item(target, slot, hand); }
+inline bool select_slot(const Entity& target, double index) { return Lib::select_slot(target, index); }
+inline bool use_item(const Entity& target, const std::string& list, double index) { return Lib::use_item(target, list, index); }
+inline bool use_held(const Entity& target, bool pressed = true, bool held = false) { return Lib::use_held(target, pressed, held); }
+inline bool release_held(const Entity& target) { return Lib::release_held(target); }
+inline bool reload_weapon(const Entity& target) { return Lib::reload_weapon(target); }
+inline bool move_item(const Entity& target, const std::string& list, double index, const Entity& to, const std::string& to_list, double to_index, double amount = -1.0) { return Lib::move_item(target, list, index, to, to_list, to_index, amount); }
+inline std::string inventory_setting(const Entity& target, const std::string& setting) { return Lib::inventory_setting(target, setting); }
+inline bool set_inventory_setting(const Entity& target, const std::string& setting, const std::string& value) { return Lib::set_inventory_setting(target, setting, value); }
+inline std::string slot_item(const Entity& target, const std::string& list, double index) { return Lib::slot_item(target, list, index); }
+inline double slot_amount(const Entity& target, const std::string& list, double index) { return Lib::slot_amount(target, list, index); }
+inline void set_aim(const Entity& target, double ox, double oy, double oz, double dx, double dy, double dz) { Lib::set_aim(target, ox, oy, oz, dx, dy, dz); }
+inline bool set_stance(const Entity& target, const std::string& stance) { return Lib::set_stance(target, stance); }
+inline void set_aiming(const Entity& target, bool on = true) { Lib::set_aiming(target, on); }
+inline void set_blocking(const Entity& target, bool on = true) { Lib::set_blocking(target, on); }
+inline long long fire_weapon(const Entity& target, const std::string& item, double ox, double oy, double oz, double dx, double dy, double dz, double power = 1.0) { return Lib::fire_weapon(target, item, ox, oy, oz, dx, dy, dz, power); }
+inline bool set_ballistics(const std::string& mode) { return Lib::set_ballistics(mode); }
+inline double worn_armor(const Entity& target, const std::string& damage_type = "physical") { return Lib::worn_armor(target, damage_type); }
+inline Entity start_weather(const std::string& preset, double duration = -1.0, double fade_in = 2.0, double fade_out = 2.0) { return Lib::start_weather(preset, duration, fade_in, fade_out); }
+inline Entity start_weather_at(const std::string& preset, double x, double y, double z, double radius, double duration = -1.0, double fade_in = 2.0, double fade_out = 2.0) { return Lib::start_weather_at(preset, x, y, z, radius, duration, fade_in, fade_out); }
+inline bool stop_weather(const Entity& zone, double fade_out = 2.0) { return Lib::stop_weather(zone, fade_out); }
+inline long long stop_all_weather(double fade_out = 2.0) { return Lib::stop_all_weather(fade_out); }
+inline bool set_climate(const Entity& zone, const std::string& setting, const std::string& value) { return Lib::set_climate(zone, setting, value); }
+inline double temperature_at(double x, double y, double z) { return Lib::temperature_at(x, y, z); }
+inline double wind_x_at(double x, double y, double z) { return Lib::wind_x_at(x, y, z); }
+inline double wind_y_at(double x, double y, double z) { return Lib::wind_y_at(x, y, z); }
+inline double wind_z_at(double x, double y, double z) { return Lib::wind_z_at(x, y, z); }
+inline double rain_at(double x, double y, double z) { return Lib::rain_at(x, y, z); }
+inline double snow_at(double x, double y, double z) { return Lib::snow_at(x, y, z); }
+inline bool is_sheltered(double x, double y, double z) { return Lib::is_sheltered(x, y, z); }
 
 inline double result(long long i) { return Lib::result(i); }
 

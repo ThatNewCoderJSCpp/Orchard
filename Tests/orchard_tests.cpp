@@ -2,6 +2,8 @@
 #include <orchard/scripting.hpp>
 #include <orchard/ai/behavior_tree.hpp>
 #include <orchard/ai/search.hpp>
+#include <orchard/ai/navgrid.hpp>
+#include <orchard/gameplay.hpp>
 #include <orchard/random.hpp>
 #include <orchard/solid.hpp>
 
@@ -297,6 +299,28 @@ void test_script_runtime() {
         g.connect(g.add_node("secure_whole"), "value", as_text, "value");
         g.connect(j2, "text", log2, "message");
         g.connect(g.add_node("secure_random"), "value", place, "x");
+        // Items, weapons and weather nodes.
+        int last = place;
+        for (const char* t : {"give_item", "take_item", "equip_item", "hold_item", "holster_item", "draw_item", "select_slot", "use_item", "use_held", "release_held", "reload_weapon", "fire_weapon", "set_aim", "set_stance", "set_aiming", "set_blocking", "set_ballistics", "drop_item", "pick_up_nearest", "move_item", "define_item", "set_inventory_setting", "spawn_item", "start_weather", "start_weather_at", "stop_all_weather", "set_climate"}) {
+            const int n = g.add_node(t);
+            check(n >= 0, std::string("the ") + t + " node exists");
+            g.connect(last, "then", n, "in");
+            last = n;
+        }
+        const int cond = g.add_node("branch");
+        g.connect(last, "then", cond, "in");
+        g.connect(g.add_node("has_item"), "result", cond, "condition");
+        const int say = g.add_node("log");
+        g.connect(cond, "true", say, "in");
+        const int tj = g.add_node("join");
+        g.connect(g.add_node("held_item"), "item", tj, "a");
+        g.connect(g.add_node("inventory_setting"), "value", tj, "b");
+        g.connect(tj, "text", say, "message");
+        const int warm = g.add_node("set_position");
+        g.connect(say, "then", warm, "in");
+        g.connect(g.add_node("temperature_at"), "celsius", warm, "x");
+        g.connect(g.add_node("rain_at"), "amount", warm, "y");
+        g.connect(g.add_node("worn_armor"), "value", warm, "z");
         std::vector<std::string> errors;
         const std::string code = g.to_walnut(&errors);
         check(errors.empty(), "a graph with random, bag, sound and AI nodes makes Walnut");
@@ -496,6 +520,221 @@ void test_script_languages() {
     }
     const std::vector<std::string> listed = project->scripts();
     check(std::find(listed.begin(), listed.end(), "Scripts/Mover.cs") != listed.end() && std::find(listed.begin(), listed.end(), "Scripts/mover.lua") != listed.end(), "the project lists scripts in every language");
+    fs::remove_all(dir, ec);
+}
+
+void test_damage_scripts() {
+    const fs::path dir = fs::temp_directory_path() / "orchard-test-damage";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    std::string error;
+    std::optional<orchard::Project> project = orchard::Project::create(dir.string(), "Damage", orchard::Dimension::three_d, &error);
+    check(project.has_value(), "damage test project: " + error);
+    if (!project) return;
+    auto write = [&](const char* rel, const std::string& text) {
+        std::ofstream out(project->path_of(rel), std::ios::binary);
+        out << text;
+    };
+    write("Scripts/hurt.cpp",
+          "#include <orchard/script/orchard.hpp>\nusing namespace orchard::script;\n\n"
+          "void on_start(Entity self) {\n    apply_damage(self, 10.0, \"fire\");\n    apply_effect(self, \"poison\", 3.0);\n    set_stat(self, \"max_hunger\", 30.0);\n    damage_over_time(self, 4.0, \"bleed\", 1.0, 0.0);\n    define_effect(\"venom\", \"damage\", \"3\");\n    set_health_setting(self, \"armor_mode\", \"flat\");\n    set_stat(self, \"max_shield\", convert_units(1.0, \"lb\", \"kg\"));\n}\n");
+    write("Scripts/hurt_c.c",
+          "#include <orchard/script/orchard.h>\n\n"
+          "void on_start(orchard_entity self) {\n    orchard_apply_damage(self, 10.0, \"fire\");\n    orchard_apply_effect(self, \"poison\", 3.0, 1.0);\n    orchard_set_stat(self, \"max_hunger\", 30.0);\n    orchard_damage_over_time(self, 4.0, \"bleed\", 1.0, 0.0, 0);\n    orchard_define_effect(\"venom\", \"damage\", \"3\");\n    orchard_set_health_setting(self, \"armor_mode\", \"flat\");\n    orchard_set_stat(self, \"max_shield\", orchard_convert_units(1.0, \"lb\", \"kg\"));\n}\n");
+    write("Scripts/hurt.lua",
+          "function on_start(self)\n    orchard.apply_damage(self, 10, \"fire\")\n    orchard.apply_effect(self, \"poison\", 3)\n    orchard.set_stat(self, \"max_hunger\", 30)\n    orchard.damage_over_time(self, 4, \"bleed\", 1, 0)\n    orchard.define_effect(\"venom\", \"damage\", \"3\")\n    orchard.set_health_setting(self, \"armor_mode\", \"flat\")\n    orchard.set_stat(self, \"max_shield\", orchard.convert_units(1, \"lb\", \"kg\"))\nend\n");
+    write("Scripts/Hurt.cs",
+          "using Orchard;\n\npublic class Hurt : Script\n{\n    public override void OnStart()\n    {\n        World.ApplyDamage(Entity, 10, \"fire\");\n        World.ApplyEffect(Entity, \"poison\", 3);\n        World.SetStat(Entity, \"max_hunger\", 30);\n        World.DamageOverTime(Entity, 4, \"bleed\", 1, 0);\n        World.DefineEffect(\"venom\", \"damage\", \"3\");\n        World.SetHealthSetting(Entity, \"armor_mode\", \"flat\");\n        World.SetStat(Entity, \"max_shield\", World.ConvertUnits(1, \"lb\", \"kg\"));\n    }\n}\n");
+    write("Scripts/Hurt.java",
+          "import orchard.*;\n\npublic class Hurt extends Script {\n    @Override\n    public void onStart() {\n        World.applyDamage(entity, 10, \"fire\");\n        World.applyEffect(entity, \"poison\", 3);\n        World.setStat(entity, \"max_hunger\", 30);\n        World.damageOverTime(entity, 4, \"bleed\", 1, 0);\n        World.defineEffect(\"venom\", \"damage\", \"3\");\n        World.setHealthSetting(entity, \"armor_mode\", \"flat\");\n        World.setStat(entity, \"max_shield\", World.convertUnits(1, \"lb\", \"kg\"));\n    }\n}\n");
+    {
+        orchard::graph::Graph g;
+        const int start = g.add_node("on_start");
+        const int hit = g.add_node("apply_damage");
+        g.set_value(hit, "type", "fire");
+        const int poison = g.add_node("apply_effect");
+        g.set_value(poison, "duration", "3");
+        const int stat = g.add_node("set_stat");
+        g.set_value(stat, "stat", "max_hunger");
+        g.set_value(stat, "value", "30");
+        const int bleed = g.add_node("apply_damage");
+        g.set_value(bleed, "amount", "4");
+        g.set_value(bleed, "type", "bleed");
+        g.set_value(bleed, "passive", "true");
+        g.set_value(bleed, "duration", "1");
+        g.set_value(bleed, "interval", "0");
+        g.set_value(bleed, "push_repeat", "every pulse");
+        const int define = g.add_node("define_effect");
+        const int armor = g.add_node("set_health_setting");
+        const int shield = g.add_node("set_stat");
+        g.set_value(shield, "stat", "max_shield");
+        const int pounds = g.add_node("convert_units");
+        g.set_value(pounds, "from", "lb");
+        g.set_value(pounds, "to", "kg");
+        g.connect(pounds, "result", shield, "value");
+        const int branch = g.add_node("branch");
+        const int has = g.add_node("has_effect");
+        const int stagger = g.add_node("stagger");
+        g.connect(start, "then", hit, "in");
+        g.connect(hit, "then", poison, "in");
+        g.connect(poison, "then", stat, "in");
+        g.connect(stat, "then", bleed, "in");
+        g.connect(bleed, "then", define, "in");
+        g.connect(define, "then", armor, "in");
+        g.connect(armor, "then", shield, "in");
+        g.connect(shield, "then", branch, "in");
+        g.connect(has, "result", branch, "condition");
+        g.connect(branch, "true", stagger, "in");
+        std::vector<std::string> errors;
+        const std::string code = g.to_walnut(&errors);
+        check(errors.empty(), "a graph with damage, effect and stat nodes makes Walnut");
+        check(code.find("orchard::damage_over_time_from(entity, entity, 4.0, \"bleed\", 1.0, 0.0, false, 0.0, 0.0, 0.0, 1.0, -1.0, false, \"\")") != std::string::npos, "passive damage nodes pass their duration, interval and push repeat:\n" + code);
+        check(code.find("orchard::apply_effect_from(entity, entity, \"poison\", 3.0, 1.0)") != std::string::npos, "effect nodes pass their duration and strength");
+        g.set_value(bleed, "push_repeat", "sometimes");
+        g.to_walnut(&errors);
+        check(!errors.empty(), "a bad push repeat is reported");
+        g.set_value(bleed, "push_repeat", "every pulse");
+        write("Graphs/hurt.graph", g.save());
+    }
+    orchard::ScriptRuntime runtime;
+    orchard::ScriptToolchain tools;
+    const char* walnut = std::getenv("ORCHARD_TEST_WALNUT");
+    if (walnut) tools.walnut = walnut;
+    if (const char* cxx = std::getenv("CXX")) tools.cxx = cxx;
+    if (const char* cc = std::getenv("CC")) tools.cc = cc;
+    tools.include_dir = orchard::ScriptToolchain::find_include_dir("");
+    tools.cache_dir = (fs::temp_directory_path() / "orchard-test-languages" / ".orchard" / "scripts").string();
+    runtime.set_toolchain(tools);
+    struct Case {
+        const char* script;
+        const char* language;
+    };
+    const std::vector<Case> cases = {{"Scripts/hurt.cpp", "C++"}, {"Scripts/hurt_c.c", "C"}, {"Scripts/hurt.lua", "Lua"}, {"Scripts/Hurt.cs", "C#"}, {"Scripts/Hurt.java", "Java"}, {"Graphs/hurt.graph", "Walnut"}};
+    orchard::Scene scene(orchard::Dimension::three_d);
+    std::vector<std::pair<std::string, orchard::Entity>> running;
+    for (const Case& c : cases) {
+        orchard::ScriptLanguage* lang = runtime.language(c.language);
+        if (!lang || !lang->available(tools) || (std::string(c.language) == "Walnut" && !walnut)) continue;
+        const orchard::ScriptBuildResult built = runtime.build(*project, c.script);
+        check(built.ok, std::string("building ") + c.script + ": " + built.log);
+        if (!built.ok) continue;
+        const orchard::Entity e = scene.create(c.language);
+        orchard::Health& h = scene.add_health(e);
+        h.resist["fire"] = 0.5f;
+        scene.add_survival(e);
+        scene.set_script(e, c.script);
+        running.push_back({c.language, e});
+    }
+    std::vector<std::string> logs;
+    runtime.set_log([&logs](const std::string& m, bool bad) { if (bad) logs.push_back(m); });
+    check(runtime.start(*project, scene), "starting the damage scripts");
+    runtime.tick(0.25);
+    runtime.tick(0.25);
+    orchard::Gameplay& g = runtime.gameplay();
+    for (const auto& [language, e] : running) {
+        const float hp = g.health(e);
+        check(hp < 95.0f && hp > 85.0f, language + " scripts deal typed damage through resistances and keep bleeding (" + std::to_string(hp) + ")");
+        check(g.effect_stacks(e, "poison") == 1 && g.effect_time_left(e, "poison") > 2.0f, language + " scripts apply effects");
+        check(g.stat(e, "max_hunger") == 30.0f, language + " scripts set survival stats");
+        check(g.last_damage_type(e) == "bleed", language + " scripts' passive damage is typed (" + g.last_damage_type(e) + ")");
+        check(g.health_setting(e, "armor_mode") == "flat", language + " scripts change how armor works");
+        check(std::fabs(g.stat(e, "max_shield") - 0.45359237f) < 1e-4f, language + " scripts convert units (" + std::to_string(g.stat(e, "max_shield")) + ")");
+    }
+    check(g.effect_def("venom") && g.effect_def("venom")->damage == 3.0f, "scripts can define effects");
+    for (const std::string& l : logs) check(false, "script error: " + l);
+    runtime.stop();
+    fs::remove_all(dir, ec);
+}
+
+void test_item_scripts() {
+    const fs::path dir = fs::temp_directory_path() / "orchard-test-items";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    std::string error;
+    std::optional<orchard::Project> project = orchard::Project::create(dir.string(), "Items", orchard::Dimension::three_d, &error);
+    check(project.has_value(), "item test project: " + error);
+    if (!project) return;
+    auto write = [&](const char* rel, const std::string& text) {
+        std::ofstream out(project->path_of(rel), std::ios::binary);
+        out << text;
+    };
+    write("Scripts/gear.cpp",
+          "#include <orchard/script/orchard.hpp>\nusing namespace orchard::script;\n\n"
+          "void on_start(Entity self) {\n    set_inventory_setting(self, \"preset\", \"tarkov\");\n    give_item(self, \"glock17\", 1.0);\n    give_item(self, \"9mm\", 20.0);\n    Entity w = start_weather(\"rain\", 30.0, 0.0, 0.0);\n    set_climate(w, \"temperature\", \"5\");\n    spawn_item(\"apple\", 2.0, 0.0, 1.0, 0.0);\n}\n");
+    write("Scripts/gear_c.c",
+          "#include <orchard/script/orchard.h>\n\n"
+          "void on_start(orchard_entity self) {\n    orchard_set_inventory_setting(self, \"preset\", \"tarkov\");\n    orchard_give_item(self, \"glock17\", 1.0);\n    orchard_give_item(self, \"9mm\", 20.0);\n    orchard_entity w = orchard_start_weather(\"rain\", 30.0, 0.0, 0.0);\n    orchard_set_climate(w, \"temperature\", \"5\");\n    orchard_spawn_item(\"apple\", 2.0, 0.0, 1.0, 0.0, \"detailed\");\n}\n");
+    write("Scripts/gear.lua",
+          "function on_start(self)\n    orchard.set_inventory_setting(self, \"preset\", \"tarkov\")\n    orchard.give_item(self, \"glock17\", 1)\n    orchard.give_item(self, \"9mm\", 20)\n    local w = orchard.start_weather(\"rain\", 30, 0, 0)\n    orchard.set_climate(w, \"temperature\", \"5\")\n    orchard.spawn_item(\"apple\", 2, 0, 1, 0)\nend\n");
+    write("Scripts/Gear.cs",
+          "using Orchard;\n\npublic class Gear : Script\n{\n    public override void OnStart()\n    {\n        World.SetInventorySetting(Entity, \"preset\", \"tarkov\");\n        World.GiveItem(Entity, \"glock17\", 1);\n        World.GiveItem(Entity, \"9mm\", 20);\n        Entity w = World.StartWeather(\"rain\", 30, 0, 0);\n        World.SetClimate(w, \"temperature\", \"5\");\n        World.SpawnItem(\"apple\", 2, 0, 1, 0);\n    }\n}\n");
+    write("Scripts/Gear.java",
+          "import orchard.*;\n\npublic class Gear extends Script {\n    @Override\n    public void onStart() {\n        World.setInventorySetting(entity, \"preset\", \"tarkov\");\n        World.giveItem(entity, \"glock17\", 1);\n        World.giveItem(entity, \"9mm\", 20);\n        Entity w = World.startWeather(\"rain\", 30, 0, 0);\n        World.setClimate(w, \"temperature\", \"5\");\n        World.spawnItem(\"apple\", 2, 0, 1, 0);\n    }\n}\n");
+    {
+        orchard::graph::Graph g;
+        const int start = g.add_node("on_start");
+        const int preset = g.add_node("set_inventory_setting");
+        g.set_value(preset, "value", "tarkov");
+        const int gun = g.add_node("give_item");
+        g.set_value(gun, "item", "glock17");
+        const int ammo = g.add_node("give_item");
+        g.set_value(ammo, "item", "9mm");
+        g.set_value(ammo, "amount", "20");
+        const int rain = g.add_node("start_weather");
+        g.set_value(rain, "duration", "30");
+        const int apple = g.add_node("spawn_item");
+        g.set_value(apple, "amount", "2");
+        g.connect(start, "then", preset, "in");
+        g.connect(preset, "then", gun, "in");
+        g.connect(gun, "then", ammo, "in");
+        g.connect(ammo, "then", rain, "in");
+        g.connect(rain, "then", apple, "in");
+        std::vector<std::string> errors;
+        g.to_walnut(&errors);
+        check(errors.empty(), "a graph with item and weather nodes makes Walnut");
+        write("Graphs/gear.graph", g.save());
+    }
+    orchard::ScriptRuntime runtime;
+    orchard::ScriptToolchain tools;
+    const char* walnut = std::getenv("ORCHARD_TEST_WALNUT");
+    if (walnut) tools.walnut = walnut;
+    if (const char* cxx = std::getenv("CXX")) tools.cxx = cxx;
+    if (const char* cc = std::getenv("CC")) tools.cc = cc;
+    tools.include_dir = orchard::ScriptToolchain::find_include_dir("");
+    tools.cache_dir = (fs::temp_directory_path() / "orchard-test-languages" / ".orchard" / "scripts").string();
+    runtime.set_toolchain(tools);
+    const std::vector<std::pair<const char*, const char*>> cases = {{"Scripts/gear.cpp", "C++"}, {"Scripts/gear_c.c", "C"}, {"Scripts/gear.lua", "Lua"}, {"Scripts/Gear.cs", "C#"}, {"Scripts/Gear.java", "Java"}, {"Graphs/gear.graph", "Walnut"}};
+    orchard::Scene scene(orchard::Dimension::three_d);
+    std::vector<std::pair<std::string, orchard::Entity>> running;
+    for (const auto& [script, language] : cases) {
+        orchard::ScriptLanguage* lang = runtime.language(language);
+        if (!lang || !lang->available(tools) || (std::string(language) == "Walnut" && !walnut)) continue;
+        const orchard::ScriptBuildResult built = runtime.build(*project, script);
+        check(built.ok, std::string("building ") + script + ": " + built.log);
+        if (!built.ok) continue;
+        const orchard::Entity e = scene.create(language);
+        scene.set_script(e, script);
+        running.push_back({language, e});
+    }
+    std::vector<std::string> logs;
+    runtime.set_log([&logs](const std::string& m, bool bad) { if (bad) logs.push_back(m); });
+    check(runtime.start(*project, scene), "starting the item scripts");
+    runtime.tick(0.1);
+    orchard::Gameplay& g = runtime.gameplay();
+    for (const auto& [language, e] : running) {
+        const orchard::Inventory* inv = scene.inventory(e);
+        check(inv && inv->preset == "tarkov", language + " scripts give things an inventory and set it up");
+        check(g.count(e, "glock17") == 1.0f && g.count(e, "9mm") == 20.0f, language + " scripts give items (" + std::to_string(g.count(e, "9mm")) + ")");
+    }
+    int zones = 0, apples = 0;
+    for (orchard::Entity e : scene.entities()) {
+        if (const orchard::Climate* c = scene.climate(e)) zones += c->preset == "rain" && c->temperature == 5.0f ? 1 : 0;
+        if (const orchard::Pickup* p = scene.pickup(e)) apples += p->stack.item == "apple" && p->stack.amount == 2.0f ? 1 : 0;
+    }
+    check(zones >= static_cast<int>(running.size()) - (walnut ? 1 : 0), "scripts start weather and change it (" + std::to_string(zones) + " zones)");
+    check(apples == static_cast<int>(running.size()), "scripts spawn item pickups (" + std::to_string(apples) + ")");
+    for (const std::string& l : logs) check(false, "script error: " + l);
+    runtime.stop();
     fs::remove_all(dir, ec);
 }
 
@@ -1949,6 +2188,29 @@ void test_solids() {
     fs::remove_all(dir, ec);
 }
 
+void test_nav_airborne_goal() {
+    orchard::ai::NavGrid nav;
+    orchard::ai::NavSettings ns;
+    std::size_t sampled = 0;
+    nav.configure(ns, [&sampled](float, float, float, float, std::vector<orchard::ai::NavSurface>& out) {
+        ++sampled;
+        out.clear();
+        orchard::ai::NavSurface ground;
+        ground.y = 0.0f;
+        ground.bottom = -1.0f;
+        out.push_back(ground);
+    });
+    orchard::ai::NavPathOptions o;
+    o.max_expand = 40000;
+    const orchard::ai::NavPath up = nav.find_path({0.0f, 0.0f, 0.0f}, {8.0f, 20.0f, 3.0f}, o);
+    check(up.found && !up.points.empty(), "a path to a target 20 m in the air leads to the ground under it");
+    if (!up.points.empty()) check(std::fabs(up.points.back().position.x - 8.0f) < 0.6f && std::fabs(up.points.back().position.z - 3.0f) < 0.6f && std::fabs(up.points.back().position.y) < 0.01f, "and ends on the ground right below the target");
+    check(up.expanded < 2000 && sampled < 4000, "without searching the whole map (" + std::to_string(up.expanded) + " nodes, " + std::to_string(sampled) + " columns sampled)");
+    const std::size_t before = sampled;
+    const orchard::ai::NavPath lost = nav.find_path({0.0f, 0.0f, 0.0f}, {8.0f, 500.0f, 3.0f}, o);
+    check(!lost.found && lost.expanded <= 2001 && sampled - before < 8000, "a target far out of reach gives a short partial search (" + std::to_string(lost.expanded) + " nodes)");
+}
+
 void test_parallel_search() {
     using namespace orchard::ai;
     GridPathfinder grid(60, 60);
@@ -2030,6 +2292,9 @@ int main() {
     test_entity_templates_and_emitters();
     test_light_animation();
     test_script_keys();
+    test_nav_airborne_goal();
+    test_damage_scripts();
+    test_item_scripts();
     test_project_physics_and_lighting();
     test_graph_view();
     test_models_and_animation();
