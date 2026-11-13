@@ -227,4 +227,44 @@ function o.wind_z_at(x, y, z) return g(480, nil, nil, nil, x, y, z) end
 function o.rain_at(x, y, z) return g(481, nil, nil, nil, x, y, z) end
 function o.snow_at(x, y, z) return g(482, nil, nil, nil, x, y, z) end
 function o.is_sheltered(x, y, z) return g(483, nil, nil, nil, x, y, z) ~= 0 end
+function o.load_magazine(target, list, index) return g(490, target, nil, J(list), index) end
+function o.unload_magazine(target, list, index) return g(491, target, nil, J(list), index) end
+function o.unload_weapon(target) return g(492, target, nil, nil) ~= 0 end
+function o.choose_ammo(target, ammo, variant) if variant == nil then variant = "" end return g(493, target, nil, J(ammo, variant)) ~= 0 end
+function o.loaded_ammo(target) return gt(494, target, nil, nil) end
+function o.loaded_variant(target) return gt(495, target, nil, nil) end
+function o.loaded_rounds(target) return g(496, target, nil, nil) end
+function o.give_ammo(target, ammo, variant, amount) return g(497, target, nil, J(ammo, variant), amount) end
+function o.ammo_count(target, ammo, variant) if variant == nil then variant = "" end return g(498, target, nil, J(ammo, variant)) end
+function o.ammo_info(item) return gt(499, nil, nil, J(item)) end
+function o.ammo_fits(gun, ammo) return g(500, nil, nil, J(gun, ammo)) ~= 0 end
+function o.bullet_setting(variant, setting) return gt(501, nil, nil, J(variant, setting)) end
+function o.define_bullet(variant, setting, value) return g(502, nil, nil, J(variant, setting, value)) ~= 0 end
+function o.game_rule(rule) return gt(503, nil, nil, J(rule)) end
+function o.set_game_rule(rule, value) return g(504, nil, nil, J(rule, value)) ~= 0 end
+function o.inventory_click(target, other, list, index, action) return g(505, target, other, J(list, action), index) ~= 0 end
+function o.cursor_item(target) return gt(506, target, nil, nil) end
+function o.cursor_amount(target) return g(507, target, nil, nil) end
+function o.return_cursor(target) return g(508, target, nil, nil) ~= 0 end
+function o.next_item_event(target) return gt(509, target, nil, nil) end
+function o.describe(target, lines) return gt(510, target, nil, J(lines)) end
+function o.set_look_info(target, text) g(511, target, nil, J(text)) end
+function o.enchant_item(target, list, index, enchant) return g(512, target, nil, J(list, enchant), index) ~= 0 end
+function o.play_item_sound(name, x, y, z) g(513, nil, nil, J(name), x, y, z) end
+function o.worn_resist(target, damage_type) return g(514, target, nil, J(damage_type)) end
+function o.find_guns(filter) return gt(515, nil, nil, J(filter)) end
+function o.gun_info(item) return gt(516, nil, nil, J(item)) end
+function o.gun_state(target) return gt(517, target, nil, nil) end
+function o.cycle_weapon(target) return g(518, target, nil, nil) ~= 0 end
+function o.fire_mode(target) return gt(519, target, nil, nil) end
+function o.set_fire_mode(target, mode) return g(520, target, nil, J(mode)) ~= 0 end
+function o.next_fire_mode(target) return g(521, target, nil, nil) ~= 0 end
+function o.surface_under(target) return gt(522, target, nil, nil) end
+function o.surface_at(x, y, z) return gt(523, nil, nil, nil, x, y, z) end
+function o.wading_in(target) return gt(524, target, nil, nil) end
+function o.ground_speed(target) return g(525, target, nil, nil) end
+function o.set_ground_speed(target, speed) return g(526, target, nil, J(speed)) ~= 0 end
+function o.define_surface(surface, setting, value) return g(527, nil, nil, J(surface, setting, value)) ~= 0 end
+function o.surface_setting(surface, setting) return gt(528, nil, nil, J(surface, setting)) end
+function o.set_surface(target, surface) return g(529, target, nil, J(surface)) ~= 0 end
 )LUA"

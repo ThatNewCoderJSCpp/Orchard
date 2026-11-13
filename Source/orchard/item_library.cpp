@@ -1,6 +1,11 @@
 #include <orchard/items.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <functional>
+#include <map>
+#include <set>
 
 namespace orchard {
 
@@ -1081,9 +1086,464 @@ void misc_items(Library& L) {
     material("sand", "Sand", "pouch", 1.6f, true, "kg", 25.0f, Vec3{0.85f, 0.75f, 0.5f});
 }
 
+struct Cartridge {
+    const char* id;
+    const char* name;
+    const char* category;
+    const char* klass;
+    const char* caliber;
+    float grain;
+    float round_grain;
+    float speed;
+    const char* aliases;
+    bool replaces;
+};
+
+const Cartridge cartridge_table[] = {
+#include "cartridges.inc"
+};
+
+
+#include "gun_table.inc"
+
+Vec3 named_color(const std::string& n) {
+    if (n == "polymer") return polymer;
+    if (n == "wood") return wood;
+    if (n == "steel") return steel;
+    if (n == "tan") return tan;
+    if (n == "olive") return olive;
+    if (n == "gunmetal") return gunmetal;
+    if (n == "iron") return iron;
+    if (n == "brass") return Vec3{0.8f, 0.62f, 0.28f};
+    return black;
+}
+
+std::string category_for_class(const std::string& c, const std::string& action) {
+    if (c == "pistol") return "Guns/Pistols";
+    if (c == "machine_pistol") return "Guns/Machine pistols";
+    if (c == "revolver") return "Guns/Revolvers";
+    if (c == "derringer") return "Guns/Derringers";
+    if (c == "smg") return "Guns/Submachine guns";
+    if (c == "pdw") return "Guns/PDWs";
+    if (c == "carbine") return "Guns/Carbines";
+    if (c == "assault_rifle") return "Guns/Assault rifles";
+    if (c == "battle_rifle") return "Guns/Battle rifles";
+    if (c == "semi_rifle") return "Guns/Semi-auto rifles";
+    if (c == "dmr") return "Guns/Marksman rifles";
+    if (c == "bolt_rifle") return action == "break" || action == "single_shot" ? "Guns/Single-shot and double rifles" : "Guns/Bolt-action rifles";
+    if (c == "lever_rifle") return "Guns/Lever-action rifles";
+    if (c == "rimfire_rifle") return "Guns/Rimfire rifles";
+    if (c == "sniper") return "Guns/Sniper rifles";
+    if (c == "anti_materiel") return "Guns/Anti-materiel rifles";
+    if (c == "shotgun") return "Guns/Shotguns";
+    if (c == "lmg" || c == "gpmg" || c == "hmg" || c == "rotary") return "Guns/Machine guns";
+    if (c == "grenade_launcher" || c == "rocket_launcher" || c == "flare") return "Guns/Launchers";
+    if (c == "musket" || c == "black_powder_pistol") return "Guns/Black powder";
+    if (c == "sci_fi") return "Guns/Sci-fi";
+    return "Guns/Other";
+}
+
+float cycle_time_for(const std::string& action) {
+    if (action == "bolt") return 0.9f;
+    if (action == "straight_pull") return 0.55f;
+    if (action == "pump") return 0.45f;
+    if (action == "lever") return 0.5f;
+    if (action == "revolver_sa") return 0.35f;
+    return 0.0f;
+}
+
+void gun_table(Library& L) {
+    for (const GunMeta& m : gun_meta_rows)
+        for (ItemDef& d : L.v)
+            if (d.id == m.id) {
+                d.gun_class = m.gun_class;
+                d.action = m.action;
+                d.country = m.country;
+                d.year = m.year;
+                d.maker = m.maker;
+                d.fire_modes = m.modes;
+                d.slide_lock = m.lock;
+                d.cycle_time = cycle_time_for(d.action);
+                if (d.action == "rocket") d.feed = "internal";
+                if (d.id == "m16a2") d.automatic = false;
+                if (d.id == "m32") d.feed = "cylinder";
+            }
+    static const std::set<std::string> bullpups = {"tavor", "x95", "steyr_aug_a3", "famas_g2", "f2000", "qbz95", "sa80", "l85a3", "ots14_groza", "fs2000", "desert_tech_mdr", "ksg", "ut15", "dp12", "desert_tech_srs", "kel_tec_rfb", "dsr1", "pdw_57", "type05"};
+    for (const GunRow& r : gun_rows) {
+        bool exists = false;
+        for (const ItemDef& d : L.v)
+            if (d.id == r.id) exists = true;
+        if (exists) continue;
+        const ItemDef* a = nullptr;
+        for (const ItemDef& d : L.v)
+            if (d.id == r.ammo) a = &d;
+        const std::string klass = r.gun_class, action = r.action;
+        const std::string ammo_class = a ? a->cartridge_class : std::string();
+        const bool handgun = klass == "pistol" || klass == "machine_pistol" || klass == "revolver" || klass == "derringer" || klass == "black_powder_pistol";
+        const bool long_gun = !handgun;
+        const bool launcher = klass == "grenade_launcher" || klass == "rocket_launcher" || klass == "flare";
+        const bool energy = action == "energy";
+        float speed = a && a->speed > 0.0f ? a->speed : 350.0f;
+        if (ammo_class == "handgun" && long_gun) speed *= 1.1f;
+        if ((ammo_class == "rifle") && r.length < 0.8f && !handgun) speed *= 0.92f;
+        if (energy) speed = r.id == std::string("gauss_rifle") ? 6000.0f : r.id == std::string("plasma_pistol") ? 120.0f : 1e6f;
+        if (launcher) speed = a && a->speed > 0.0f ? a->speed : 80.0f;
+        const float grain = a && a->grain > 0.0f ? a->grain : (a ? a->projectile_mass * grains_per_kg : 120.0f);
+        const float mass = std::max(0.0005f, grain / grains_per_kg);
+        const bool shot = ammo_class == "shotgun" || std::string(r.ammo) == "12g_buck";
+        int pellets = 1;
+        float energy_j = 0.5f * mass * speed * speed;
+        if (shot) {
+            pellets = std::string(r.ammo) == "ammo_410_bore" ? 5 : 9;
+            energy_j /= static_cast<float>(pellets);
+        }
+        float dmg = 1.9f * std::pow(std::max(1.0f, energy_j), 0.4f);
+        if (shot) dmg *= 0.65f;
+        if (energy) dmg = klass == "sci_fi" && r.mag <= 10 ? 120.0f : 26.0f;
+        std::string shape;
+        if (klass == "pistol" || klass == "machine_pistol") shape = "pistol";
+        else if (klass == "revolver" || klass == "derringer") shape = "revolver";
+        else if (klass == "smg" || klass == "pdw") shape = bullpups.count(r.id) ? "bullpup" : "smg";
+        else if (klass == "carbine") shape = "carbine";
+        else if (klass == "sniper" || klass == "anti_materiel") shape = bullpups.count(r.id) ? "bullpup" : "sniper";
+        else if (klass == "shotgun") shape = bullpups.count(r.id) ? "bullpup" : r.length < 0.6f ? "sawed_off" : "shotgun";
+        else if (klass == "lmg" || klass == "gpmg" || klass == "hmg" || klass == "rotary") shape = "lmg";
+        else if (launcher) shape = "launcher";
+        else if (klass == "musket") shape = "musket";
+        else if (klass == "black_powder_pistol") shape = "flintlock";
+        else shape = bullpups.count(r.id) ? "bullpup" : "rifle";
+        float rate = r.rpm > 0.0f ? r.rpm / 60.0f : 3.0f;
+        if (r.rpm <= 0.0f) {
+            if (handgun) rate = 3.5f;
+            if (klass == "dmr" || klass == "sniper") rate = 2.5f;
+            if (action == "bolt") rate = 0.75f;
+            if (action == "straight_pull") rate = 1.0f;
+            if (action == "lever") rate = 1.5f;
+            if (action == "pump") rate = 1.2f;
+            if (action == "break") rate = 3.0f;
+            if (action == "single_shot") rate = 0.4f;
+            if (action == "revolver_da") rate = 2.0f;
+            if (action == "revolver_sa") rate = 1.2f;
+            if (action == "rocket") rate = 0.5f;
+            if (action == "muzzle") rate = 1.0f / 15.0f;
+            if (energy) rate = 4.0f;
+        }
+        float spread = 0.6f;
+        if (handgun) spread = klass == "revolver" ? 1.2f : 1.6f;
+        if (klass == "smg" || klass == "pdw") spread = 2.2f;
+        if (klass == "carbine") spread = 0.7f;
+        if (klass == "dmr") spread = 0.25f;
+        if (klass == "bolt_rifle" || klass == "lever_rifle" || klass == "rimfire_rifle") spread = 0.35f;
+        if (klass == "sniper") spread = 0.08f;
+        if (klass == "anti_materiel") spread = 0.1f;
+        if (shot) spread = r.length < 0.6f ? 7.0f : 4.0f;
+        if (klass == "lmg" || klass == "gpmg" || klass == "hmg" || klass == "rotary") spread = 1.4f;
+        if (launcher) spread = 0.8f;
+        if (klass == "musket") spread = 2.5f;
+        if (klass == "black_powder_pistol") spread = 3.0f;
+        ItemSize size = ItemSize::large;
+        int gw = r.length > 1.0f ? 5 : 4, gh = 2;
+        if (handgun) {
+            size = ItemSize::small;
+            gw = 2;
+            gh = 1;
+        } else if (klass == "smg" || klass == "pdw") {
+            size = ItemSize::medium;
+            gw = 3;
+            gh = 2;
+        } else if (klass == "sniper" || klass == "anti_materiel" || klass == "lmg" || klass == "gpmg" || klass == "hmg" || klass == "rotary" || launcher) {
+            size = ItemSize::huge;
+            gw = 5;
+            gh = 2;
+        } else if (klass == "musket" || klass == "shotgun") {
+            gh = 1;
+            gw = r.length < 0.6f ? 3 : 5;
+            if (r.length < 0.6f) size = ItemSize::medium;
+        }
+        if (klass == "flare" || (klass == "grenade_launcher" && r.length < 0.45f)) {
+            size = ItemSize::small;
+            gw = 2;
+            gh = 1;
+        }
+        const std::vector<std::string> modes = [&] {
+            std::vector<std::string> out;
+            std::string part;
+            for (const char* c = r.modes;; ++c) {
+                if (*c == ',' || *c == '\0') {
+                    if (!part.empty()) out.push_back(part);
+                    part.clear();
+                    if (*c == '\0') break;
+                } else part += *c;
+            }
+            return out;
+        }();
+        const bool autom = std::find(modes.begin(), modes.end(), "auto") != modes.end();
+        ItemDef& d = L.gun(r.id, r.name, category_for_class(klass, action), shape, std::round(dmg), rate, r.mag, r.ammo, std::round(speed), spread, r.weight, r.length, autom, size, gw, gh);
+        d.gun_class = klass;
+        d.action = action;
+        d.country = r.country;
+        d.year = r.year;
+        d.maker = r.maker;
+        d.fire_modes = r.modes;
+        d.slide_lock = r.lock;
+        d.feed = r.feed;
+        d.burst = r.id == std::string("an94") ? 2 : 3;
+        d.cycle_time = cycle_time_for(action);
+        d.color = named_color(r.color);
+        d.accent = named_color(r.accent);
+        d.pellets = pellets;
+        d.projectile_mass = mass;
+        d.drag = shot ? 0.006f : ammo_class == "handgun" ? 0.0027f : grain > 400.0f ? 0.0006f : 0.0012f;
+        d.penetration = handgun || shot ? 0.0f : speed / 100.0f;
+        d.recoil = dmg * (klass == "sniper" || klass == "anti_materiel" ? 0.05f : 0.04f);
+        d.range = shot ? 40.0f : speed * 0.6f;
+        if (d.feed.empty()) {
+            if (action == "revolver_da" || action == "revolver_sa") d.feed = "cylinder";
+            else if (action == "muzzle") d.feed = "muzzle";
+            else if (action == "belt" || action == "rotary") d.feed = "belt";
+            else if (energy) d.feed = "pool";
+            else if (action == "bolt" || action == "straight_pull" || action == "pump" || action == "lever" || action == "break" || action == "single_shot" || action == "rocket") d.feed = "internal";
+            else d.feed = "magazine";
+        }
+        const float per_round = action == "lever" ? 0.5f : action == "pump" ? 0.5f : action == "break" ? 0.9f : action == "revolver_sa" ? 0.6f : action == "revolver_da" ? 0.35f : 0.45f;
+        if (d.feed == "internal" || d.feed == "cylinder") d.reload = std::max(1.0f, per_round * static_cast<float>(std::max(1, r.mag)));
+        else if (d.feed == "belt") d.reload = 5.5f;
+        else if (d.feed == "muzzle") d.reload = handgun ? 12.0f : 18.0f;
+        else d.reload = handgun ? 1.6f : size == ItemSize::medium ? 2.2f : 2.6f;
+        if (action == "break" && r.mag <= 2) d.reload = 2.2f;
+        if (launcher) {
+            d.damage_type = std::string(r.ammo) == "flare" ? "fire" : "explosion";
+            d.damage = std::string(r.ammo) == "flare" ? 15.0f : std::string(r.ammo) == "40mm" ? 120.0f : 190.0f;
+            d.blast_radius = std::string(r.ammo) == "flare" ? 0.5f : std::string(r.ammo) == "40mm" ? 4.0f : 5.5f;
+            d.projectile_mass = 1.0f;
+            d.drag = 0.004f;
+            d.ballistics = "drop";
+            d.penetration = 0.0f;
+            d.reload = action == "belt" ? 6.0f : 4.0f;
+            if (std::string(r.ammo) == "flare") {
+                d.effect = "burning";
+                d.effect_time = 6.0f;
+                d.effect_chance = 1.0f;
+            }
+        }
+        if (klass == "musket" || klass == "black_powder_pistol") {
+            d.projectile_mass = std::max(d.projectile_mass, 0.02f);
+            d.drag = 0.004f;
+            d.ballistics = "drop";
+            if (std::string(r.ammo) == "musket_shot") d.pellets = 10;
+        }
+        if (energy) {
+            d.damage_type = r.id == std::string("needler") ? "projectile" : "fire";
+            d.projectile_mass = 0.001f;
+            d.drag = 0.0f;
+            d.ballistics = speed > 5000.0f ? "hitscan" : "travel";
+            d.accent = Vec3{0.2f, 0.8f, 1.0f};
+        }
+        if (klass == "sniper" || klass == "anti_materiel" || klass == "dmr") d.tags.push_back("scoped");
+        if (std::string(r.id).find("sd") != std::string::npos || std::string(r.id) == "pb_6p9" || std::string(r.id) == "vss" || std::string(r.id) == "as_val") d.tags.push_back("suppressed");
+    }
+}
+
+void gun_hammers(Library& L) {
+    static const std::set<std::string> hammers = {"double_barrel", "sawed_off", "stoeger_coach", "lupara", "single_barrel", "h_and_r_pardner", "sharps_1874", "rolling_block", "trapdoor", "snider_enfield", "thompson_encore", "h_and_r_handi", "remington_derringer", "philadelphia_deringer", "bond_arms", "cobra_derringer", "flare_gun", "flare_pistol_hebel"};
+    for (ItemDef& d : L.v)
+        if (d.kind == ItemKind::gun && hammers.count(d.id)) d.hammer = true;
+}
+
+void cartridges(Library& L) {
+    const Vec3 brass{0.78f, 0.6f, 0.25f};
+    const Vec3 steel_case{0.42f, 0.45f, 0.38f};
+    const Vec3 hull{0.7f, 0.12f, 0.1f};
+    const Vec3 lead{0.48f, 0.48f, 0.5f};
+    const Vec3 paper{0.82f, 0.76f, 0.6f};
+    for (const Cartridge& c : cartridge_table) {
+        ItemDef* d = nullptr;
+        for (ItemDef& x : L.v)
+            if (x.id == c.id) d = &x;
+        const std::string klass = c.klass;
+        if (!d) {
+            int stack = klass == "rimfire" ? 100 : klass == "handgun" ? 50 : klass == "shotgun" ? 25 : klass == "airgun" ? 500 : klass == "blackpowder" ? 30 : 40;
+            if (klass == "specialty") stack = 10;
+            if (c.grain > 350.0f && klass == "rifle") stack = 20;
+            d = &L.ammo(c.id, c.name, c.category, c.round_grain / grains_per_kg, stack, brass);
+        }
+        d->name = c.name;
+        d->category = c.category;
+        d->caliber = c.caliber;
+        d->grain = c.grain;
+        d->cartridge_grain = c.round_grain;
+        d->speed = c.speed;
+        d->cartridge_class = klass;
+        d->aliases = c.aliases;
+        d->weight = c.round_grain / grains_per_kg;
+        d->volume = d->weight * 0.4f;
+        d->projectile_mass = c.grain / grains_per_kg;
+        d->shape = klass == "shotgun" ? "shell" : klass == "airgun" ? "pellet" : "round";
+        d->length = klass == "airgun" ? 0.006f : std::clamp(0.012f + std::cbrt(c.round_grain) * 0.0045f, 0.01f, 0.2f);
+        const std::string name = c.name;
+        if (klass == "shotgun") d->color = hull;
+        else if (klass == "airgun") d->color = lead;
+        else if (klass == "blackpowder" && name.find("Musket") != std::string::npos) d->color = paper;
+        else if (name.find("39mm") != std::string::npos || name.find("Makarov") != std::string::npos || name.find("54mmR") != std::string::npos || name.find("108mm") != std::string::npos || name.find("114mm") != std::string::npos) d->color = steel_case;
+        else d->color = brass;
+        if (klass == "specialty") d->size = ItemSize::small;
+        d->default_variant = klass == "shotgun" ? "buckshot" : klass == "airgun" ? "domed" : "fmj";
+        if (d->description.empty() || c.replaces) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "%.0f gr bullet at about %.0f m/s.", static_cast<double>(c.grain), static_cast<double>(c.speed));
+            d->description = buf;
+            if (klass == "shotgun") {
+                std::snprintf(buf, sizeof(buf), "%.0f gr of shot at about %.0f m/s.", static_cast<double>(c.grain), static_cast<double>(c.speed));
+                d->description = buf;
+            }
+        }
+    }
+    for (const char* id : {"338lm", "455webley"})
+        for (ItemDef& x : L.v)
+            if (x.id == id) {
+                const bool rifle = std::string(id) == "338lm";
+                x.category = rifle ? "Ammo/Rifle, 8mm to .378" : "Ammo/Handgun";
+                x.cartridge_class = rifle ? "rifle" : "handgun";
+                x.caliber = id;
+                x.grain = rifle ? 250.0f : 265.0f;
+                x.cartridge_grain = rifle ? 710.0f : 400.0f;
+                x.speed = rifle ? 905.0f : 190.0f;
+                x.projectile_mass = x.grain / grains_per_kg;
+                x.weight = x.cartridge_grain / grains_per_kg;
+                x.default_variant = "fmj";
+            }
+    for (ItemDef& x : L.v) {
+        if (x.id == "12g_buck" || x.id == "12g_slug" || x.id == "12g_dragon") {
+            x.caliber = "12g";
+            x.category = "Ammo/Shotgun";
+            x.cartridge_class = "shotgun";
+            x.variants = x.id == "12g_buck" ? "buckshot" : x.id == "12g_slug" ? "slug" : "dragons_breath";
+            x.default_variant = x.variants;
+            x.grain = 492.0f;
+            x.cartridge_grain = 713.0f;
+        }
+    }
+}
+
+std::string feed_for(const ItemDef& g) {
+    static const std::set<std::string> detachable = {"awm", "intervention", "svd", "barrett_m82", "aa12"};
+    if (detachable.count(g.id)) return "magazine";
+    const std::string& c = g.category;
+    if (c == "Guns/Revolvers") return "cylinder";
+    if (c == "Guns/Bolt-action rifles" || c == "Guns/Lever-action rifles" || c == "Guns/Shotguns" || c == "Guns/Sniper rifles" || c == "Guns/Launchers") return "internal";
+    if (c == "Guns/Black powder") return "muzzle";
+    if (c == "Guns/Sci-fi") return "pool";
+    if (g.id == "m1_garand" || g.id == "sks") return "internal";
+    if (g.id == "m249" || g.id == "pkm" || g.id == "m60" || g.id == "mg42") return "belt";
+    return "magazine";
+}
+
+void calibers_and_magazines(Library& L) {
+    std::map<std::string, std::string> caliber_of;
+    for (const ItemDef& d : L.v)
+        if (d.kind == K::ammo) caliber_of[d.id] = d.caliber.empty() ? d.id : d.caliber;
+    std::map<std::pair<std::string, int>, std::vector<std::size_t>> groups;
+    for (std::size_t i = 0; i < L.v.size(); ++i) {
+        ItemDef& g = L.v[i];
+        if (g.kind != K::gun) continue;
+        if (g.caliber.empty()) g.caliber = caliber_of.count(g.ammo) ? caliber_of[g.ammo] : g.ammo;
+        if (g.feed.empty()) g.feed = feed_for(g);
+        if (g.caliber == "357") g.also_fires = "ammo_38_special,ammo_38_long_colt,ammo_38_short_colt";
+        if (g.caliber == "556") g.also_fires = "ammo_223_remington,ammo_223_wylde";
+        if (g.caliber == "308") g.also_fires = "762x51";
+        if (g.caliber == "762x51") g.also_fires = "308";
+        if (g.caliber == "45colt") g.also_fires = "ammo_454_casull";
+        if (g.id == "colt_saa" || g.id == "win1873") g.also_fires += std::string(g.also_fires.empty() ? "" : ",") + "4440";
+        if (g.feed == "magazine" || g.feed == "belt") groups[{g.caliber, g.magazine}].push_back(i);
+    }
+    std::vector<ItemDef> mags;
+    for (const auto& [key, guns] : groups) {
+        const ItemDef& first = L.v[guns.front()];
+        ItemDef m;
+        const bool belt = first.feed == "belt";
+        m.id = "mag_" + key.first + "_" + std::to_string(key.second);
+        std::string ammo_name = first.ammo;
+        for (const ItemDef& a : L.v)
+            if (a.id == first.ammo) ammo_name = a.name.substr(0, a.name.find(" ("));
+        if (guns.size() == 1) m.name = first.name + (belt ? " ammo box" : " magazine");
+        else m.name = std::to_string(key.second) + "-round " + ammo_name + (belt ? " box" : " magazine");
+        m.kind = K::magazine;
+        m.category = first.category == "Guns/Pistols" || first.category == "Guns/Submachine guns" ? "Magazines/Pistol and SMG" : belt ? "Magazines/Machine gun boxes" : "Magazines/Rifle";
+        m.magazine = key.second;
+        m.caliber = key.first;
+        m.ammo = first.ammo;
+        for (std::size_t gi : guns) m.fits += (m.fits.empty() ? "" : ",") + L.v[gi].id;
+        const bool drum = key.second >= 50 && !belt;
+        m.shape = belt ? "ammo_box" : drum ? "drum" : first.category == "Guns/Pistols" ? "mag_pistol" : "mag_rifle";
+        m.size = belt || drum ? ItemSize::medium : ItemSize::small;
+        m.grid_w = belt || drum ? 2 : 1;
+        m.grid_h = belt || drum ? 2 : first.category == "Guns/Pistols" ? 1 : 2;
+        m.weight = belt ? 0.5f : drum ? 0.7f : first.category == "Guns/Pistols" ? 0.07f : 0.12f;
+        m.volume = m.weight * 0.6f + 0.05f;
+        m.length = first.category == "Guns/Pistols" ? 0.12f : 0.2f;
+        m.color = Vec3{0.12f, 0.12f, 0.13f};
+        m.accent = Vec3{0.78f, 0.6f, 0.25f};
+        m.description = "Holds " + std::to_string(key.second) + " rounds of " + ammo_name + ".";
+        m.unit = "rounds";
+        mags.push_back(m);
+        for (std::size_t gi : guns) L.v[gi].magazines += (L.v[gi].magazines.empty() ? "" : ",") + m.id;
+    }
+    for (ItemDef& m : mags) L.v.push_back(m);
+}
+
+void enchanted_items(Library& L) {
+    const Vec3 steel{0.75f, 0.76f, 0.78f};
+    ItemDef& ember = L.melee("ember_blade", "Ember blade", "Melee/Enchanted", "sword", 34.0f, "slash", 1.4f, 1.6f, 1.3f, 0.95f, ItemSize::large, {"sharp", "magic"});
+    ember.color = Vec3{0.95f, 0.45f, 0.15f};
+    ember.extra_damage = "fire=10";
+    ember.effects = "burning:4:0.5";
+    ItemDef& storm = L.melee("storm_hammer", "Storm hammer", "Melee/Enchanted", "hammer", 40.0f, "blunt", 0.9f, 1.4f, 4.0f, 0.9f, ItemSize::large, {"blunt", "magic"});
+    storm.color = Vec3{0.45f, 0.6f, 0.95f};
+    storm.extra_damage = "shock=14";
+    storm.effects = "shocked:1.5:0.6, stunned:0.6:0.25";
+    ItemDef& venom = L.melee("venom_dagger", "Venom dagger", "Melee/Enchanted", "dagger", 18.0f, "pierce", 2.6f, 1.0f, 0.3f, 0.3f, ItemSize::small, {"sharp", "magic"});
+    venom.color = Vec3{0.35f, 0.85f, 0.25f};
+    venom.extra_damage = "acid=4";
+    venom.effects = "poison:8:0.8";
+    ItemDef& frost = L.melee("frostbrand", "Frostbrand", "Melee/Enchanted", "longsword", 38.0f, "slash", 1.1f, 1.8f, 1.6f, 1.15f, ItemSize::large, {"sharp", "magic"});
+    frost.color = Vec3{0.7f, 0.9f, 1.0f};
+    frost.extra_damage = "cold=10";
+    frost.effects = "chilled:5:0.8, frozen:1.2:0.15";
+    ItemDef& dragon = L.gun("dragonfire_rifle", "Dragonfire rifle", "Guns/Enchanted", "rifle", 36.0f, 8.0f, 30, "762x39", 715.0f, 0.9f, 4.0f, 0.9f, true, ItemSize::large, 4, 2);
+    dragon.color = Vec3{0.45f, 0.12f, 0.08f};
+    dragon.accent = Vec3{0.85f, 0.6f, 0.2f};
+    dragon.extra_damage = "fire=8";
+    dragon.effects = "burning:3:0.35";
+    ItemDef& tesla = L.gun("arc_pistol", "Arc pistol", "Guns/Enchanted", "pistol", 22.0f, 3.5f, 17, "9mm", 375.0f, 1.6f, 0.8f, 0.2f, false, ItemSize::small, 2, 1);
+    tesla.color = Vec3{0.3f, 0.4f, 0.7f};
+    tesla.extra_damage = "shock=10";
+    tesla.effects = "shocked:1:0.5";
+    auto armor = [&](const char* id, const char* name, const char* slot, float a, float warm, float weight, Vec3 col) -> ItemDef& {
+        return L.wear(id, name, "Armor/Enchanted", slot, slot, a, warm, weight, col, K::armor);
+    };
+    ItemDef& cloak = L.wear("fireward_cloak", "Fireward cloak", "Clothing/Enchanted", "over", "cloak", 0.0f, 4.0f, 1.2f, Vec3{0.6f, 0.15f, 0.1f});
+    cloak.resists = "fire=0.6";
+    cloak.worn_effects = "warm:-1:1:0.5";
+    ItemDef& thorn = armor("thornmail", "Thornmail", "torso", 28.0f, 2.0f, 9.0f, Vec3{0.35f, 0.38f, 0.3f});
+    thorn.thorns_damage = "pierce=6";
+    thorn.thorns = "bleeding:3:0.5";
+    ItemDef& frostplate = armor("frost_plate", "Frost plate", "torso", 40.0f, 8.0f, 14.0f, Vec3{0.75f, 0.88f, 0.95f});
+    frostplate.resists = "cold=0.75, fire=-0.25";
+    frostplate.thorns = "chilled:3:0.6";
+    ItemDef& storm_helm = armor("storm_helm", "Storm helm", "head", 14.0f, 1.0f, 2.0f, steel);
+    storm_helm.resists = "shock=0.8";
+    storm_helm.thorns_damage = "shock=5";
+    ItemDef& acid_boots = armor("acidwalker_boots", "Acidwalker boots", "feet", 6.0f, 2.0f, 1.6f, Vec3{0.3f, 0.5f, 0.25f});
+    acid_boots.resists = "acid=0.8, poison=0.5";
+    ItemDef& ring = L.wear("ring_vigor", "Ring of vigor", "Trinkets", "ring", "ring", 0.0f, 0.0f, 0.01f, Vec3{0.9f, 0.75f, 0.2f}, K::trinket);
+    ring.worn_effects = "regeneration:-1:1:0.5, haste:-1:1:0.3";
+    ItemDef& amulet = L.wear("amulet_warding", "Amulet of warding", "Trinkets", "neck", "amulet", 0.0f, 0.0f, 0.05f, Vec3{0.5f, 0.3f, 0.9f}, K::trinket);
+    amulet.resists = "magic=0.5, shock=0.25, fire=0.25, cold=0.25";
+}
+
 void finish(std::vector<ItemDef>& v) {
     for (ItemDef& d : v) {
-        if (d.grid_w == 1 && d.grid_h == 1 && d.kind != ItemKind::ammo) {
+        if (d.grid_w == 1 && d.grid_h == 1 && d.kind != ItemKind::ammo && d.kind != ItemKind::magazine) {
             switch (d.size) {
             case ItemSize::tiny:
             case ItemSize::small: break;
@@ -1094,7 +1554,12 @@ void finish(std::vector<ItemDef>& v) {
         }
         if (d.weapon() && d.max_stack == 1.0f && d.kind != ItemKind::throwable) d.max_stack = 1.0f;
         if (d.description.empty()) {
-            if (d.kind == ItemKind::gun) d.description = std::to_string(d.magazine) + " rounds of " + d.ammo + (d.automatic ? ", automatic" : "");
+            if (d.kind == ItemKind::gun) {
+                std::string ammo = d.ammo;
+                for (const ItemDef& a : v)
+                    if (a.id == d.ammo) ammo = a.name;
+                d.description = std::to_string(d.magazine) + " rounds of " + ammo + (d.automatic ? ", automatic" : "");
+            }
             else if (d.kind == ItemKind::melee) d.description = d.damage_type + " weapon";
             else if (d.kind == ItemKind::container) d.description = std::to_string(d.slots_w) + "x" + std::to_string(d.slots_h) + " storage";
         }
@@ -1116,6 +1581,11 @@ const std::vector<ItemDef>& item_library() {
         wearables(L);
         storage(L);
         misc_items(L);
+        enchanted_items(L);
+        cartridges(L);
+        gun_table(L);
+        gun_hammers(L);
+        calibers_and_magazines(L);
         finish(L.v);
         return L.v;
     }();

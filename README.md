@@ -514,7 +514,7 @@ Tick **Has an inventory** for players, chests, NPCs or anything that carries thi
 
 The style can be **slots**, **grid**, **weight** (a list limited by weight), **volume** (a list limited by litres) or **pouches** (grouped by kind). You choose the rows, columns, cell size, gap, background opacity, screen position (and a nudge), the title, and the keys that open it (any number, comma separated, or none). **Stacks** are measured by count (whole items, like Minecraft), weight or volume (for liquids and loose things), so amounts can be fractions unless **whole counts** is on. The **stack limit** caps every stack (0 means each item's own limit, and it can't go below 0). The **hotbar** can be off, or have any number of slots, its own position, size and gap, be vertical, use number keys and the mouse wheel. Worn **bags and rigs** show next to the inventory or open with their own key.
 
-While playing, the preset's key opens the inventory (E for Minecraft, Tab for Tarkov, I for Skyrim...). Drag items between cells, panels and chests, right-click to use or wear (or take off), shift-click to send across to an open chest, drag outside the panels to drop, and press a number key over an item to put it on the hotbar. **F** picks up or opens what's in front of you, **G** drops, **R** reloads, **H** holsters and draws, number keys and the wheel pick hotbar slots, **left mouse** uses or attacks and **right mouse** aims or blocks. Every key can be changed per inventory.
+While playing, the preset's key opens the inventory (E for Minecraft, Tab for Tarkov, I for Skyrim...). Items are moved with the **cursor**, like Minecraft: **left click** picks up the whole stack (or puts down everything you're holding, swapping if the cell is taken), **right click** picks up half (or puts down one), **G** with something on the cursor drops it out of the inventory, **R** rotates it, **shift-click** sends a stack across to an open chest or bag, and **shift-right-click** uses or wears it. Dragging still works too. Press a number key over an item to put it on the hotbar. Closing the screen puts anything left on the cursor back. **F** picks up or opens what's in front of you, **G** drops, **R** reloads, **H** holsters and draws, number keys and the wheel pick hotbar slots, **left mouse** uses or attacks and **right mouse** aims or blocks. Every key can be changed per inventory.
 
 ### Clothing, armor, holsters and hands
 
@@ -534,6 +534,96 @@ All of it works in 2D too, aiming at the mouse.
 
 Each item has three **looks**: simple, detailed and realistic. Realistic potions and drinks have liquid inside that sloshes as you move. Item meshes are made for you in `Assets/Models/Items` the first time they're needed; replace those files with your own models if you like.
 
+### Inventory clicks, hovers and keys
+
+What every click does is up to you. The inventory's inspector has a drop-down for the common events (left and right click, with and without something held, middle, shift and ctrl clicks, double click and hover), and **All mouse and key actions** holds every event as text, where any of them can have **shift+** or **ctrl+** in front, **+cursor** at the end for when something is already held, and **key:X** works for any key pressed over an item. The actions are: nothing, pick up all / half / one / the set amount, put down all / one / half / the set amount, drop what's held, drop one, drop the stack, send to the other side, use, wear or take off, hold in the main hand, load or unload a magazine, rotate, split, show details and show the tooltip. **Set amount** is how many "the set amount" means (1 is Minecraft-like). The text (`left_click=pick_all, right_click+cursor=place_one, key:G+cursor=drop_cursor, ...`) can be copied between inventories.
+
+Every click also becomes an event scripts can read with `next_item_event` (or the **Next Inventory Event** node), so a right click can do something of your own. Scripts can click for the player with `inventory_click`, and read or return the cursor with `cursor_item`, `cursor_amount` and `return_cursor`.
+
+### Ammo and magazines
+
+The **Ammo** group has over 300 cartridges: rimfire, handgun, rifle (small, 6/6.5 mm, 7 mm, 8/9 mm, large and dangerous game), shotgun shells in every gauge and length, black powder and historical, specialty and airgun. Each has its real bullet weight in **grains**, its whole-round weight, its speed and other names it goes by. Grains are shown only for the bullet itself; inventories, tooltips and carry weight use your weight unit (grams, kilograms, pounds...), so a box of .50 BMG weighs what it should, and loaded magazines and guns weigh more than empty ones.
+
+Every caliber has **magazines** in its common sizes (`mag_9mm_17`, `mag_556_30`, ...). Guns know their **feed**: detachable magazine, belt, cylinder, internal (tube or box), muzzle-loaded or a shared pool. Guns know what else they fire too: a .357 takes .38 Special, a 5.56 takes .223, and a 12 gauge takes 2¾" and 3" shells.
+
+**Bullet types.** A round can be **FMJ**, **AP**, **HP**, **SP**, **BT**, **OTM**, **Wadcutter** or **Frangible**, plus tracer, incendiary, API, buckshot, birdshot, slug, flechette, dragon's breath, beanbag, rubber, airgun pellets and magic rounds (shock, acid, frost, blessed). Each changes the damage, the armor penetration, the knockback and stagger, the ricochet chance, whether it breaks up on hard things, and the effects it puts on what it hits. Only types that make sense for a cartridge are offered (no hollow-point buckshot). Change any of them, or add your own, with `define_bullet` or the **Define Bullet Type** node.
+
+The **Game** button opens the game's **rules**, which are saved with the scene:
+
+- **Reloading**: *keep* the old magazine with what's left in it, *drop* it on the ground, *discard* it (and the rounds in it), use a *shared pool* of loose rounds (no magazines), or *top up* the magazine in the gun from loose rounds. Inventories can choose their own.
+- **Magazines**: whether reloads fill empty magazines from loose rounds by themselves, whether a round can be kept **in the chamber** (+1), whether to reload when you pull the trigger on empty, and whether loading takes time (shell by shell for tubes, cylinders and muskets).
+- **Magazines in the world**: magazines placed in the editor, in chests or in guns start *full*, *empty*, *partly full* (with a fraction), *random*, or *as placed* (exactly what you set on the pickup). A pickup's **fill** overrides this for that one item.
+- **Default bullet type** for rounds with no type given.
+
+To look ammo up, open any cartridge in the **Items** menu: it shows the grains, which guns fire it, which magazines take it, and every bullet type it comes in, each of which you can drop as one round or a box. Hovering ammo while playing shows the same. Scripts can ask with `ammo_info`, `ammo_fits`, `ammo_count`, and load and unload with `load_magazine`, `unload_magazine`, `unload_weapon`, `choose_ammo`, `give_ammo`, `loaded_ammo`, `loaded_variant` and `loaded_rounds`.
+
+Rounds, piles of rounds, full and empty magazines all have their own model and inventory icon, made for you in `Assets/Models/Items` and `Assets/Textures/Items` the first time they're needed (replace them with your own art if you like).
+
+### Finding guns
+
+There are over 650 guns: pistols, machine pistols, revolvers, derringers, SMGs, PDWs, carbines, assault, battle and semi-auto rifles, marksman and sniper rifles, anti-materiel rifles, bolt-action, straight-pull, lever-action, single-shot and double rifles, rimfire rifles, pump, semi-auto, break-action and drum shotguns, light, general-purpose, heavy and rotary machine guns, grenade and rocket launchers, flare guns, muskets and black-powder pistols, and sci-fi weapons. Each knows its **type**, **action**, **ammo**, **feed**, **fire modes**, **country**, **year** and **maker**.
+
+Right-click → **Items** → **Find a gun** narrows them down: pick **By type**, **By action**, **By ammo it fires**, **By kind of cartridge**, **By how it feeds**, **By fire modes**, **By country**, **By era**, **By maker**, **By capacity** or **By locks open when empty**, and keep adding filters (it shows how many match each choice). Scripts do the same with `find_guns("class=pistol, ammo=9mm, action=semi")`, which can also search by name (`find_guns("garand")`), `min_year`, `max_year`, `min_capacity` and `max_weight`, and `gun_info("glock17")` describes one.
+
+### Gun actions, fire modes and malfunctions
+
+Guns work like their real action:
+
+- **Semi-automatic and automatic** guns throw out a casing every shot. When they run dry, guns whose slide or bolt **locks open** (most pistols, AR-15s, the M1 Garand with its ping) stay open and don't click; reloading drops the slide. Others close on an empty chamber, click when you pull the trigger, and need a rack after the new magazine goes in, so an empty reload takes longer than a tactical one.
+- **Bolt, straight-pull, pump and lever** actions need working after each shot. By default that happens by itself, with the animation and sounds. Turn on **Work actions and hammers by hand** in the **Game** rules and you do it yourself (R, or pulling the trigger again); any gun can override this with its `cycle` setting (`auto` or `manual`). Loading tubes and internal magazines goes shell by shell, and a pump or lever gun loaded from empty gets worked at the end.
+- **Hammers**: single-action revolvers (Colt SAA, Schofield, cap-and-ball revolvers), hammer shotguns (coach guns, sawed-offs, single barrels), falling-block and trapdoor rifles, derringers and flare guns need the hammer pulled back before each shot. With **Cock double-action revolvers before each shot** on, double-action revolvers do too, and get a lighter, more accurate pull when cocked. Any gun can be given a hammer with `hammer: true`.
+- **Revolvers** swing the cylinder out, eject, load round by round and close; **break actions** open, drop the shells and close; **belt-fed** guns open the feed cover, lay the belt and charge; **muzzle-loaders** pour powder, ram the ball and cock the hammer, so they're ready to fire after loading (or wait for you to cock them).
+- **Fire modes**: guns with more than one (semi, burst, auto) switch with **X** (each inventory sets its own key). Bursts fire their count (3, or 2 for the AN-94). Turn on **Automatic guns also get a 5-round burst mode** and every automatic gun gets a **5-round burst** as well; scripts can pick any size with `burst5`, `burst4` and so on.
+- **Malfunctions**: turn on **Guns can jam** and worn guns sometimes jam; R (or the trigger) clears it and you lose the stuck round.
+
+Every step has its own sound (slide rack, slide release, magazine out and in, bolt, pump, lever, hammer, cylinder, ejector, break open and close, feed cover, belt, ramrod, selector, jam) and its own animation for the held gun. Suppressed guns are quieter to people and AI. Spent casings and shells bounce out with a sound that depends on what they land on. Scripts use `gun_state` (ready, spent, open, unchambered, jammed, cycling, reloading, empty), `cycle_weapon`, `fire_mode`, `set_fire_mode` and `next_fire_mode`; the Grapher has nodes for each. Each gun can set `sound_cycle` and `sound_empty` to use its own sounds.
+
+### Effects and magic on weapons and armor
+
+Weapons, bullets, arrows and thrown things can carry **effects** (`burning:3:0.5`, meaning the effect, how long and how strong) and **extra damage** of other types (`fire=5, shock=3`), so a blade can set people on fire, a round can shock them, and a dagger can drip acid. Any single item can also be **enchanted** on its own (`enchant_item`, or **Enchantment** on a pickup), so one sword in a chest can be special without changing all of them. Enchanted items have a glowing frame in the inventory.
+
+Clothing and armor can have **worn effects** (given to whoever wears them, like regeneration), **resistances** to damage types (`fire=0.5` takes half fire damage), and **thorns** that hurt whoever hits the wearer. The library has examples: Ember Blade, Storm Hammer, Venom Dagger, Frostbrand, Dragonfire Rifle, Arc Pistol, Fireward Cloak, Thornmail, Frost Plate, Storm Helm, Acidwalker Boots, Ring of Vigor and Amulet of Warding.
+
+### Ground, surfaces and walking
+
+Everything you walk on or shoot has a **surface**: concrete, asphalt, stone, brick, tile, thick metal, sheet metal, wood, drywall, glass, plastic, rubber, carpet, dirt, grass, leaves, gravel, sand, mud, snow, deep snow, ice, shallow and deep water, tall grass, shrubs, crops, sandbags, cloth and flesh. Colliders, terrain layers and terrain scatter each have a **Surface** setting; left on *guess*, it is worked out from the texture, material, model or name (a "Steel crate" is metal, `builtin:snow` is snow).
+
+**Walking.** Snow, deep snow, mud, sand and gravel slow you down; wading through shallow or deep water, tall grass, bushes and crops does too, and makes you tire faster; ice is slippery. You decide how much in the **Game** rules: turn it all off, scale it all (**How strong that is**, as a percentage), or set each one as a percentage (`80%`), a multiplier (`0.8`) or metres a second taken off (`-1.2`). Scripts can override any character with `set_ground_speed(self, "50%")` (empty to clear), read `ground_speed`, `surface_under` and `wading_in`, and change any surface with `define_surface("snow", "walk", "70%")`. Worn items can make it easier with `surface_ease` (snowshoes: `snow=1, deep_snow=0.8`). Weather counts too: snowfall turns the ground to snow and heavy rain turns dirt to mud (a rule).
+
+**Footsteps** play a sound for the surface (or what you're wading through), quieter crouching and louder sprinting, on gravel, metal or leaves; AI hears them from **How far AI hears footsteps**. Snow, sand, mud and water kick up a little puff or splash.
+
+**Bullets** hit differently too: metal and stone throw sparks and ricochet at shallow angles, wood and glass let strong rounds through (slowing them), sand, dirt and sandbags stop them, and water slows bullets to a stop within a few metres (they can skip off it at a shallow angle). Each surface has its own impact effect and sound. Every number (ricochet chance and angle, how hard it is to go through, how much it slows bullets, footstep loudness, walking speed, jump, stamina, slipperiness, sounds and effects) can be changed per surface, and new surfaces can be made.
+
+### Trees and plants
+
+Right-click → **Trees and plants** adds oak, maple (green or autumn), birch, willow, pine, spruce, fir, palm, bush, fern and tall grass, each **simple**, **detailed** or **realistic**. Simple ones are low-poly coloured shapes like the trees Orchard had before (cones for conifers, round crowns for broadleaf trees), the fastest to draw. The old **Forest** terrain preset still uses the original simple tree, pine and bush. Realistic plants have every leaf as its own shape (oak lobes, maple points, birch and willow leaves), needles in sprigs, palm and fern fronds with leaflets and grass with separate blades; detailed ones use fewer, bigger leaves for big forests. Trunks and branches are textured with generated bark (oak, maple, birch, pine, spruce, palm) and bump maps, and leaves have their own vein textures.
+
+Leaves **let light through**: with the sun behind them they glow, the way leaves do. Any material can do the same with **Lets light through** (there are leaf, paper, cloth and wax presets). Trees get a trunk collider; bushes, ferns and grass get a sensor with their surface, so you can walk into them and they slow you. The models are written to `Assets/Models/Plants` the first time they're used.
+
+New terrain presets use them: **Woodland**, **Pine forest**, **Snowy forest**, **Meadow** and **Tropical island**. Scatter any of them on your own terrain with `Assets/Models/Plants/oak-realistic.glb` and the rest. A terrain's **Look of the scattered plants** switches all its plants between simple, detailed and realistic at once.
+
+**Wind.** Trees, bushes, ferns and grass sway in the wind of the weather around the camera: the trunk bends more towards the top, each plant moves on its own, gusts push harder now and then, and leaves flutter. Their shadows sway with them. Stronger wind sways them further and faster. Turn it off with **Trees, bushes and grass sway in the wind** in the world settings. Your own models can sway too: give a glTF material `"extras": {"wind": 0.2, "windHeight": 8, "windFlutter": 0.03}` (metres of sway at the top in strong wind, the model's height, and leaf flutter).
+
+**See-through shadows.** Shadows follow a texture's cut-out parts, so a leaf card, a chain-link fence or pine needle sprays (which now have gaps between the needles) cast shadows with holes in them, from the sun and from lamps.
+
+### Weight and encumbrance
+
+Two rules decide what counts toward carry weight: **worn clothes and armor** and **what's in the hands**. Each inventory can turn worn weight off for itself too. With both off only what's carried in the inventory and bags matters. Heavier loads slow you down and tire you faster, as before.
+
+### Sounds and animations
+
+Guns, bows, melee, magic, magazines, bolts, cylinders, shells, eating, drinking, bandaging, equipping, throwing and picking up all make sounds, and held items move: guns kick when they fire, the hand dips and rolls during reloads, weapons swing, bows draw, and aiming brings the weapon up. Every item has its own sound settings (`sound_fire`, `sound_reload`, `sound_aim`, `sound_use`) and you can play any with `play_item_sound`. The sounds are made for you in `Assets/Sounds/Items` the first time they're played; replace them with your own. Gunshots are heard by AI from a distance set by **gun loudness**. Both can be turned off in the rules.
+
+### Look-at info and nameplates
+
+Turn on **Look-at info** in the rules and looking at something shows a box with what it is, like Jade in Minecraft. You choose the range, where the box sits, whether it shows for items on the ground and for things without health (walls, props), and what it says, written as lines with tokens: `{name}`, `{source}` (where it's from: the library, a prefab or custom), `{category}`, `{health}`, `{max_health}`, `{health_bar}`, `{shield}`, `{shield_bar}`, `{armor}`, `{effects}`, `{item}` (what they hold), `{amount}`, `{loaded}`, `{ammo}`, `{distance}`, `{stamina}`, `{hunger}`, `{thirst}`, `{tags}`, `{inventory}`, `{stat:anything}` and `{bar:anything}` for any stat as a bar, and `{info}` for text a script sets with `set_look_info`. Lines that come out empty are left out, so custom things show what they have.
+
+**Nameplates** float above characters' heads with their own lines (the name and a health bar by default), a range, a height, and when to show them: always, only once hurt, only when looked at, or when hurt or looked at. Turn **Nameplates** off in the rules to hide them, or on for the player and items on the ground too. Scripts can make the same text with `describe(entity, "{name} {health}")`.
+
+Script functions for guns and ground: `find_guns`, `gun_info`, `gun_state`, `cycle_weapon`, `fire_mode`, `set_fire_mode`, `next_fire_mode`, `surface_under`, `surface_at`, `wading_in`, `ground_speed`, `set_ground_speed`, `define_surface`, `surface_setting` and `set_surface`. The Grapher has them in **Weapons** and a new **Ground** group.
+
+Script functions for ammo and items: `load_magazine`, `unload_magazine`, `unload_weapon`, `choose_ammo`, `loaded_ammo`, `loaded_variant`, `loaded_rounds`, `give_ammo`, `ammo_count`, `ammo_info`, `ammo_fits`, `bullet_setting`, `define_bullet`, `game_rule`, `set_game_rule`, `inventory_click`, `cursor_item`, `cursor_amount`, `return_cursor`, `next_item_event`, `describe`, `set_look_info`, `enchant_item`, `play_item_sound` and `worn_resist`. The **Grapher** has an **Ammo** group and new nodes in **Items** and **Game** for each.
+
 ### Weather and climate
 
 Right-click → **Weather and climate zones** adds weather that covers the whole world or a box you can move and size. Presets: clear, warm, hot, heatwave, cool, cold, freezing, breeze, windy, gale, rain, storm, thunderstorm, drizzle, snow, blizzard, fog, sandstorm (or custom). A zone has a temperature (set, or added to the world's), wind with gusts, rain, snow, fog, humidity and lightning, and a **lifetime**: it can wait, build up, last a while (or forever), die down, start again, or switch to another preset after. Zones fade out over their edge and the higher priority wins where they overlap. Weather warms or chills bodies (wind chill, clothing warmth), pushes light things and bullets with the wind, makes people **wet** unless they're sheltered or wearing something waterproof, and shows rain, snow and lightning.
@@ -550,7 +640,7 @@ Any entity can have a **particle emitter**: sparks, smoke, fire, flames, explosi
 
 **Effects** are several emitters (and a light) put together, like GMod's: right-click → **Particles** → **Effects**, or `play_effect` from a script. Explosion (small and big too: a flash, fireball, flames, black smoke, sparks, debris, embers, a shockwave and dust, with a light that fades), fire, campfire, inferno, torch, burning (fire over all of an entity's colliders), steam vent, welding sparks, electric zap, smoke grenade, muzzle flash, impact and splash. One-shot effects clean themselves up when a script plays them.
 
-Every emitter has a **Look**: **Plain** (soft dots, the cheapest), **Simple** (the look particles had before: puffy smoke and steam, the animated fire flipbook, an explosion that adds light) or **Better** (soft smoke, thin steam wisps, flame tongues, an explosion that covers what's behind it so it stays orange against a bright sky). Select an effect's group entity to switch all its emitters at once.
+The world settings have **Look of every particle effect**, which puts every emitter (including bullet impacts and weather) on Simple, Better or Plain at once, or leaves each as it's set. Every emitter has a **Look**: **Plain** (soft dots, the cheapest), **Simple** (the look particles had before: puffy smoke and steam, the animated fire flipbook, an explosion that adds light) or **Better** (soft smoke, thin steam wisps, flame tongues, an explosion that covers what's behind it so it stays orange against a bright sky). Select an effect's group entity to switch all its emitters at once.
 
 Explosions leave a **scorch mark** like GMod's: a black burn on the floor under the blast (it skips the thing that blew up and anything moving, and only marks floors, not walls). Fires leave a smaller one under them. Marks last five minutes and then fade. It's a `scorch` preset with **Lies flat on the ground** ticked, so it can also be used on its own: `play_effect("scorch", point)` or right-click → Particles → Effects → Scorch mark. Things that burn also slowly char darker.
 

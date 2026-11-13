@@ -647,12 +647,12 @@ std::string terrain_lines(std::size_t n, const Terrain& t) {
         out += "terrain-layer " + id;
         if (!l.texture.empty()) out += " texture:" + escape(l.texture);
         if (!l.normal_map.empty()) out += " normal-map:" + escape(l.normal_map);
-        out += " color:" + vec(l.color) + " tiling:" + num(l.tiling) + " min-height:" + num(l.min_height) + " max-height:" + num(l.max_height) + " min-slope:" + num(l.min_slope) + " max-slope:" + num(l.max_slope) + " blend:" + num(l.blend) + "\n";
+        out += " color:" + vec(l.color) + " tiling:" + num(l.tiling) + " min-height:" + num(l.min_height) + " max-height:" + num(l.max_height) + " min-slope:" + num(l.min_slope) + " max-slope:" + num(l.max_slope) + " blend:" + num(l.blend) + (l.surface.empty() ? std::string() : " surface:" + escape(l.surface)) + "\n";
     }
     for (const TerrainScatter& s : t.scatter) {
         out += "terrain-scatter " + id;
         if (!s.model.empty()) out += " model:" + escape(s.model);
-        out += " density:" + num(s.density) + " min-scale:" + num(s.min_scale) + " max-scale:" + num(s.max_scale) + " min-height:" + num(s.min_height) + " max-height:" + num(s.max_height) + " max-slope:" + num(s.max_slope) + " align:" + (s.align_to_slope ? "1" : "0") + " collide:" + (s.collide ? "1" : "0") + " draw-distance:" + num(s.draw_distance) + " seed:" + std::to_string(s.seed) + "\n";
+        out += " density:" + num(s.density) + " min-scale:" + num(s.min_scale) + " max-scale:" + num(s.max_scale) + " min-height:" + num(s.min_height) + " max-height:" + num(s.max_height) + " max-slope:" + num(s.max_slope) + " align:" + (s.align_to_slope ? "1" : "0") + " collide:" + (s.collide ? "1" : "0") + " draw-distance:" + num(s.draw_distance) + " seed:" + std::to_string(s.seed) + (s.surface.empty() ? std::string() : " surface:" + escape(s.surface)) + "\n";
     }
     return out;
 }
@@ -697,6 +697,7 @@ bool read_terrain_line(const std::string& kind, std::istringstream& row, Terrain
             else if (key == "min-slope") layer.min_slope = to_float(v, layer.min_slope);
             else if (key == "max-slope") layer.max_slope = to_float(v, layer.max_slope);
             else if (key == "blend") layer.blend = to_float(v, layer.blend);
+            else if (key == "surface") layer.surface = unescape(v);
         } else {
             if (key == "model") scatter.model = unescape(v);
             else if (key == "density") scatter.density = to_float(v, scatter.density);
@@ -709,6 +710,7 @@ bool read_terrain_line(const std::string& kind, std::istringstream& row, Terrain
             else if (key == "collide") scatter.collide = to_bool(v);
             else if (key == "draw-distance") scatter.draw_distance = to_float(v, scatter.draw_distance);
             else if (key == "seed") scatter.seed = to_u32(v);
+            else if (key == "surface") scatter.surface = unescape(v);
         }
     }
     if (kind == "terrain-layer") t.layers.push_back(layer);
@@ -726,7 +728,7 @@ const std::vector<std::string>& terrain_generators() {
 }
 
 const std::vector<std::string>& terrain_presets() {
-    static const std::vector<std::string> all = {"flat", "hills", "mountains", "islands", "canyons", "dunes", "forest"};
+    static const std::vector<std::string> all = {"flat", "hills", "mountains", "islands", "canyons", "dunes", "forest", "woodland", "pine-forest", "meadow", "tropical", "snowy-forest"};
     return all;
 }
 
@@ -838,6 +840,54 @@ Terrain terrain_preset(const std::string& name) {
         bushes.draw_distance = 120.0f;
         bushes.seed = 4;
         t.scatter = {trees, pines, rocks, bushes};
+    } else if (name == "woodland" || name == "pine-forest" || name == "meadow" || name == "tropical" || name == "snowy-forest") {
+        auto plant = [](const std::string& model, float density, float lo, float hi, float slope, bool collide, float draw, std::uint32_t seed, const std::string& surface) {
+            TerrainScatter sc;
+            sc.model = "Assets/Models/Plants/" + model + ".glb";
+            sc.density = density;
+            sc.min_scale = lo;
+            sc.max_scale = hi;
+            sc.max_slope = slope;
+            sc.collide = collide;
+            sc.draw_distance = draw;
+            sc.seed = seed;
+            sc.surface = surface;
+            return sc;
+        };
+        t.generator = name == "tropical" ? "islands" : "hills";
+        t.size = name == "tropical" ? Vec3{400.0f, 40.0f, 400.0f} : Vec3{300.0f, 30.0f, 300.0f};
+        t.resolution = 257;
+        t.roughness = 0.4f;
+        if (name == "woodland") {
+            t.layers = {grass, dirt, rock};
+            t.layers[1].surface = "leaves";
+            t.scatter = {plant("oak-detailed", 0.003f, 0.8f, 1.3f, 25.0f, true, 400.0f, 11, ""), plant("maple-detailed", 0.002f, 0.8f, 1.2f, 25.0f, true, 400.0f, 12, ""), plant("birch-detailed", 0.002f, 0.8f, 1.2f, 25.0f, true, 400.0f, 13, ""),
+                         plant("bush-detailed", 0.008f, 0.7f, 1.3f, 30.0f, false, 150.0f, 14, "shrubs"), plant("fern-realistic", 0.02f, 0.7f, 1.3f, 30.0f, false, 60.0f, 15, "shrubs"), plant("grass-realistic", 0.06f, 0.7f, 1.3f, 30.0f, false, 40.0f, 16, "tall_grass")};
+        } else if (name == "pine-forest" || name == "snowy-forest") {
+            const bool snowy = name == "snowy-forest";
+            TerrainLayer floor = snowy ? snow : dirt;
+            floor.min_height = 0.0f;
+            floor.max_height = 1.0f;
+            floor.min_slope = 0.0f;
+            floor.max_slope = 90.0f;
+            floor.surface = snowy ? "snow" : "leaves";
+            TerrainLayer cliffs = rock;
+            t.layers = {floor, cliffs};
+            t.scatter = {plant("pine-detailed", 0.004f, 0.8f, 1.3f, 30.0f, true, 500.0f, 21, ""), plant("spruce-detailed", 0.004f, 0.7f, 1.3f, 30.0f, true, 500.0f, 22, ""), plant("fir-detailed", 0.002f, 0.7f, 1.2f, 30.0f, true, 500.0f, 23, "")};
+            if (!snowy) t.scatter.push_back(plant("fern-realistic", 0.015f, 0.7f, 1.2f, 30.0f, false, 60.0f, 24, "shrubs"));
+        } else if (name == "meadow") {
+            t.roughness = 0.3f;
+            t.layers = {grass};
+            t.scatter = {plant("grass-realistic", 0.2f, 0.7f, 1.4f, 35.0f, false, 50.0f, 31, "tall_grass"), plant("oak-realistic", 0.0003f, 0.9f, 1.3f, 20.0f, true, 600.0f, 32, ""), plant("bush-realistic", 0.002f, 0.7f, 1.2f, 30.0f, false, 200.0f, 33, "shrubs")};
+        } else {
+            t.layers = {sand, grass, rock};
+            t.layers[0].max_height = 1.0f;
+            t.layers[1].min_height = 0.12f;
+            TerrainScatter palms = plant("palm-detailed", 0.003f, 0.8f, 1.3f, 25.0f, true, 500.0f, 41, "");
+            palms.max_height = 0.5f;
+            t.scatter = {palms, plant("fern-detailed", 0.01f, 0.8f, 1.5f, 30.0f, false, 100.0f, 42, "shrubs")};
+            t.scatter.back().min_height = 0.15f;
+        }
     } else {
         t.generator = "hills";
         t.size = {200.0f, 25.0f, 200.0f};
@@ -1679,6 +1729,7 @@ std::vector<ScatterInstance> scatter_instances(const Terrain& t, const TerrainHe
                 inst.scale = lerpf(lo_scale, hi_scale, unit(r3));
                 inst.collide = sc.collide;
                 inst.draw_distance = sc.draw_distance;
+                inst.surface = sc.surface;
                 out.push_back(std::move(inst));
                 if (out.size() >= limit) return out;
             }

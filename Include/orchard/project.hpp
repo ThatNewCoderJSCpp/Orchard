@@ -56,6 +56,8 @@ struct PhysicsSettings {
     int fluid_quality = 1;
     int particle_budget = 60000;
     int particle_quality = 1;
+    std::string particle_look;
+    bool plant_sway = true;
 
     static PhysicsSettings preset(PhysicsQuality q);
     bool operator==(const PhysicsSettings& o) const;

@@ -46,6 +46,7 @@ public:
     void sync(const Scene& scene, Vec3 up, bool running);
     void command(Entity e, int action, int count);
     void reset();
+    void set_look(const std::string& look);
     void step_3d(double dt, const fizmo::graphics::Camera3D& camera);
     void step_2d(double dt, float left, float bottom, float right, float top);
     std::size_t draw_3d(fizmo::graphics::Renderer& renderer);

@@ -23,6 +23,7 @@ struct TerrainLayer {
     float max_slope = 90.0f;
     float blend = 0.1f;
     float min_slope = 0.0f;
+    std::string surface;
 };
 
 struct TerrainScatter {
@@ -37,6 +38,7 @@ struct TerrainScatter {
     bool collide = true;
     float draw_distance = 300.0f;
     std::uint32_t seed = 1;
+    std::string surface;
 };
 
 struct Terrain {
@@ -223,6 +225,7 @@ struct ScatterInstance {
     float scale = 1.0f;
     bool collide = true;
     float draw_distance = 300.0f;
+    std::string surface;
 };
 
 std::vector<ScatterInstance> scatter_instances(const Terrain& t, const TerrainHeights& h, std::size_t limit = 250000);

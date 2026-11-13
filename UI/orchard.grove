@@ -63,6 +63,7 @@
                 <text id="trace-info" class="muted hidden"></text>
                 <button id="axes-open" class="ghost axes-open" title="Pick which way is up, flip axes and see what it looks like">Axes: y-up</button>
                 <button id="physics-open" class="ghost" title="How friction and bounce mix when two colliders touch">Physics</button>
+                <button id="game-open" class="ghost" title="Rules for the whole game: ammo and magazines, weight, the look-at panel, name plates, sounds">Game</button>
                 <div class="grow"></div>
                 <text id="mode" class="mode muted"></text>
                 <button id="play" class="primary">&#9654; Play</button>

@@ -288,7 +288,7 @@ bool PhysicsSettings::operator==(const PhysicsSettings& o) const {
         && soft_solver == o.soft_solver && octree == o.octree && threads == o.threads && wide_solver == o.wide_solver && deterministic == o.deterministic
         && reuse_contacts == o.reuse_contacts && spin_aware_ccd == o.spin_aware_ccd && soft_substeps == o.soft_substeps && contact_hertz == o.contact_hertz
         && contact_damping == o.contact_damping && joint_hertz == o.joint_hertz && push_speed == o.push_speed && settle == o.settle
-        && fluid_level == o.fluid_level && fluid_quality == o.fluid_quality && particle_budget == o.particle_budget && particle_quality == o.particle_quality;
+        && fluid_level == o.fluid_level && fluid_quality == o.fluid_quality && particle_budget == o.particle_budget && particle_quality == o.particle_quality && particle_look == o.particle_look && plant_sway == o.plant_sway;
 }
 
 const char* to_string(LightingLevel q) {
@@ -425,6 +425,8 @@ std::string Project::write_info(const ProjectInfo& info) {
     num("fluid-quality", ph.fluid_quality, base.fluid_quality, all);
     num("particle-budget", ph.particle_budget, base.particle_budget, all);
     num("particle-quality", ph.particle_quality, base.particle_quality, all);
+    if (ph.particle_look != base.particle_look || (all && !ph.particle_look.empty())) out += "    particle-look: " + ph.particle_look + ";\n";
+    if (ph.plant_sway != base.plant_sway || all) out += std::string("    plant-sway: ") + (ph.plant_sway ? "on" : "off") + ";\n";
     out += "}\n";
     const LightingProject& li = info.lighting;
     out += "\nlighting {\n";
@@ -537,6 +539,11 @@ std::optional<ProjectInfo> Project::read_info(const std::string& text, std::stri
                 ph.particle_budget = std::clamp(std::atoi(value.c_str()), 100, 2000000);
             } else if (key == "particle-quality") {
                 ph.particle_quality = std::clamp(std::atoi(value.c_str()), 0, 3);
+            } else if (key == "plant-sway") {
+                ph.plant_sway = value == "on" || value == "true" || value == "1" || value == "yes";
+            } else if (key == "particle-look") {
+                if (value != "simple" && value != "better" && value != "plain" && !value.empty()) return fail("particle-look must be simple, better or plain");
+                ph.particle_look = value;
             }
             continue;
         }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(orchard VERSION 3.0.0 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
+project(orchard VERSION 3.1.0 DESCRIPTION "Orchard: a light, fast 2D and 3D game engine and editor built with Fizmo, Grove and Walnut" LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -7,13 +7,18 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(ORCHARD_X86_SSE_MATH "On 32-bit x86, do float math with SSE2 like every other platform instead of the x87 unit, so physics gives the same answers" ON)
+if(ORCHARD_X86_SSE_MATH AND CMAKE_SIZEOF_VOID_P EQUAL 4 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86|X86|x86_64|AMD64|amd64)$" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+    add_compile_options(-msse2 -mfpmath=sse)
+endif()
+
 option(ORCHARD_BUILD_EDITOR "Build the Orchard editor (fetches Fizmo, Grove and Walnut); turn off to build only Heartwood and its tests" ON)
 option(ORCHARD_BUILD_TESTS "Build the Orchard tests" ON)
 option(ORCHARD_BUILD_XYLEM "Build Xylem, Orchard's physics (fetches Fizmo)" ON)
 option(ORCHARD_BUILD_CHLOROPHYLL "Build Chlorophyll, Orchard's lighting (fetches Fizmo)" ON)
 option(ORCHARD_BUNDLE "Run orchard-host --bundle as part of the build to make orchard with its window built in (turn off when cross-compiling)" ON)
 option(ORCHARD_PACKAGE "Link orchard so it runs on machines without the build's C++ runtime, for release downloads" OFF)
-set(ORCHARD_FIZMO_TAG "v1.4.5" CACHE STRING "Fizmo git tag to fetch")
+set(ORCHARD_FIZMO_TAG "v1.4.6" CACHE STRING "Fizmo git tag to fetch")
 set(ORCHARD_GROVE_TAG "v1.1.3" CACHE STRING "Grove git tag to fetch")
 set(ORCHARD_WALNUT_TAG "v1.2.2" CACHE STRING "Walnut git tag to fetch")
 set(ORCHARD_ANDROID_LIBS_DIR "${CMAKE_BINARY_DIR}/android-libs" CACHE PATH "Where the Android build puts <abi>/liborchard_android.so for grove build --runtime-lib")
@@ -53,6 +58,11 @@ add_library(orchard_heartwood STATIC
     Source/orchard/hud.cpp
     Source/orchard/climate.cpp
     Source/orchard/combat.cpp
+    Source/orchard/ammo_play.cpp
+    Source/orchard/guns.cpp
+    Source/orchard/surfaces.cpp
+    Source/orchard/ground.cpp
+    Source/orchard/item_sounds.cpp
     Source/orchard/terrain.cpp
     Source/orchard/project.cpp
     Source/orchard/graph.cpp
@@ -239,7 +249,7 @@ if(NOT ORCHARD_BUILD_EDITOR)
 endif()
 
 if(ANDROID)
-    add_library(orchard_android SHARED Editor/orchard.cpp Editor/gpu_view.cpp Editor/graph_view.cpp Editor/particle_view.cpp Editor/terrain_view.cpp Editor/particle_textures.cpp Editor/model_view.cpp Editor/builtin_models.cpp Editor/axes_preview.cpp Editor/sound_player.cpp)
+    add_library(orchard_android SHARED Editor/orchard.cpp Editor/gpu_view.cpp Editor/graph_view.cpp Editor/particle_view.cpp Editor/terrain_view.cpp Editor/particle_textures.cpp Editor/model_view.cpp Editor/builtin_models.cpp Editor/plant_models.cpp Editor/axes_preview.cpp Editor/sound_player.cpp)
     target_link_libraries(orchard_android PRIVATE orchard_heartwood orchard_xylem orchard_chlorophyll grove::core grove::runtime)
     target_link_options(orchard_android PRIVATE
         "LINKER:-z,max-page-size=16384"
@@ -253,7 +263,7 @@ if(ANDROID)
     return()
 endif()
 
-add_executable(orchard-host Editor/orchard.cpp Editor/gpu_view.cpp Editor/graph_view.cpp Editor/particle_view.cpp Editor/terrain_view.cpp Editor/particle_textures.cpp Editor/model_view.cpp Editor/builtin_models.cpp Editor/axes_preview.cpp Editor/sound_player.cpp)
+add_executable(orchard-host Editor/orchard.cpp Editor/gpu_view.cpp Editor/graph_view.cpp Editor/particle_view.cpp Editor/terrain_view.cpp Editor/particle_textures.cpp Editor/model_view.cpp Editor/builtin_models.cpp Editor/plant_models.cpp Editor/axes_preview.cpp Editor/sound_player.cpp)
 target_link_libraries(orchard-host PRIVATE orchard_heartwood orchard_xylem orchard_chlorophyll grove::core grove::runtime)
 target_compile_definitions(orchard-host PRIVATE "ORCHARD_SOURCE_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/UI\"")
 orchard_warnings(orchard-host)

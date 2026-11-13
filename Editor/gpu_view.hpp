@@ -48,6 +48,8 @@ struct GpuViewOptions {
     bool particles_running = false;
     int particle_budget = 60000;
     int particle_quality = 1;
+    std::string particle_look;
+    bool plant_sway = true;
     bool show_bones = true;
     bool ambient_occlusion = true;
     int lighting_quality = 1;

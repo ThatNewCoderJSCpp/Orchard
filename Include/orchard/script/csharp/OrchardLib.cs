@@ -232,5 +232,45 @@ namespace Orchard
         public static double RainAt(double x, double y, double z) => Native.Game(481, 0, 0, "", new double[] {x, y, z});
         public static double SnowAt(double x, double y, double z) => Native.Game(482, 0, 0, "", new double[] {x, y, z});
         public static bool IsSheltered(double x, double y, double z) => Native.Game(483, 0, 0, "", new double[] {x, y, z}) != 0.0;
+        public static double LoadMagazine(Entity target, string list, double index) => Native.Game(490, target?.Id ?? 0, 0, J(list), new double[] {index});
+        public static double UnloadMagazine(Entity target, string list, double index) => Native.Game(491, target?.Id ?? 0, 0, J(list), new double[] {index});
+        public static bool UnloadWeapon(Entity target) => Native.Game(492, target?.Id ?? 0, 0, "", new double[] {}) != 0.0;
+        public static bool ChooseAmmo(Entity target, string ammo, string variant = "") => Native.Game(493, target?.Id ?? 0, 0, J(ammo, variant), new double[] {}) != 0.0;
+        public static string LoadedAmmo(Entity target) => Native.GameText(494, target?.Id ?? 0, 0, "", new double[] {});
+        public static string LoadedVariant(Entity target) => Native.GameText(495, target?.Id ?? 0, 0, "", new double[] {});
+        public static double LoadedRounds(Entity target) => Native.Game(496, target?.Id ?? 0, 0, "", new double[] {});
+        public static double GiveAmmo(Entity target, string ammo, string variant, double amount) => Native.Game(497, target?.Id ?? 0, 0, J(ammo, variant), new double[] {amount});
+        public static double AmmoCount(Entity target, string ammo, string variant = "") => Native.Game(498, target?.Id ?? 0, 0, J(ammo, variant), new double[] {});
+        public static string AmmoInfo(string item) => Native.GameText(499, 0, 0, J(item), new double[] {});
+        public static bool AmmoFits(string gun, string ammo) => Native.Game(500, 0, 0, J(gun, ammo), new double[] {}) != 0.0;
+        public static string BulletSetting(string variant, string setting) => Native.GameText(501, 0, 0, J(variant, setting), new double[] {});
+        public static bool DefineBullet(string variant, string setting, string value) => Native.Game(502, 0, 0, J(variant, setting, value), new double[] {}) != 0.0;
+        public static string GameRule(string rule) => Native.GameText(503, 0, 0, J(rule), new double[] {});
+        public static bool SetGameRule(string rule, string value) => Native.Game(504, 0, 0, J(rule, value), new double[] {}) != 0.0;
+        public static bool InventoryClick(Entity target, Entity other, string list, double index, string action) => Native.Game(505, target?.Id ?? 0, other?.Id ?? 0, J(list, action), new double[] {index}) != 0.0;
+        public static string CursorItem(Entity target) => Native.GameText(506, target?.Id ?? 0, 0, "", new double[] {});
+        public static double CursorAmount(Entity target) => Native.Game(507, target?.Id ?? 0, 0, "", new double[] {});
+        public static bool ReturnCursor(Entity target) => Native.Game(508, target?.Id ?? 0, 0, "", new double[] {}) != 0.0;
+        public static string NextItemEvent(Entity target) => Native.GameText(509, target?.Id ?? 0, 0, "", new double[] {});
+        public static string Describe(Entity target, string lines) => Native.GameText(510, target?.Id ?? 0, 0, J(lines), new double[] {});
+        public static void SetLookInfo(Entity target, string text) { Native.Game(511, target?.Id ?? 0, 0, J(text), new double[] {}); }
+        public static bool EnchantItem(Entity target, string list, double index, string enchant) => Native.Game(512, target?.Id ?? 0, 0, J(list, enchant), new double[] {index}) != 0.0;
+        public static void PlayItemSound(string name, double x, double y, double z) { Native.Game(513, 0, 0, J(name), new double[] {x, y, z}); }
+        public static double WornResist(Entity target, string damage_type) => Native.Game(514, target?.Id ?? 0, 0, J(damage_type), new double[] {});
+        public static string FindGuns(string filter) => Native.GameText(515, 0, 0, J(filter), new double[] {});
+        public static string GunInfo(string item) => Native.GameText(516, 0, 0, J(item), new double[] {});
+        public static string GunState(Entity target) => Native.GameText(517, target?.Id ?? 0, 0, "", new double[] {});
+        public static bool CycleWeapon(Entity target) => Native.Game(518, target?.Id ?? 0, 0, "", new double[] {}) != 0.0;
+        public static string FireMode(Entity target) => Native.GameText(519, target?.Id ?? 0, 0, "", new double[] {});
+        public static bool SetFireMode(Entity target, string mode) => Native.Game(520, target?.Id ?? 0, 0, J(mode), new double[] {}) != 0.0;
+        public static bool NextFireMode(Entity target) => Native.Game(521, target?.Id ?? 0, 0, "", new double[] {}) != 0.0;
+        public static string SurfaceUnder(Entity target) => Native.GameText(522, target?.Id ?? 0, 0, "", new double[] {});
+        public static string SurfaceAt(double x, double y, double z) => Native.GameText(523, 0, 0, "", new double[] {x, y, z});
+        public static string WadingIn(Entity target) => Native.GameText(524, target?.Id ?? 0, 0, "", new double[] {});
+        public static double GroundSpeed(Entity target) => Native.Game(525, target?.Id ?? 0, 0, "", new double[] {});
+        public static bool SetGroundSpeed(Entity target, string speed) => Native.Game(526, target?.Id ?? 0, 0, J(speed), new double[] {}) != 0.0;
+        public static bool DefineSurface(string surface, string setting, string value) => Native.Game(527, 0, 0, J(surface, setting, value), new double[] {}) != 0.0;
+        public static string SurfaceSetting(string surface, string setting) => Native.GameText(528, 0, 0, J(surface, setting), new double[] {});
+        public static bool SetSurface(Entity target, string surface) => Native.Game(529, target?.Id ?? 0, 0, J(surface), new double[] {}) != 0.0;
     }
 }

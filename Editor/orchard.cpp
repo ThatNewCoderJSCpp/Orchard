@@ -11,6 +11,7 @@
 #include "gpu_view.hpp"
 #include "graph_view.hpp"
 #include "builtin_models.hpp"
+#include "plant_models.hpp"
 #include "particle_textures.hpp"
 #include "sound_player.hpp"
 
@@ -480,6 +481,10 @@ private:
             m_particle_burst_until = std::chrono::steady_clock::time_point{};
             set_animating(wants_animation());
         }
+        if (const bool sway = plants_swaying(); sway != m_plants_swaying) {
+            m_plants_swaying = sway;
+            set_animating(wants_animation());
+        }
         if (!m_fly_keys.empty()) fly_step(f.dt);
         if (m_session.playing()) {
             m_session.advance(f.dt);
@@ -540,6 +545,8 @@ private:
         if (m_project) {
             view_options.particle_budget = m_project->info().physics.particle_budget;
             view_options.particle_quality = m_project->info().physics.particle_quality;
+            view_options.particle_look = m_project->info().physics.particle_look;
+            view_options.plant_sway = m_project->info().physics.plant_sway;
         }
         m_gpu.set_options(view_options);
         if (m_session.playing() != m_particles_were_playing) {
@@ -1287,7 +1294,21 @@ private:
     }
 
     bool wants_animation() const {
-        return m_session.playing() || m_session.building() || !m_fly_keys.empty() || pref("preview_effects", "0") == "1" || pref("viewport.trace", "off") != "off" || std::chrono::steady_clock::now() < m_particle_burst_until;
+        return m_session.playing() || m_session.building() || !m_fly_keys.empty() || pref("preview_effects", "0") == "1" || pref("viewport.trace", "off") != "off" || std::chrono::steady_clock::now() < m_particle_burst_until || plants_swaying();
+    }
+
+    bool plants_swaying() const {
+        if (!m_project || !m_project->info().physics.plant_sway || m_scene.dimension() != orchard::Dimension::three_d) return false;
+        bool wind = false, plants = false;
+        for (orchard::Entity e : m_scene.entities()) {
+            if (const orchard::Climate* c = m_scene.climate(e); c && c->active && c->wind_speed > 0.0f) wind = true;
+            if (const orchard::Model* md = m_scene.model(e); md && md->source.rfind("Assets/Models/Plants/", 0) == 0) plants = true;
+            if (const orchard::Terrain* tr = m_scene.terrain(e))
+                for (const orchard::TerrainScatter& sc : tr->scatter)
+                    if (sc.model.rfind("Assets/Models/Plants/", 0) == 0) plants = true;
+            if (wind && plants) return true;
+        }
+        return false;
     }
 
     void set_animating(bool on) {
@@ -1755,6 +1776,51 @@ private:
         return "field\t" + key + "\t" + clean(named) + "\t" + kind + "\t" + clean(shown) + "\t" + clean(extra) + "\t" + clean(help) + "\n";
     }
 
+    std::string rules_inspect() const {
+        std::string out = "title\tGame rules\n";
+        std::string last;
+        for (const orchard::GameRule& r : orchard::game_rules()) {
+            if (r.group != last) {
+                out += "group\t" + upper(r.group) + "\n";
+                last = r.group;
+            }
+            std::string value = m_scene.rule(r.key);
+            std::string kind = r.kind;
+            if (kind == "text") {
+                std::string shown;
+                for (char ch : value) shown += ch == '\n' ? std::string("\\n") : std::string(1, ch);
+                value = shown;
+                kind = "string";
+            }
+            std::string opts;
+            if (kind == "select") {
+                std::vector<std::pair<std::string, std::string>> items;
+                std::string cur;
+                for (char ch : r.options + "|") {
+                    if (ch == '|') {
+                        const std::size_t eq = cur.find('=');
+                        if (eq != std::string::npos) items.emplace_back(cur.substr(0, eq), cur.substr(eq + 1));
+                        cur.clear();
+                    } else {
+                        cur += ch;
+                    }
+                }
+                opts = options_of(items);
+            } else if (kind == "float") {
+                opts = "0.1";
+            }
+            out += field("rule." + r.key, r.label, kind, value, opts, r.help + (r.kind == "text" ? std::string(r.help.empty() ? "" : " ") + "Write \\n between lines." : std::string()));
+        }
+        out += "group\tBULLET TYPES\n";
+        for (const orchard::BulletType& b : orchard::bullet_types()) {
+            const orchard::BulletType* now = m_scene.items().bullet(b.id);
+            char buf[200];
+            std::snprintf(buf, sizeof(buf), "damage x%.2f, penetration x%.2f, armor counts x%.2f, drag x%.2f", static_cast<double>(now->damage), static_cast<double>(now->penetration), static_cast<double>(now->armor), static_cast<double>(now->drag));
+            out += field("bullet." + b.id, b.name, "label", buf, std::string(), b.description + " Change it with define_bullet in a script or the Define Bullet Type node.");
+        }
+        return out;
+    }
+
     std::string inspect(orchard::Entity e) const {
         if (!m_scene.alive(e)) return std::string();
         const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
@@ -1868,6 +1934,13 @@ private:
                 const float cmass = orchard::collider_mass(c, wscale, m_scene.dimension());
                 const float cdensity = c.locked(orchard::collider_lock_mass) && c.mass > 0.0f ? cmass / std::max(1e-9f, orchard::collider_density_unit(m_scene.dimension()) * orchard::collider_volume(c, wscale, m_scene.dimension())) : c.density;
                 out += field(base + "name", "Name", "string", c.name);
+                {
+                    std::vector<std::pair<std::string, std::string>> surf = {{"", "Guess from its look and name"}};
+                    for (const orchard::SurfaceDef& sd : orchard::surface_library()) surf.emplace_back(sd.id, sd.name);
+                    for (const auto& [id, sd] : m_scene.surfaces().custom)
+                        if (!orchard::builtin_surface(id)) surf.emplace_back(id, sd.name);
+                    out += field(base + "surface", "Surface (footsteps, bullets, walking speed)", "select", c.surface, options_of(surf));
+                }
                 if (i == 0) out += unit_field(orchard::UnitKind::weight, "Weight unit");
                 out += field(base + "mass", "Mass (kg)", "float", number(cmass), "0.1");
                 out += field(base + "density", flat ? "Density (kg/m\u00B2)" : "Density (\u00D7 water)", "float", number(cdensity), "0.1");
@@ -2154,12 +2227,21 @@ private:
             if (inv->container_mode != "beside") out += field("inventory.container_keys", "Bags open with", "string", inv->container_keys);
             out += field("inventory.use_keys", "Use / attack", "string", inv->use_keys);
             out += field("inventory.alt_keys", "Aim / block / offhand", "string", inv->alt_keys);
-            out += field("inventory.reload_keys", "Reload", "string", inv->reload_keys);
+            out += field("inventory.reload_keys", "Reload (also works the action and clears jams)", "string", inv->reload_keys);
+            out += field("inventory.fire_mode_keys", "Switch fire mode", "string", inv->fire_mode_keys);
             out += field("inventory.interact_keys", "Pick up / open", "string", inv->interact_keys);
             out += field("inventory.drop_keys", "Drop", "string", inv->drop_keys);
             out += field("inventory.holster_keys", "Holster / draw", "string", inv->holster_keys);
             out += field("inventory.ballistics", "Ballistics for this one", "select", inv->ballistics, options_of(ball));
             out += field("inventory.stance_accuracy", "Stance and movement change accuracy", "bool", iv("stance_accuracy"));
+            out += field("inventory.worn_weight", "Worn clothes and armor count towards weight", "bool", iv("worn_weight"), std::string(), "Off: only what's carried in the inventory and bags counts.");
+            out += field("inventory.reload_mode", "Reloading", "select", inv->reload_mode, options_of({{"", "As the game rule says"}, {"keep", "Keep partly used magazines"}, {"drop", "Drop the old magazine"}, {"discard", "Throw the old magazine away"}, {"pool", "Shared ammo pool"}, {"top_up", "Top up round by round"}}));
+            out += field("inventory.place_amount", "Set amount (for pick/put down the set amount)", "float", iv("place_amount"), "1");
+            std::vector<std::pair<std::string, std::string>> acts = {{"", "Nothing set"}};
+            for (const auto& [id, label] : orchard::inventory_action_choices()) acts.emplace_back(id, label);
+            const std::vector<std::pair<std::string, std::string>> events = {{"left_click", "Left click"}, {"left_click+cursor", "Left click while holding something"}, {"right_click", "Right click"}, {"right_click+cursor", "Right click while holding something"}, {"middle_click", "Middle click"}, {"shift+left_click", "Shift + left click"}, {"shift+right_click", "Shift + right click"}, {"ctrl+left_click", "Ctrl + left click"}, {"double_click", "Double click"}, {"hover", "Hover"}, {"hover+cursor", "Hover while holding something"}, {"key:G+cursor", "G while holding something"}, {"key:Q", "Q over an item"}, {"key:R+cursor", "R while holding something"}};
+            for (const auto& [ev, label] : events) out += field("inventory.action:" + ev, label, "select", orchard::inventory_action(*inv, ev), options_of(acts));
+            out += field("inventory.actions", "All mouse and key actions", "string", inv->actions, std::string(), "event=action, comma separated. Events: left_click, right_click, middle_click, double_click, hover, shift+ or ctrl+ in front, +cursor at the end for while holding something, key:X for a key. Any action that isn't built in is sent to scripts (next_item_event).");
             std::string items;
             for (const orchard::ItemStack& st : inv->items) items += (items.empty() ? "" : ", ") + orchard::stack_text(st);
             out += field("inventory.start_items", "Starts with (item*amount, comma separated)", "string", items, std::string(), "Example: pistol_9mm, ammo_9mm*30, bandage*3, water*1.5. Item names are in the right-click Add Item menu.");
@@ -2172,6 +2254,39 @@ private:
             out += field("pickup.auto", "Picked up by walking over it", "bool", yesno(pk->auto_pickup));
             out += field("pickup.respawn", "Comes back after (s, 0 = never)", "float", number(pk->respawn), "1");
             out += field("pickup.look", "Look", "select", pk->look, options_of({{"simple", "Simple"}, {"detailed", "Detailed"}, {"realistic", "Realistic (liquids move)"}}));
+            const orchard::ItemCatalog& cat = m_scene.items();
+            if (const orchard::ItemDef* pd = cat.find(pk->stack.item)) {
+                if (pd->kind == orchard::ItemKind::ammo) {
+                    std::vector<std::pair<std::string, std::string>> vs = {{"", "Default (" + orchard::default_variant(cat, *pd) + ")"}};
+                    for (const std::string& v : orchard::ammo_variants(cat, *pd))
+                        if (const orchard::BulletType* bt = cat.bullet(v)) vs.emplace_back(v, bt->name);
+                    out += field("pickup.variant", "Bullet type", "select", pk->stack.variant, options_of(vs));
+                }
+                if ((pd->kind == orchard::ItemKind::gun || pd->kind == orchard::ItemKind::magazine) && pd->magazine > 0) {
+                    out += field("pickup.fill", "Starts", "select", pk->fill, options_of({{"", "As the game rule says"}, {"full", "Full"}, {"empty", "Empty"}, {"partial", "Partly full"}, {"random", "A random amount"}, {"as_placed", "With the rounds set below"}}));
+                    out += field("pickup.loaded", "Rounds in it", "float", number(pk->stack.loaded), "1");
+                    std::vector<std::pair<std::string, std::string>> ammo = {{"", "Its usual ammo"}};
+                    if (pd->kind == orchard::ItemKind::gun)
+                        for (const orchard::ItemDef* a : orchard::ammo_for_gun(cat, *pd)) ammo.emplace_back(a->id, a->name);
+                    else
+                        for (const orchard::ItemDef& a : orchard::item_library())
+                            if (orchard::magazine_takes(*pd, a)) ammo.emplace_back(a.id, a.name);
+                    out += field("pickup.ammo", "Loaded with", "select", pk->stack.ammo, options_of(ammo));
+                    if (const orchard::ItemDef* a = cat.find(pk->stack.ammo.empty() ? pd->ammo : pk->stack.ammo)) {
+                        std::vector<std::pair<std::string, std::string>> vs = {{"", "Default"}};
+                        for (const std::string& v : orchard::ammo_variants(cat, *a))
+                            if (const orchard::BulletType* bt = cat.bullet(v)) vs.emplace_back(v, bt->name);
+                        out += field("pickup.variant", "Bullet type", "select", pk->stack.variant, options_of(vs));
+                    }
+                }
+                out += field("pickup.enchant", "Enchantment (fire=5, burning:3:0.5)", "string", pk->stack.enchant, std::string(), "Extra damage as type=amount and effects as name:seconds:chance:strength, comma separated. It's added to whatever the item already does.");
+                const std::string info = orchard::ammo_info(cat, pd->id);
+                if (pd->kind == orchard::ItemKind::ammo || pd->kind == orchard::ItemKind::gun || pd->kind == orchard::ItemKind::magazine) {
+                    std::string one;
+                    for (char ch : info) one += ch == '\n' ? std::string("  ·  ") : std::string(1, ch);
+                    out += field("pickup.lookup", "Lookup", "label", one);
+                }
+            }
         }
 
         group("Weather and climate");
@@ -2439,6 +2554,10 @@ private:
                 out += field("terrain_import", "Import the heightmap (replaces sculpting)", "button", "1");
                 out += field("terrain_regenerate", "Regenerate from the shape and seed", "button", "1");
                 out += field("terrain.data", "Sculpted heights file (saved with the project)", "string", tr->data);
+                std::vector<std::pair<std::string, std::string>> surfaces = {{"", "Guess from the texture or model"}};
+                for (const orchard::SurfaceDef& sd : orchard::surface_library()) surfaces.emplace_back(sd.id, sd.name);
+                for (const auto& [id, sd] : m_scene.surfaces().custom)
+                    if (!orchard::builtin_surface(id)) surfaces.emplace_back(id, sd.name);
                 for (std::size_t i = 0; i < tr->layers.size(); ++i) {
                     const orchard::TerrainLayer& l = tr->layers[i];
                     const std::string b = "terrain.layer:" + std::to_string(i) + ":";
@@ -2451,6 +2570,7 @@ private:
                     out += field(b + "normal_map", "Bump map (normal map, optional)", "string", l.normal_map);
                     out += field(b + "color", "Color", "color", hex_color(l.color));
                     out += field(b + "tiling", "Texture repeats every (m)", "float", number(l.tiling), "0.5");
+                    out += field(b + "surface", "Surface (footsteps, bullets, walking speed)", "select", l.surface, options_of(surfaces));
                     if (i > 0) {
                         out += field(b + "min_height", "From height (0 to 1)", "slider", number(l.min_height), "0.01");
                         out += field(b + "max_height", "To height (0 to 1)", "slider", number(l.max_height), "0.01");
@@ -2461,6 +2581,14 @@ private:
                     out += field("terrain_remove_layer", "Remove this layer", "button", std::to_string(i));
                 }
                 out += field("terrain_add_layer", "Add a texture layer", "button", "1");
+                std::string plant_look;
+                for (const orchard::TerrainScatter& sc : tr->scatter)
+                    if (sc.model.rfind("Assets/Models/Plants/", 0) == 0) {
+                        const std::size_t dash = sc.model.rfind('-'), dot = sc.model.rfind('.');
+                        const std::string q = dash != std::string::npos && dot > dash ? sc.model.substr(dash + 1, dot - dash - 1) : std::string();
+                        plant_look = plant_look.empty() || plant_look == q ? q : "mixed";
+                    }
+                if (!plant_look.empty()) out += field("terrain_plant_look", "Look of the scattered plants", "select", plant_look, options_of({{"mixed", "Mixed"}, {"simple", "Simple (low-poly, fastest)"}, {"detailed", "Detailed (textured)"}, {"realistic", "Realistic (single leaves)"}}));
                 for (std::size_t i = 0; i < tr->scatter.size(); ++i) {
                     const orchard::TerrainScatter& sc = tr->scatter[i];
                     const std::string b = "terrain.scatter:" + std::to_string(i) + ":";
@@ -2474,6 +2602,7 @@ private:
                     out += field(b + "max_slope", "Steepest slope (degrees)", "float", number(sc.max_slope), "1");
                     out += field(b + "align", "Lean with the slope", "bool", yesno(sc.align_to_slope));
                     out += field(b + "collide", "Solid (the player bumps into it)", "bool", yesno(sc.collide));
+                    out += field(b + "surface", "Surface (walking through bushes or grass slows you)", "select", sc.surface, options_of(surfaces));
                     out += field(b + "draw_distance", "Draw distance (m)", "float", number(sc.draw_distance), "10");
                     out += field(b + "seed", "Seed", "float", std::to_string(sc.seed), "1");
                     out += field("terrain_remove_scatter", "Remove this scatter", "button", std::to_string(i));
@@ -2618,6 +2747,7 @@ private:
             out += field("material.metallic", "Metallic", "slider", number(m->metallic), "0.05");
             out += field("material.roughness", "Roughness", "slider", number(m->roughness), "0.05");
             out += field("material.transmission", "See-through", "slider", number(m->transmission), "0.05");
+            out += field("material.translucency", "Lets light through (leaves, paper, cloth)", "slider", number(m->translucency), "0.05");
             out += field("material.ior", "Index of refraction", "float", number(m->ior), "0.01");
             out += field("material.emission", "Glow color", "color", hex_color(m->emission));
             out += field("material.emission_strength", "Glow strength", "float", number(m->emission_strength), "0.5");
@@ -2881,6 +3011,19 @@ private:
                 else return std::string();
                 return "rebuild";
             }
+            if (key == "terrain_plant_look") {
+                if (value != "simple" && value != "detailed" && value != "realistic") return std::string();
+                for (orchard::TerrainScatter& sc : tr->scatter)
+                    if (sc.model.rfind("Assets/Models/Plants/", 0) == 0) {
+                        const std::size_t dash = sc.model.rfind('-');
+                        if (dash == std::string::npos) continue;
+                        const std::string name = sc.model.substr(14, dash - 14) + "-" + value;
+                        if (!orchard::editor::is_plant_model(name)) continue;
+                        sc.model = "Assets/Models/" + name + ".glb";
+                        if (m_project && !fs::exists(m_project->path_of(sc.model))) orchard::editor::write_plant_model(name, m_project->path_of(sc.model));
+                    }
+                return "rebuild";
+            }
             if (key == "terrain_add_scatter") {
                 orchard::TerrainScatter sc;
                 sc.seed = static_cast<std::uint32_t>(tr->scatter.size() + 1);
@@ -2906,6 +3049,7 @@ private:
                     else if (k == "min_slope") l.min_slope = v;
                     else if (k == "max_slope") l.max_slope = v;
                     else if (k == "blend") l.blend = std::max(0.0f, v);
+                    else if (k == "surface") l.surface = value;
                     else return std::string();
                     return "ok";
                 }
@@ -2922,6 +3066,7 @@ private:
                 else if (k == "collide") sc.collide = on;
                 else if (k == "draw_distance") sc.draw_distance = std::max(0.0f, v);
                 else if (k == "seed") sc.seed = static_cast<std::uint32_t>(std::max(0.0f, v));
+                else if (k == "surface") sc.surface = value;
                 else return std::string();
                 return "ok";
             }
@@ -3340,8 +3485,20 @@ private:
             else if (k == "auto") pk->auto_pickup = on;
             else if (k == "respawn") pk->respawn = std::max(0.0f, v);
             else if (k == "look") pk->look = value;
+            else if (k == "variant") {
+                pk->stack.variant = value;
+                if (orchard::Model* md = m_scene.model(e); md && md->source.rfind("Assets/Models/Items/", 0) == 0)
+                    if (const orchard::ItemDef* pd = m_scene.items().find(pk->stack.item); pd && pd->kind == orchard::ItemKind::ammo && !pd->cartridge_class.empty())
+                        md->source = "Assets/Models/Items/" + pd->id + (pk->stack.amount <= 1.0f ? "-round_" : "-pile_") + (value.empty() ? orchard::default_variant(m_scene.items(), *pd) : value) + ".glb";
+                ensure_item_models();
+            } else if (k == "fill") pk->fill = value;
+            else if (k == "loaded") {
+                pk->stack.loaded = std::max(0.0f, std::floor(v));
+                if (pk->fill.empty()) pk->fill = "as_placed";
+            } else if (k == "ammo") pk->stack.ammo = value;
+            else if (k == "enchant") pk->stack.enchant = value;
             else return std::string();
-            return std::string("ok");
+            return std::string(k == "ammo" ? "rebuild" : "ok");
         }
         if (key == "has_climate") {
             if (on) {
@@ -3877,6 +4034,7 @@ private:
             else if (k == "reflectivity") target = &m->reflectivity;
             else if (k == "normal_strength") target = &m->normal_strength;
             else if (k == "alpha_cutoff") target = &m->alpha_cutoff;
+            else if (k == "translucency") target = &m->translucency;
             else if (k == "triplanar_scale") target = &m->triplanar_scale;
             if (k == "tiling_u" || k == "tiling_v" || k == "offset_u" || k == "offset_v" || k == "uv_rotation") {
                 float* uv = k == "tiling_u" ? &m->tiling_u : k == "tiling_v" ? &m->tiling_v : k == "offset_u" ? &m->offset_u : k == "offset_v" ? &m->offset_v : &m->uv_rotation;
@@ -3885,7 +4043,7 @@ private:
             }
             if (!target) return std::string();
             float x = std::max(0.0f, v);
-            if (k == "metallic" || k == "roughness" || k == "transmission" || k == "opacity" || k == "reflectivity" || k == "alpha_cutoff") x = std::clamp(v, 0.0f, 1.0f);
+            if (k == "metallic" || k == "roughness" || k == "transmission" || k == "opacity" || k == "reflectivity" || k == "alpha_cutoff" || k == "translucency") x = std::clamp(v, 0.0f, 1.0f);
             if (k == "ior") x = std::max(1.0f, v);
             if (k == "triplanar_scale") x = std::max(0.01f, v);
             *target = x;
@@ -3982,7 +4140,6 @@ private:
         m_player_ready = true;
     }
 
-    // ----- Items, inventory screens, hotbar and weapons while playing -----
     struct HudDrag {
         bool on = false;
         orchard::Entity owner;
@@ -4052,12 +4209,83 @@ private:
     }
 
     void close_screen() {
+        if (m_session.playing()) {
+            orchard::Gameplay& g = m_session.scripts().gameplay();
+            const orchard::Entity owner = play_owner();
+            if (m_scene.alive(owner)) {
+                g.return_cursor(owner);
+                g.set_open_inventory(owner, orchard::Entity{});
+            }
+        }
         m_inv_open = m_bags_open = false;
         m_inv_other = orchard::Entity{};
         m_hud_drag = HudDrag{};
+        m_hover_key.clear();
     }
 
-    // Where the selected hotbar item lives, so drop and use can find it.
+    std::string m_hover_key;
+    double m_last_click = -10.0;
+    std::string m_last_click_key;
+
+    bool cursor_full(orchard::Entity owner) {
+        const orchard::ItemStack* c = m_session.scripts().gameplay().cursor(owner);
+        return c && !c->empty();
+    }
+
+    std::string action_for(const orchard::Inventory& inv, const std::string& event, bool holding) {
+        if (holding) {
+            const std::string a = orchard::inventory_action(inv, event + "+cursor");
+            if (!a.empty()) return a;
+        }
+        return orchard::inventory_action(inv, event);
+    }
+
+    bool hud_do(const std::string& event, const std::string& action, float x, float y) {
+        const orchard::Entity owner = play_owner();
+        orchard::Gameplay& g = m_session.scripts().gameplay();
+        const orchard::HudLayout lay = inventory_screen(owner);
+        const orchard::HudRect* it = orchard::hud_item_at(lay, x, y);
+        const orchard::HudRect* cell = orchard::hud_cell_at(lay, x, y);
+        const orchard::HudRect* at = it ? it : cell;
+        if (!at) {
+            bool inside = false;
+            for (const orchard::HudRect& p : lay.panels) inside = inside || p.contains(x, y);
+            if (!inside && cursor_full(owner) && event.find("click") != std::string::npos) return g.inventory_action(owner, owner, std::string(), -1, -1, -1, "drop_cursor", "outside_click");
+            return action.find("drop_cursor") == 0 && g.inventory_action(owner, owner, std::string(), -1, -1, -1, action, event);
+        }
+        const orchard::Entity who = at->other ? m_inv_other : owner;
+        if (at->list == "bind") {
+            orchard::Inventory* inv = m_scene.inventory(owner);
+            const orchard::ItemStack* c = g.cursor(owner);
+            if (inv && at->index >= 0) {
+                if (static_cast<int>(inv->binds.size()) <= at->index) inv->binds.resize(static_cast<std::size_t>(at->index + 1));
+                inv->binds[static_cast<std::size_t>(at->index)] = c && !c->empty() ? c->item : std::string();
+                g.return_cursor(owner);
+            }
+            return true;
+        }
+        int gx = cell ? cell->gx : -1, gy = cell ? cell->gy : -1;
+        if (it && cell && cell->list != it->list) gx = gy = -1;
+        const int index = it ? it->index : cell->index;
+        return g.inventory_action(owner, who, at->list, index, gx, gy, action, event);
+    }
+
+    void hud_hover(float x, float y) {
+        if (!screen_open()) return;
+        const orchard::Entity owner = play_owner();
+        const orchard::Inventory* inv = m_scene.inventory(owner);
+        if (!inv) return;
+        const orchard::HudLayout lay = inventory_screen(owner);
+        const orchard::HudRect* at = orchard::hud_item_at(lay, x, y);
+        if (!at) at = orchard::hud_cell_at(lay, x, y);
+        const std::string key = at ? at->list + "#" + std::to_string(at->index) + (at->other ? "o" : "") : std::string();
+        if (key == m_hover_key) return;
+        m_hover_key = key;
+        if (!at) return;
+        const std::string action = action_for(*inv, "hover", cursor_full(owner));
+        if (!action.empty() && action != "tooltip" && action != "none") hud_do("hover", action, x, y);
+    }
+
     bool selected_stack(orchard::Entity owner, std::string& list, int& index) {
         orchard::Inventory* inv = m_scene.inventory(owner);
         if (!inv) return false;
@@ -4101,7 +4329,6 @@ private:
         return best;
     }
 
-    // Keys and mouse buttons while playing. Returns true when the inventory screen used it.
     bool play_input(const std::string& name, bool down) {
         if (!m_session.playing()) return false;
         const std::string k = orchard::ScriptRuntime::key_name(name);
@@ -4128,9 +4355,17 @@ private:
                 redraw();
                 return true;
             }
-            if (m_hud_drag.on && k == "r") m_hud_drag.rotate = !m_hud_drag.rotate;
+            {
+                std::string upper = name;
+                for (char& ch : upper) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+                const std::string action = action_for(*inv, "key:" + upper, cursor_full(owner));
+                if (!action.empty() && action != "none") {
+                    hud_do("key:" + upper, action, m_mouse_x, m_mouse_y);
+                    redraw();
+                    return true;
+                }
+            }
             if (const int slot = key_index(inv->hotbar_keys, name); slot >= 0) {
-                // Hovering an item and pressing a slot key binds it there, like Minecraft and Tarkov.
                 const orchard::HudLayout lay = inventory_screen(owner);
                 if (const orchard::HudRect* it = orchard::hud_item_at(lay, m_mouse_x, m_mouse_y); it && !it->other) {
                     if (inv->style == orchard::InventoryStyle::slots && inv->hotbar_own) g.move_item(owner, it->list, it->index, owner, "hotbar", slot);
@@ -4159,6 +4394,7 @@ private:
             return false;
         }
         if (key_in(inv->reload_keys, name)) g.reload(owner);
+        if (key_in(inv->fire_mode_keys, name)) g.next_fire_mode(owner);
         if (key_in(inv->holster_keys, name)) {
             if (g.held(owner) && !g.held(owner)->empty() && !inv->worn["mainhand"].empty()) g.holster(owner);
             else
@@ -4181,6 +4417,7 @@ private:
                 m_inv_other = box;
                 m_inv_open = true;
                 m_use_down = false;
+                g.set_open_inventory(owner, box);
             }
         }
         if (key_in(inv->use_keys, name)) {
@@ -4210,21 +4447,32 @@ private:
         m_mouse_y = y;
         if (!screen_open()) return false;
         const orchard::Entity owner = play_owner();
-        if (!m_scene.inventory(owner)) return false;
+        const orchard::Inventory* inv = m_scene.inventory(owner);
+        if (!inv) return false;
+        const bool ctrl = m_session.scripts().key_down("ctrl");
+        std::string event = button == 2 ? "right_click" : button == 3 ? "middle_click" : "left_click";
         const orchard::HudLayout lay = inventory_screen(owner);
-        const orchard::HudRect* it = orchard::hud_item_at(lay, x, y);
+        const orchard::HudRect* at = orchard::hud_item_at(lay, x, y);
+        if (!at) at = orchard::hud_cell_at(lay, x, y);
+        const std::string where = at ? at->list + "#" + std::to_string(at->index) : std::string();
+        const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        const bool twice = where == m_last_click_key && now - m_last_click < 0.35 && button == 1;
+        m_last_click = now;
+        m_last_click_key = where;
+        if (twice && !orchard::inventory_action(*inv, "double_click").empty()) event = "double_click";
+        else if (shift) event = "shift+" + event;
+        else if (ctrl) event = "ctrl+" + event;
+        const bool holding = cursor_full(owner);
+        std::string action = action_for(*inv, event, holding);
+        if (action.empty() && holding && event == "left_click") action = "place_all";
+        if (action.empty() && !holding && event == "left_click") action = "pick_all";
         m_hud_drag = HudDrag{};
-        if (it && it->index >= -1) {
-            m_hud_drag.on = true;
-            m_hud_drag.owner = it->other ? m_inv_other : owner;
-            m_hud_drag.list = it->list;
-            m_hud_drag.index = it->list.rfind("worn:", 0) == 0 || it->list.rfind("holster:", 0) == 0 ? 0 : it->index;
-            m_hud_drag.item = it->label;
-            m_hud_drag.start_x = x;
-            m_hud_drag.start_y = y;
-            m_hud_drag.button = button;
-            m_hud_drag.shift = shift;
-        }
+        m_hud_drag.start_x = x;
+        m_hud_drag.start_y = y;
+        m_hud_drag.button = button;
+        m_hud_drag.on = !holding && (action == "pick_all" || action == "pick_half" || action == "pick_one" || action == "pick_amount");
+        if (!action.empty()) hud_do(event, action, x, y);
+        m_hud_drag.on = m_hud_drag.on && cursor_full(owner);
         redraw();
         return true;
     }
@@ -4233,48 +4481,11 @@ private:
         if (!screen_open()) return false;
         m_mouse_x = x;
         m_mouse_y = y;
-        HudDrag d = m_hud_drag;
+        const HudDrag d = m_hud_drag;
         m_hud_drag = HudDrag{};
         if (!d.on) return true;
-        const orchard::Entity owner = play_owner();
-        orchard::Gameplay& g = m_session.scripts().gameplay();
-        orchard::ItemStack* src = g.stack_at(d.owner, d.list, d.index);
-        if (!src || src->empty()) return true;
-        const float amount = d.button == 2 && src->amount > 1.0f ? std::floor(src->amount * 0.5f) : -1.0f;
-        const bool clicked = std::fabs(x - d.start_x) + std::fabs(y - d.start_y) < 5.0f;
-        if (clicked) {
-            if (d.shift) {
-                // Shift-click sends it across: to the open chest, or back from it.
-                const orchard::Entity to = d.owner == owner ? m_inv_other : owner;
-                if (m_scene.alive(to)) g.move_item(d.owner, d.list, d.index, to, "items", -1, amount);
-            } else if (d.button == 2 && d.owner == owner) {
-                const orchard::ItemDef* def = g.item_def(src->item);
-                if (def && def->wearable() && d.list.rfind("worn:", 0) != 0) g.equip(owner, d.list, d.index);
-                else if (def && d.list.rfind("worn:", 0) == 0) g.unequip(owner, d.list.substr(5));
-                else g.use_item(owner, d.list, d.index);
-            }
-            redraw();
-            return true;
-        }
-        const orchard::HudLayout lay = inventory_screen(owner);
-        const orchard::HudRect* cell = orchard::hud_cell_at(lay, x, y);
-        if (!cell) {
-            bool inside = false;
-            for (const orchard::HudRect& p : lay.panels) inside = inside || p.contains(x, y);
-            if (!inside && d.owner == owner) g.drop_item(owner, d.list, d.index, amount);
-            redraw();
-            return true;
-        }
-        const orchard::Entity to = cell->other ? m_inv_other : owner;
-        if (cell->list == "bind") {
-            orchard::Inventory* inv = m_scene.inventory(owner);
-            if (inv && cell->index >= 0) {
-                if (static_cast<int>(inv->binds.size()) <= cell->index) inv->binds.resize(static_cast<std::size_t>(cell->index + 1));
-                inv->binds[static_cast<std::size_t>(cell->index)] = d.item;
-            }
-        } else {
-            g.move_item(d.owner, d.list, d.index, to, cell->list, cell->index, amount, cell->gx, cell->gy, d.rotate);
-        }
+        const bool moved = std::fabs(x - d.start_x) + std::fabs(y - d.start_y) >= 6.0f;
+        if (moved && cursor_full(play_owner())) hud_do(d.button == 2 ? "right_click" : "left_click", "place_all", x, y);
         redraw();
         return true;
     }
@@ -4294,7 +4505,6 @@ private:
             const orchard::Mat4 w = m_scene.world_matrix(cam);
             origin = orchard::Vec3{w.at(0, 3), w.at(1, 3), w.at(2, 3)};
         } else {
-            // In 2D the player aims at the mouse.
             const orchard::PanCamera& pc = m_view.pan_camera();
             const float ppu = std::max(1e-3f, pc.pixels_per_unit);
             const orchard::Vec3 me = g.position(owner);
@@ -4311,10 +4521,24 @@ private:
         if (m_use_down && !screen_open()) g.use_held(owner, false, true, dt);
     }
 
+    orchard::Vec3 m_slip_wish{};
+
     void ensure_item_models() {
         if (!m_project) return;
         const std::string prefix = "Assets/Models/Items/";
         for (orchard::Entity e : m_scene.entities()) {
+            if (const orchard::Model* md = m_scene.model(e); md && md->source.rfind("Assets/Models/Plants/", 0) == 0 && !m_item_models_checked.count(md->source)) {
+                m_item_models_checked.insert(md->source);
+                const std::string stem = md->source.substr(14, md->source.size() - 18);
+                if ((!fs::exists(m_project->path_of(md->source)) || orchard::editor::plant_model_outdated(m_project->path_of(md->source))) && orchard::editor::write_plant_model(stem, m_project->path_of(md->source))) m_gpu.models().forget(md->source);
+            }
+            if (const orchard::Terrain* tr = m_scene.terrain(e))
+                for (const orchard::TerrainScatter& sc : tr->scatter)
+                    if (sc.model.rfind("Assets/Models/Plants/", 0) == 0 && !m_item_models_checked.count(sc.model)) {
+                        m_item_models_checked.insert(sc.model);
+                        const std::string stem = sc.model.substr(14, sc.model.size() - 18);
+                        if ((!fs::exists(m_project->path_of(sc.model)) || orchard::editor::plant_model_outdated(m_project->path_of(sc.model))) && orchard::editor::write_plant_model(stem, m_project->path_of(sc.model))) m_gpu.models().forget(sc.model);
+                    }
             const orchard::Model* md = m_scene.model(e);
             if (!md || md->source.rfind(prefix, 0) != 0 || m_item_models_checked.count(md->source)) continue;
             m_item_models_checked.insert(md->source);
@@ -4341,12 +4565,69 @@ private:
         return it->second.get();
     }
 
+    const fizmo::images::BitmapImage* generated_icon(const orchard::ItemCatalog& cat, const orchard::ItemStack& st, const orchard::ItemDef& d) {
+        if (!m_project || !d.texture.empty()) return nullptr;
+        std::string variant;
+        float fill = 0.0f;
+        const orchard::BulletType* bullet = nullptr;
+        if (d.kind == orchard::ItemKind::ammo && !d.cartridge_class.empty()) {
+            const std::string bt = st.variant.empty() ? orchard::default_variant(cat, d) : st.variant;
+            bullet = cat.bullet(bt);
+            variant = (st.amount > 1.0f ? "pile_" : "round_") + bt;
+        } else if (d.kind == orchard::ItemKind::magazine) {
+            const float k = d.magazine > 0 ? st.loaded / static_cast<float>(d.magazine) : 0.0f;
+            variant = k <= 0.0f ? "empty" : k < 0.34f ? "low" : k < 0.99f ? "half" : "full";
+            fill = variant == "empty" ? 0.0f : variant == "low" ? 0.25f : variant == "half" ? 0.6f : 1.0f;
+            if (!st.variant.empty()) {
+                bullet = cat.bullet(st.variant);
+                variant += "_" + st.variant;
+            }
+        } else {
+            return nullptr;
+        }
+        const std::string rel = "Assets/Textures/Items/" + d.id + "-" + variant + ".png";
+        auto it = m_item_icons.find(rel);
+        if (it == m_item_icons.end()) {
+            const std::string path = m_project->path_of(rel);
+            std::error_code ec;
+            if (!fs::exists(path, ec)) {
+                const std::vector<std::uint8_t> px = orchard::editor::item_icon_rgba(d, variant, bullet, fill, 64);
+                fizmo::images::BitmapImage img(64, 64);
+                for (unsigned y = 0; y < 64; ++y)
+                    for (unsigned x = 0; x < 64; ++x) {
+                        const std::size_t i = (y * 64 + x) * 4;
+                        img.set_pixel(x, y, fizmo::colors::Color(px[i], px[i + 1], px[i + 2], px[i + 3]));
+                    }
+                fs::create_directories(fs::path(path).parent_path(), ec);
+                std::string err;
+                fizmo::images::save_image(path, img, fizmo::images::ImageFormat::Unknown, fizmo::images::EncodeOptions(), &err);
+            }
+            auto img = std::make_shared<fizmo::images::BitmapImage>();
+            std::string err;
+            if (!fizmo::images::load_image(path, *img, &err)) img.reset();
+            it = m_item_icons.emplace(rel, img).first;
+        }
+        return it->second.get();
+    }
+
+    void draw_stack_icon(fizmo::graphics::Renderer& r, const orchard::ItemCatalog& cat, const orchard::ItemStack& st, float x, float y, float w, float h) {
+        namespace fg = fizmo::graphics;
+        const orchard::ItemDef* d = cat.find(st.item);
+        if (const fizmo::images::BitmapImage* img = d ? generated_icon(cat, st, *d) : nullptr) {
+            const float side = std::min(w, h) - 4.0f;
+            r.draw_image(*img, static_cast<int>(x + (w - side) * 0.5f), static_cast<int>(y + (h - side) * 0.5f), static_cast<unsigned>(std::max(1.0f, side)), static_cast<unsigned>(std::max(1.0f, side)));
+        } else {
+            draw_item_icon(r, d, x, y, w, h, st.rotated);
+        }
+        if (d && d->kind == orchard::ItemKind::gun && !st.mag.empty() && w > 20.0f) r.draw_rect(static_cast<int>(x + w * 0.42f), static_cast<int>(y + h * 0.55f), static_cast<unsigned>(std::max(2.0f, w * 0.08f)), static_cast<unsigned>(std::max(2.0f, h * 0.2f)), fg::Paint::fill(fizmo::colors::Color(30, 30, 32)));
+        if (!st.enchant.empty() || (d && (!d->extra_damage.empty() || !d->effects.empty() || !d->worn_effects.empty() || !d->resists.empty()))) r.draw_rect(static_cast<int>(x + 1), static_cast<int>(y + 1), static_cast<unsigned>(std::max(1.0f, w - 2)), static_cast<unsigned>(std::max(1.0f, h - 2)), fg::Paint::stroke(fizmo::colors::Color(170, 110, 255, 200), 1.5f));
+    }
+
     static fizmo::colors::Color hud_rgb(orchard::Vec3 c, int a = 255) {
         auto b = [](float v) { return static_cast<std::uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
         return fizmo::colors::Color(b(c.x), b(c.y), b(c.z), static_cast<std::uint8_t>(std::clamp(a, 0, 255)));
     }
 
-    // A small drawing of the item, so it's recognisable without art.
     void draw_item_icon(fizmo::graphics::Renderer& r, const orchard::ItemDef* d, float x, float y, float w, float h, bool rotated) {
         namespace fg = fizmo::graphics;
         if (!d) {
@@ -4413,6 +4694,118 @@ private:
         }
     }
 
+    void draw_info_box(fizmo::graphics::Renderer& r, const std::string& info, float cx, float top, float alpha, bool centered_x, bool background) {
+        namespace fg = fizmo::graphics;
+        using fizmo::colors::Color;
+        if (info.empty()) return;
+        auto style = [](float size, Color c) {
+            fizmo::text::TextStyle st;
+            st.set_size(size);
+            st.set_fg_color(c);
+            return st;
+        };
+        std::vector<std::string> lines;
+        std::string cur;
+        for (char ch : info + "\n") {
+            if (ch == '\n') {
+                lines.push_back(cur);
+                cur.clear();
+            } else {
+                cur += ch;
+            }
+        }
+        const float size = background ? 13.0f : 11.0f, row = size + 5.0f;
+        float w = 90.0f;
+        for (const std::string& l : lines)
+            if (l.rfind("#bar ", 0) != 0) w = std::max(w, static_cast<float>(r.measure_text(l, style(size, Color(255, 255, 255))).width));
+        const float h = lines.size() * row + (background ? 10.0f : 0.0f);
+        const float x = centered_x ? cx - w * 0.5f : cx;
+        const int a = static_cast<int>(255.0f * std::clamp(alpha, 0.0f, 1.0f));
+        if (background) {
+            r.draw_rect(static_cast<int>(x - 10.0f), static_cast<int>(top), static_cast<unsigned>(w + 20.0f), static_cast<unsigned>(h), fg::Paint::fill(Color(14, 16, 13, std::min(a, 210))));
+            r.draw_rect(static_cast<int>(x - 10.0f), static_cast<int>(top), static_cast<unsigned>(w + 20.0f), static_cast<unsigned>(h), fg::Paint::stroke(Color(98, 108, 92, a), 1.0f));
+        }
+        float y = top + (background ? 5.0f : 0.0f);
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            const std::string& l = lines[i];
+            if (l.rfind("#bar ", 0) == 0) {
+                char kind[32] = {0};
+                float v = 0.0f, mx = 1.0f;
+                std::sscanf(l.c_str() + 5, "%31s %f %f", kind, &v, &mx);
+                const float k = std::clamp(v / std::max(0.001f, mx), 0.0f, 1.0f);
+                const std::string kn = kind;
+                const Color fillc = kn == "shield" ? Color(90, 160, 240, a) : kn == "stamina" ? Color(230, 200, 80, a) : kn == "health" ? Color(static_cast<int>(220 - 120 * k), static_cast<int>(70 + 150 * k), 70, a) : Color(120, 200, 230, a);
+                r.draw_rect(static_cast<int>(x), static_cast<int>(y + row * 0.25f), static_cast<unsigned>(w), static_cast<unsigned>(row * 0.45f), fg::Paint::fill(Color(40, 40, 40, std::min(a, 200))));
+                r.draw_rect(static_cast<int>(x), static_cast<int>(y + row * 0.25f), static_cast<unsigned>(std::max(1.0f, w * k)), static_cast<unsigned>(row * 0.45f), fg::Paint::fill(fillc));
+            } else {
+                const float lw = static_cast<float>(r.measure_text(l, style(size, Color(255, 255, 255))).width);
+                const float lx = centered_x ? cx - lw * 0.5f : x;
+                if (!background) r.draw_text(static_cast<int>(lx + 1.0f), static_cast<int>(y + 1.0f), l, style(size, Color(0, 0, 0, a)));
+                r.draw_text(static_cast<int>(lx), static_cast<int>(y), l, style(size, i == 0 ? Color(240, 244, 236, a) : Color(175, 185, 168, a)));
+            }
+            y += row;
+        }
+    }
+
+    void draw_look_and_plates(fizmo::graphics::Renderer& r) {
+        orchard::Gameplay& g = m_session.scripts().gameplay();
+        const float sw = static_cast<float>(m_view.width()), sh = static_cast<float>(m_view.height());
+        const orchard::Entity me = play_owner().valid() && m_scene.alive(play_owner()) ? play_owner() : play_me();
+        if (!m_scene.alive(me)) return;
+        orchard::Entity looked;
+        if (m_scene.rule_on("look_info") || m_scene.rule("plate_when").find("looked") != std::string::npos)
+            looked = g.looked_at(me, std::max(0.5f, m_scene.rule_number("look_range")), m_scene.rule_on("look_items"), m_scene.rule_on("look_everything"));
+        if (m_scene.rule_on("plates")) {
+            const float range = std::max(1.0f, m_scene.rule_number("plate_range"));
+            const std::string when = m_scene.rule("plate_when");
+            const std::string lines = m_scene.rule("plate_lines");
+            const bool flat = m_view.dimension() != orchard::Dimension::three_d;
+            for (orchard::Entity e : m_scene.entities()) {
+                const bool character = m_scene.health(e) && (m_scene.agent(e) || m_scene.survival(e));
+                const bool item = m_scene.pickup(e) != nullptr && m_scene.rule_on("plate_items");
+                if (!character && !item) continue;
+                if (e == me && !m_scene.rule_on("plate_players")) continue;
+                if (m_scene.has_tag(e, "no-plate")) continue;
+                const float d = g.distance(me, e);
+                if (d > range) continue;
+                const orchard::Health* hp = m_scene.health(e);
+                const bool hurt = hp && hp->value < hp->max;
+                const bool seen = e == looked;
+                if (when == "hurt" && !hurt) continue;
+                if (when == "looked" && !seen) continue;
+                if (when == "hurt_or_looked" && !hurt && !seen) continue;
+                const float above = item ? 0.4f : (flat ? 1.2f : 1.9f) + m_scene.rule_number("plate_height");
+                float px = 0.0f, py = 0.0f;
+                if (!m_view.project(g.position(e) + orchard::Vec3{0.0f, above, 0.0f}, px, py)) continue;
+                if (px < -50.0f || py < -50.0f || px > sw + 50.0f || py > sh + 50.0f) continue;
+                const std::string info = g.describe(e, lines, me);
+                const float fade = std::clamp((range - d) / std::max(1.0f, range * 0.25f), 0.0f, 1.0f);
+                std::size_t n = 1;
+                for (char ch : info) n += ch == '\n' ? 1 : 0;
+                draw_info_box(r, info, px, py - n * 16.0f, fade, true, false);
+            }
+        }
+        if (m_scene.rule_on("look_info") && m_scene.alive(looked) && !screen_open()) {
+            const std::string info = g.describe(looked, m_scene.rule("look_lines"), me);
+            if (info.empty()) return;
+            const std::string anchor = m_scene.rule("look_anchor");
+            float cx = sw * 0.5f, top = 12.0f;
+            bool centered = true;
+            if (anchor == "top-left") {
+                cx = 20.0f;
+                centered = false;
+            } else if (anchor == "top-right") {
+                cx = sw - 260.0f;
+                centered = false;
+            } else if (anchor == "center") {
+                top = sh * 0.5f + 28.0f;
+            } else if (anchor == "bottom") {
+                top = sh - 160.0f;
+            }
+            draw_info_box(r, info, cx, top, 1.0f, centered, true);
+        }
+    }
+
     void draw_play_hud(grove::GpuCanvasFrame& f) {
         namespace fg = fizmo::graphics;
         using fizmo::colors::Color;
@@ -4434,7 +4827,6 @@ private:
         auto rect = [&](float x, float y, float w, float h, Color c) { r.draw_rect(static_cast<int>(x), static_cast<int>(y), static_cast<unsigned>(std::max(1.0f, w)), static_cast<unsigned>(std::max(1.0f, h)), fg::Paint::fill(c)); };
         auto frame = [&](float x, float y, float w, float h, Color c, float t = 1.0f) { r.draw_rect(static_cast<int>(x), static_cast<int>(y), static_cast<unsigned>(std::max(1.0f, w)), static_cast<unsigned>(std::max(1.0f, h)), fg::Paint::stroke(c, t)); };
 
-        // Bullets in flight and hitscan tracers, drawn in both 2D and 3D.
         for (const orchard::Tracer& t : g.tracers()) {
             float ax, ay, bx, by;
             if (!m_view.project(t.from, ax, ay) || !m_view.project(t.to, bx, by)) continue;
@@ -4443,11 +4835,12 @@ private:
         }
         for (const orchard::Projectile& p : g.projectiles()) {
             float ax, ay, bx, by;
-            const orchard::Vec3 tail = p.position - p.velocity * 0.012f;
+            const orchard::Vec3 tail = p.position - p.velocity * (p.tracer ? 0.04f : 0.012f);
             if (!m_view.project(p.position, ax, ay) || !m_view.project(tail, bx, by)) continue;
-            r.draw_line(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(ax), static_cast<int>(ay), fg::Paint::stroke(Color(255, 225, 140, 220), 2));
+            r.draw_line(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(ax), static_cast<int>(ay), fg::Paint::stroke(p.tracer ? Color(255, 90, 60, 240) : Color(255, 225, 140, 220), p.tracer ? 3 : 2));
         }
 
+        draw_look_and_plates(r);
         const orchard::Entity owner = play_owner();
         orchard::Inventory* inv = m_scene.inventory(owner);
         if (!inv || !inv->enabled) return;
@@ -4462,28 +4855,29 @@ private:
         auto draw_items = [&](const orchard::HudLayout& lay, bool listy_owner) {
             for (const orchard::HudRect& it : lay.items) {
                 const orchard::Entity who = it.other ? m_inv_other : owner;
-                if (m_hud_drag.on && m_hud_drag.owner == who && m_hud_drag.list == it.list && (it.list.rfind("worn:", 0) == 0 || m_hud_drag.index == it.index)) continue;
                 const orchard::ItemStack* st = it.kind == "bind" ? nullptr : stack_of(who, it);
                 const orchard::ItemDef* d = cat.find(it.label);
                 const bool row = it.w > it.h * 2.5f;
                 if (row) {
-                    draw_item_icon(r, d, it.x, it.y, it.h, it.h, false);
-                    text(it.x + it.h + 4.0f, it.y + it.h * 0.2f, d ? d->name : it.label, std::max(10.0f, it.h * 0.5f), white);
+                    if (st) draw_stack_icon(r, cat, *st, it.x, it.y, it.h, it.h);
+                    else draw_item_icon(r, d, it.x, it.y, it.h, it.h, false);
+                    text(it.x + it.h + 4.0f, it.y + it.h * 0.2f, st ? orchard::item_display_name(cat, *st) : d ? d->name : it.label, std::max(10.0f, it.h * 0.5f), white);
                     if (st) {
                         std::string right = orchard::amount_text(d, st->amount);
-                        if (d && inv->show_weight) right += "   " + orchard::amount_text(nullptr, orchard::stack_weight(cat, *st)) + " kg";
+                        if (d && inv->show_weight) right += "   " + orchard::weight_text(orchard::stack_weight(cat, *st), unit_of(orchard::UnitKind::weight));
                         text(it.x + it.w - text_w(right, std::max(10.0f, it.h * 0.45f)) - 4.0f, it.y + it.h * 0.22f, right, std::max(10.0f, it.h * 0.45f), dim);
                     }
                     continue;
                 }
                 rect(it.x + 1, it.y + 1, it.w - 2, it.h - 2, Color(70, 78, 66, std::max(alpha, 140)));
-                draw_item_icon(r, d, it.x, it.y, it.w, it.h, st && st->rotated);
+                if (st) draw_stack_icon(r, cat, *st, it.x, it.y, it.w, it.h);
+                else draw_item_icon(r, d, it.x, it.y, it.w, it.h, false);
                 if (st && (st->amount != 1.0f || (d && d->continuous))) {
                     const std::string a = orchard::amount_text(d, st->amount);
                     const float ts = std::max(9.0f, std::min(it.w, it.h) * 0.28f);
                     text(it.x + it.w - text_w(a, ts) - 3.0f, it.y + it.h - ts - 3.0f, a, ts, white);
                 }
-                if (st && d && d->kind == orchard::ItemKind::gun && d->magazine > 0) {
+                if (st && d && (d->kind == orchard::ItemKind::gun || d->kind == orchard::ItemKind::magazine) && d->magazine > 0) {
                     const float k = std::clamp(st->loaded / static_cast<float>(d->magazine), 0.0f, 1.0f);
                     rect(it.x + 2, it.y + it.h - 3, (it.w - 4) * k, 2, Color(240, 200, 90));
                 }
@@ -4501,7 +4895,8 @@ private:
             }
             for (const orchard::HudRect& it : bar.items) {
                 const orchard::ItemDef* d = cat.find(it.label);
-                draw_item_icon(r, d, it.x, it.y, it.w, it.h, false);
+                if (const orchard::ItemStack* st = it.kind == "bind" ? nullptr : g.stack_at(owner, it.list, it.index)) draw_stack_icon(r, cat, *st, it.x, it.y, it.w, it.h);
+                else draw_item_icon(r, d, it.x, it.y, it.w, it.h, false);
                 float amount = 0.0f;
                 if (it.kind == "bind") amount = g.count(owner, it.label);
                 else if (const orchard::ItemStack* st = g.stack_at(owner, it.list, it.index)) amount = st->amount;
@@ -4511,17 +4906,41 @@ private:
                     text(it.x + it.w - text_w(a, ts) - 3.0f, it.y + it.h - ts - 3.0f, a, ts, amount <= 0.0f ? dim : white);
                 }
             }
-            // What's in hand, ammo and the crosshair.
             const orchard::ItemStack* held = g.held(owner);
             const orchard::ItemDef* hd = held && !held->empty() ? cat.find(held->item) : nullptr;
             if (hd) {
-                std::string line = hd->name;
+                std::string line = orchard::item_display_name(cat, *held);
                 if (hd->kind == orchard::ItemKind::gun || hd->kind == orchard::ItemKind::bow) {
                     char buf[64];
                     if (hd->magazine > 0) std::snprintf(buf, sizeof(buf), "  %d / %d", static_cast<int>(held->loaded), hd->magazine);
                     else buf[0] = '\0';
                     line += buf;
-                    if (!hd->ammo.empty()) line += "  (" + orchard::amount_text(cat.find(hd->ammo), g.count(owner, hd->ammo)) + " spare)";
+                    const std::string ammo = held->ammo.empty() ? hd->ammo : held->ammo;
+                    if (!held->variant.empty())
+                        if (const orchard::BulletType* bt = cat.bullet(held->variant)) line += " " + bt->name.substr(0, bt->name.find(" ("));
+                    if (!ammo.empty()) {
+                        float spare = 0.0f;
+                        for (const orchard::ItemDef* a : orchard::ammo_for_gun(cat, *hd)) spare += g.count(owner, a->id);
+                        line += "  (" + orchard::amount_text(cat.find(ammo), spare) + " spare";
+                        int mags = 0;
+                        for (const orchard::ItemDef* md : orchard::magazines_for_gun(cat, *hd)) mags += static_cast<int>(g.count(owner, md->id));
+                        if (mags > 0) line += ", " + std::to_string(mags) + " mags";
+                        line += ")";
+                    }
+                }
+                if (hd->kind == orchard::ItemKind::gun) {
+                    const std::vector<std::string> modes = g.fire_modes(owner);
+                    if (modes.size() > 1) {
+                        const std::string fm = g.fire_mode(owner);
+                        line += "  [" + (fm.rfind("burst", 0) == 0 ? std::to_string(orchard::burst_size(*hd, fm)) + "-round burst" : fm) + "]";
+                    }
+                    const std::string st = g.gun_state(owner);
+                    const std::string act = orchard::gun_action_of(*hd);
+                    const bool lever_like = act == "bolt" || act == "straight_pull" || act == "pump" || act == "lever";
+                    if (st == "open") line += "  locked open";
+                    else if (st == "jammed") line += "  JAMMED (R)";
+                    else if (st == "spent" && g.loaded_rounds(owner) >= 1.0f) line += lever_like ? "  work the action (R)" : "  cock the hammer (R)";
+                    else if (st == "unchambered") line += "  not chambered (R)";
                 }
                 if (g.reloading(owner)) line += "  reloading...";
                 label(sw - text_w(line, 14.0f) - 16.0f, sh - 34.0f, line, 14.0f, white);
@@ -4562,13 +4981,12 @@ private:
             frame(p.x, p.y, p.w, p.h, edge_c);
             text(p.x + 8.0f, p.y + 4.0f, p.label, 13.0f, white);
         }
-        // Weight and volume line under the player's own panel.
         if (inv->show_weight) {
             const float wgt = orchard::inventory_weight(cat, *inv);
             char buf[96];
-            if (inv->max_weight > 0.0f) std::snprintf(buf, sizeof(buf), "%.1f / %.1f kg", static_cast<double>(wgt), static_cast<double>(inv->max_weight));
-            else std::snprintf(buf, sizeof(buf), "%.1f kg", static_cast<double>(wgt));
-            std::string line = buf;
+            const std::string wunit = unit_of(orchard::UnitKind::weight);
+            std::string line = orchard::weight_text(wgt, wunit == "g" ? std::string("kg") : wunit);
+            if (inv->max_weight > 0.0f) line += " / " + orchard::weight_text(inv->max_weight, wunit == "g" ? std::string("kg") : wunit);
             if (inv->style == orchard::InventoryStyle::volume || inv->max_volume > 0.0f) {
                 std::snprintf(buf, sizeof(buf), "   %.1f / %.1f L", static_cast<double>(orchard::inventory_volume(cat, *inv)), static_cast<double>(inv->max_volume));
                 line += buf;
@@ -4598,14 +5016,60 @@ private:
             }
         }
         draw_items(lay, false);
-        // Tooltip for whatever is under the mouse.
         if (!m_hud_drag.on)
             if (const orchard::HudRect* it = orchard::hud_item_at(lay, m_mouse_x, m_mouse_y))
                 if (const orchard::ItemDef* d = cat.find(it->label)) {
-                    std::vector<std::string> lines = {d->name};
+                    const orchard::ItemStack* hs = stack_of(it->other ? m_inv_other : owner, *it);
+                    std::vector<std::string> lines = {hs ? orchard::item_display_name(cat, *hs) : d->name};
+                    if (hs && d->magazine > 0 && (d->kind == orchard::ItemKind::gun || d->kind == orchard::ItemKind::magazine)) {
+                        std::string load = std::to_string(static_cast<int>(hs->loaded)) + " / " + std::to_string(d->magazine) + " rounds";
+                        if (!hs->ammo.empty() && hs->loaded > 0.0f) {
+                            orchard::ItemStack r;
+                            r.item = hs->ammo;
+                            r.variant = hs->variant;
+                            load += " of " + orchard::item_display_name(cat, r);
+                        }
+                        if (!hs->mag.empty())
+                            if (const orchard::ItemDef* md = cat.find(hs->mag)) load += " (" + md->name + ")";
+                        lines.push_back(load);
+                    }
+                    if (hs && d->kind == orchard::ItemKind::ammo) {
+                        const float gr = orchard::bullet_grain(cat, *d, hs->variant);
+                        if (gr > 0.0f) {
+                            char gb[96];
+                            std::snprintf(gb, sizeof(gb), "Bullet: %.0f gr", static_cast<double>(gr));
+                            lines.push_back(gb);
+                        }
+                        if (const orchard::BulletType* bt = hs->variant.empty() ? nullptr : cat.bullet(hs->variant)) lines.push_back(bt->description.substr(0, 90));
+                        std::string fits;
+                        int n = 0;
+                        for (const orchard::ItemDef* gd : orchard::guns_for_ammo(cat, *d))
+                            if (n++ < 4) fits += (fits.empty() ? "" : ", ") + gd->name;
+                        if (!fits.empty()) lines.push_back("Fits " + fits + (n > 4 ? " and more" : ""));
+                    }
+                    if (hs && !hs->enchant.empty()) lines.push_back("Enchanted: " + hs->enchant);
+                    if (!d->extra_damage.empty()) lines.push_back("Adds " + d->extra_damage);
+                    if (!d->effects.empty()) lines.push_back("On hit: " + d->effects);
+                    if (!d->worn_effects.empty()) lines.push_back("While worn: " + d->worn_effects);
+                    if (!d->resists.empty()) lines.push_back("Resists " + d->resists);
+                    if (!d->thorns.empty() || !d->thorns_damage.empty()) lines.push_back("Hurts attackers: " + d->thorns_damage + (d->thorns.empty() ? "" : " " + d->thorns));
                     char buf[160];
-                    std::snprintf(buf, sizeof(buf), "%s   %.2f kg   %.2f L", d->category.c_str(), static_cast<double>(d->weight), static_cast<double>(d->volume));
-                    lines.push_back(buf);
+                    const std::string wunit = unit_of(orchard::UnitKind::weight);
+                    std::string wline = d->category + "   " + orchard::weight_text(hs ? orchard::stack_weight(cat, *hs) : d->weight, wunit);
+                    if (hs && hs->amount > 1.0f) wline += " (" + orchard::weight_text(orchard::stack_weight(cat, *hs) / hs->amount, wunit) + " each)";
+                    std::snprintf(buf, sizeof(buf), "   %.2f L", static_cast<double>(hs ? orchard::stack_volume(cat, *hs) : d->volume));
+                    lines.push_back(wline + buf);
+                    if (d->kind == orchard::ItemKind::gun) {
+                        std::string g = std::string(orchard::gun_class_label(d->gun_class)) + ", " + orchard::gun_action_label(orchard::gun_action_of(*d));
+                        if (hs) {
+                            const std::vector<std::string> modes = orchard::fire_modes_of(*d);
+                            if (modes.size() > 1) g += "   Mode: " + (hs->fire_mode.empty() ? modes.front() : hs->fire_mode);
+                            if (hs->action == "open") g += "   (locked open)";
+                            else if (hs->action == "jammed") g += "   (jammed)";
+                        }
+                        lines.push_back(g);
+                        if (d->year > 0 || !d->country.empty()) lines.push_back((d->maker.empty() ? std::string() : d->maker + ", ") + d->country + (d->year > 0 ? ", " + std::to_string(d->year) : std::string()));
+                    }
                     if (d->damage > 0.0f) {
                         std::snprintf(buf, sizeof(buf), "Damage %.0f %s   Rate %.1f/s", static_cast<double>(d->damage), d->damage_type.c_str(), static_cast<double>(d->rate));
                         lines.push_back(buf);
@@ -4619,7 +5083,7 @@ private:
                         lines.push_back(buf);
                     }
                     if (!d->description.empty()) lines.push_back(d->description.substr(0, 90));
-                    lines.push_back("Drag to move, right-click to use or wear, shift-click to send across");
+                    lines.push_back("Left click picks up, right click takes half, shift-click sends across");
                     float tw = 0.0f;
                     for (const std::string& l : lines) tw = std::max(tw, text_w(l, 12.0f));
                     float tx = std::min(m_mouse_x + 16.0f, sw - tw - 20.0f), ty = std::min(m_mouse_y + 16.0f, sh - lines.size() * 16.0f - 12.0f);
@@ -4627,8 +5091,8 @@ private:
                     frame(tx, ty, tw + 14.0f, lines.size() * 16.0f + 8.0f, edge_c);
                     for (std::size_t i = 0; i < lines.size(); ++i) text(tx + 7.0f, ty + 4.0f + i * 16.0f, lines[i], 12.0f, i == 0 ? white : dim);
                 }
-        if (m_hud_drag.on) {
-            const orchard::ItemDef* d = cat.find(m_hud_drag.item);
+        if (const orchard::ItemStack* cur = g.cursor(owner); cur && !cur->empty()) {
+            const orchard::ItemDef* d = cat.find(cur->item);
             float cell = inv->cell, pad = inv->padding;
             for (const orchard::HudRect& c : lay.cells)
                 if (c.w <= c.h * 2.5f && c.list == "items") {
@@ -4638,11 +5102,16 @@ private:
             pad *= cell / std::max(1.0f, inv->cell);
             float w = cell, h = cell;
             if (d && inv->style == orchard::InventoryStyle::grid) {
-                w = (m_hud_drag.rotate ? d->grid_h : d->grid_w) * (cell + pad) - pad;
-                h = (m_hud_drag.rotate ? d->grid_w : d->grid_h) * (cell + pad) - pad;
+                w = (cur->rotated ? d->grid_h : d->grid_w) * (cell + pad) - pad;
+                h = (cur->rotated ? d->grid_w : d->grid_h) * (cell + pad) - pad;
             }
-            rect(m_mouse_x - cell * 0.5f, m_mouse_y - cell * 0.5f, w, h, Color(90, 100, 84, 180));
-            draw_item_icon(r, d, m_mouse_x - cell * 0.5f, m_mouse_y - cell * 0.5f, w, h, m_hud_drag.rotate);
+            const float cx = m_mouse_x - cell * 0.5f, cy = m_mouse_y - cell * 0.5f;
+            rect(cx, cy, w, h, Color(90, 100, 84, 150));
+            draw_stack_icon(r, cat, *cur, cx, cy, w, h);
+            if (cur->amount != 1.0f || (d && d->continuous)) {
+                const std::string a = orchard::amount_text(d, cur->amount);
+                text(cx + w - text_w(a, 11.0f) - 3.0f, cy + h - 14.0f, a, 11.0f, white);
+            }
         }
     }
 
@@ -4684,7 +5153,10 @@ private:
         const orchard::Body* rider_body = rider.valid() ? m_scene.body(rider) : nullptr;
         if (c->control == orchard::CameraControl::walk && world && rider_body && rider_body->type == orchard::BodyType::dynamic && world->has_body(rider)) {
             xylem::CharacterMove mv;
-            mv.wish = orchard::length(move) > 0.0f ? orchard::normalize(move) * speed : orchard::Vec3{};
+            const orchard::Vec3 target = orchard::length(move) > 0.0f ? orchard::normalize(move) * speed : orchard::Vec3{};
+            if (effort.slip > 0.01f) m_slip_wish = m_slip_wish + (target - m_slip_wish) * std::clamp(dt * (1.0f - effort.slip) * 10.0f, 0.0f, 1.0f);
+            else m_slip_wish = target;
+            mv.wish = m_slip_wish;
             mv.jump = effort.can_jump;
             mv.jump_speed = c->jump_speed * effort.jump;
             mv.ride_height = 0.05f;
@@ -5051,6 +5523,62 @@ private:
         return out;
     }
 
+    static std::vector<std::string> split_list(const std::string& text) {
+        std::vector<std::string> out;
+        std::string cur;
+        for (char c : text + ",") {
+            if (c == ',') {
+                const std::size_t a = cur.find_first_not_of(' '), b = cur.find_last_not_of(' ');
+                if (a != std::string::npos) out.push_back(cur.substr(a, b - a + 1));
+                cur.clear();
+            } else {
+                cur += c;
+            }
+        }
+        return out;
+    }
+
+    std::string gun_filter_label(const std::string& key, const std::string& value) const {
+        if (key == "class") return orchard::gun_class_label(value);
+        if (key == "action") return orchard::gun_action_label(value);
+        if (key == "ammo") {
+            const orchard::ItemDef* a = m_scene.items().find(value);
+            return a ? a->name : value;
+        }
+        if (key == "cartridge") {
+            if (value == "rimfire") return "Rimfire";
+            if (value == "handgun") return "Handgun cartridges";
+            if (value == "rifle") return "Rifle cartridges";
+            if (value == "shotgun") return "Shotgun shells";
+            if (value == "blackpowder") return "Black powder";
+            if (value == "specialty") return "Specialty";
+            if (value == "airgun") return "Airgun";
+            return title_case(value);
+        }
+        if (key == "era") {
+            if (value == "pre_1800") return "Before 1800";
+            if (value == "1800s") return "1800s";
+            if (value == "world_wars") return "1900 to 1945";
+            if (value == "cold_war") return "1946 to 1989";
+            if (value == "modern") return "1990 to 2009";
+            if (value == "current") return "2010 and later";
+            if (value == "future") return "Future";
+            return "Unknown";
+        }
+        if (key == "capacity") return value + (value == "1" ? " round" : " rounds");
+        if (key == "slide_lock") return value == "yes" ? "Locks open when empty" : "Doesn't lock open";
+        if (key == "feed") {
+            if (value == "magazine") return "Detachable magazine";
+            if (value == "internal") return "Internal magazine or tube";
+            if (value == "cylinder") return "Cylinder";
+            if (value == "belt") return "Belt";
+            if (value == "muzzle") return "Muzzle-loaded";
+            if (value == "pool") return "Energy cells";
+        }
+        if (key == "fire") return title_case(value);
+        return value;
+    }
+
     std::vector<grove::MenuItem> add_menu_items() const {
         const bool flat = m_scene.dimension() == orchard::Dimension::two_d;
         std::vector<grove::MenuItem> items;
@@ -5075,6 +5603,7 @@ private:
             page("water", "Water");
             page("lights", "Lights");
             page("cameras", "Cameras");
+            if (!flat) page("plants", "Trees and plants");
             page("level", "Floors and zones");
             page("items", "Items, weapons and loot");
             page("weather", "Weather and climate zones");
@@ -5085,6 +5614,10 @@ private:
         }
         std::string back = at == "triangle" ? "physics" : at == "effects" ? "particles" : at.rfind("player-look:", 0) == 0 ? "player" : at.rfind("character-look:", 0) == 0 ? "characters" : "";
         if (at.rfind("items:", 0) == 0) back = at.find('/') != std::string::npos ? at.substr(0, at.find('/')) : std::string("items");
+        if (at.rfind("ammo:", 0) == 0)
+            if (const orchard::ItemDef* d = m_scene.items().find(at.substr(5))) back = "items:" + d->category;
+        if (at == "guns" || at.rfind("guns?", 0) == 0) back = "items";
+        if (at.rfind("guns-by:", 0) == 0) back = at.find('?') == std::string::npos ? std::string("guns") : "guns?" + at.substr(at.find('?') + 1);
         items.push_back(grove::menu_item("page:" + back, "\u2039 Back"));
         if (at == "player" || at == "characters") {
             const bool player = at == "player";
@@ -5126,7 +5659,12 @@ private:
             for (const std::string& name : orchard::terrain_presets()) {
                 std::string label = title_case(name);
                 if (name == "flat") label = "Flat (to sculpt with B)";
-                else if (name == "forest") label = "Forest (1 km of hills with trees and rocks)";
+                else if (name == "forest") label = "Forest (1 km of hills with simple trees and rocks)";
+                else if (name == "woodland") label = "Woodland (oaks, maples, birches, bushes, ferns, grass)";
+                else if (name == "pine-forest") label = "Pine forest (pines, spruces, firs, ferns)";
+                else if (name == "snowy-forest") label = "Snowy forest (conifers on snow)";
+                else if (name == "meadow") label = "Meadow (tall grass, a few oaks and bushes)";
+                else if (name == "tropical") label = "Tropical island (palms on sand)";
                 add("add:terrain:" + name, label);
             }
         } else if (at == "ai") {
@@ -5172,6 +5710,7 @@ private:
                 const std::string top = d.category.substr(0, d.category.find('/'));
                 if (std::find(tops.begin(), tops.end(), top) == tops.end()) tops.push_back(top);
             }
+            page("guns", "Find a gun (by type, action, ammo, country, era...)");
             for (const std::string& t : tops) page("items:" + t, t);
             line();
             add("add:chest", "Storage chest (has its own inventory)");
@@ -5185,11 +5724,84 @@ private:
                 if (!deeper && d.category.find('/') != std::string::npos) {
                     if (std::find(subs.begin(), subs.end(), d.category) == subs.end()) subs.push_back(d.category);
                 } else {
-                    add("add:item:" + d.id, d.name);
+                    if (d.kind == orchard::ItemKind::ammo && !d.cartridge_class.empty()) page("ammo:" + d.id, d.name);
+                    else add("add:item:" + d.id, d.name);
                 }
             }
             if (!subs.empty()) header(cat);
             for (const std::string& sc : subs) page("items:" + sc, sc.substr(sc.find('/') + 1));
+        } else if (at == "guns" || at.rfind("guns?", 0) == 0) {
+            const orchard::ItemCatalog& cat = m_scene.items();
+            const std::string filter = at.size() > 5 ? at.substr(5) : std::string();
+            const std::vector<const orchard::ItemDef*> found = orchard::find_guns(cat, filter);
+            std::string said;
+            for (const std::string& part : split_list(filter)) {
+                const std::size_t eq = part.find('=');
+                if (eq == std::string::npos) continue;
+                said += (said.empty() ? "" : ", ") + gun_filter_label(part.substr(0, eq), part.substr(eq + 1));
+            }
+            header(std::to_string(found.size()) + (found.size() == 1 ? " gun" : " guns") + (said.empty() ? "" : ": " + said));
+            for (const auto& [key, label] : orchard::gun_filter_keys()) {
+                if (filter.find(key + "=") != std::string::npos) continue;
+                const std::vector<std::string> values = orchard::gun_filter_values(cat, key, filter);
+                if (values.size() < 2) continue;
+                page("guns-by:" + key + (filter.empty() ? "" : "?" + filter), "By " + label);
+            }
+            if (!filter.empty()) page("guns", "Clear the filters");
+            line();
+            const std::size_t shown = std::min<std::size_t>(found.size(), 120);
+            for (std::size_t i = 0; i < shown; ++i) {
+                const orchard::ItemDef* gd = found[i];
+                std::string label = gd->name;
+                if (const orchard::ItemDef* a = cat.find(gd->ammo)) label += "  \u2014 " + a->name.substr(0, a->name.find(" (")) + ", " + orchard::gun_action_label(orchard::gun_action_of(*gd));
+                add("add:item:" + gd->id, label);
+            }
+            if (found.size() > shown) header("..." + std::to_string(found.size() - shown) + " more. Narrow it down to see them.");
+        } else if (at.rfind("guns-by:", 0) == 0) {
+            const orchard::ItemCatalog& cat = m_scene.items();
+            const std::size_t q = at.find('?');
+            const std::string key = at.substr(8, q == std::string::npos ? std::string::npos : q - 8);
+            const std::string filter = q == std::string::npos ? std::string() : at.substr(q + 1);
+            for (const auto& [k, label] : orchard::gun_filter_keys())
+                if (k == key) header("By " + label);
+            for (const std::string& value : orchard::gun_filter_values(cat, key, filter)) {
+                const std::string next = filter + (filter.empty() ? "" : ", ") + key + "=" + value;
+                const std::size_t n = orchard::find_guns(cat, next).size();
+                page("guns?" + next, gun_filter_label(key, value) + "  (" + std::to_string(n) + ")");
+            }
+        } else if (at.rfind("ammo:", 0) == 0) {
+            const orchard::ItemCatalog& cat = m_scene.items();
+            if (const orchard::ItemDef* d = cat.find(at.substr(5))) {
+                header(d->name);
+                char buf[160];
+                std::snprintf(buf, sizeof(buf), "%.0f gr bullet, %s a round, about %.0f m/s", static_cast<double>(d->grain), orchard::weight_text(d->cartridge_grain / orchard::grains_per_kg, unit_of(orchard::UnitKind::weight)).c_str(), static_cast<double>(d->speed));
+                header(buf);
+                if (!d->aliases.empty()) header("Also called " + d->aliases);
+                std::string fits;
+                int n = 0;
+                for (const orchard::ItemDef* g : orchard::guns_for_ammo(cat, *d))
+                    if (n++ < 6) fits += (fits.empty() ? "" : ", ") + g->name;
+                header(fits.empty() ? std::string("No gun in the library fires it yet") : "Fits " + fits + (n > 6 ? " and " + std::to_string(n - 6) + " more" : ""));
+                line();
+                const int box = static_cast<int>(std::max(1.0f, d->max_stack));
+                for (const std::string& v : orchard::ammo_variants(cat, *d)) {
+                    const orchard::BulletType* bt = cat.bullet(v);
+                    if (!bt) continue;
+                    std::string label = bt->name;
+                    if (!bt->extra_damage.empty()) label += "  +" + bt->extra_damage;
+                    add("add:ammo:" + d->id + ":" + v + ":1", label);
+                    add("add:ammo:" + d->id + ":" + v + ":" + std::to_string(box), "    a box of " + std::to_string(box));
+                }
+            }
+        } else if (at == "plants") {
+            const std::vector<std::pair<std::string, std::string>> groups = {{"-simple", "Simple low-poly shapes, like before (fastest)"}, {"-detailed", "Bark and leaf textures; leaves let light through"}, {"-realistic", "Every leaf on its own; light bleeds through"}};
+            for (std::size_t gi = 0; gi < groups.size(); ++gi) {
+                const std::string& suffix = groups[gi].first;
+                if (gi) line();
+                header(groups[gi].second);
+                for (const orchard::editor::PlantInfo& p : orchard::editor::plant_models())
+                    if (p.name.size() > suffix.size() && p.name.compare(p.name.size() - suffix.size(), std::string::npos, suffix) == 0) add("add:plant:" + p.name, p.label);
+            }
         } else if (at == "weather") {
             header("Covers the whole world");
             for (const std::string& pr : orchard::climate_presets())
@@ -5818,6 +6430,10 @@ private:
                 c.name = clean(value);
                 return true;
             }
+            if (what == "surface") {
+                c.surface = clean(value);
+                return true;
+            }
             if (what == "shape") {
                 const std::optional<orchard::ColliderShape> shape = orchard::parse_collider_shape(value);
                 if (!shape) return false;
@@ -6199,6 +6815,26 @@ private:
             return e;
         }
         if (kind.rfind("agent:", 0) == 0) return add_agent_entity(kind.substr(6), parent);
+        if (kind.rfind("ammo:", 0) == 0) {
+            const std::string rest = kind.substr(5);
+            const std::size_t a = rest.find(':'), b = rest.find(':', a + 1);
+            if (a == std::string::npos || b == std::string::npos) return orchard::Entity{};
+            const std::string id = rest.substr(0, a), variant = rest.substr(a + 1, b - a - 1);
+            const float amount = std::max(1.0f, static_cast<float>(std::atof(rest.substr(b + 1).c_str())));
+            const orchard::Vec3 at = flat ? orchard::Vec3{m_view.pan_camera().center.x, m_view.pan_camera().center.y, 0.0f} : m_view.orbit_camera().target;
+            orchard::Gameplay g;
+            g.start(&m_scene, nullptr);
+            const orchard::Entity e = g.spawn_item(id, amount, at + orchard::Vec3{0.0f, flat ? 0.5f : 0.2f, 0.0f}, "detailed");
+            g.stop();
+            if (m_scene.alive(e)) {
+                m_scene.pickup(e)->stack.variant = variant;
+                if (orchard::Model* md = m_scene.model(e)) md->source = "Assets/Models/Items/" + id + (amount <= 1.0f ? "-round_" : "-pile_") + variant + ".glb";
+                if (const orchard::BulletType* bt = m_scene.items().bullet(variant)) m_scene.set_name(e, m_scene.name(e) + " " + bt->name.substr(0, bt->name.find(" (")));
+                if (m_scene.alive(parent)) m_scene.set_parent(e, parent);
+            }
+            ensure_item_models();
+            return e;
+        }
         if (kind.rfind("item:", 0) == 0 || kind == "chest" || kind == "locker" || kind.rfind("climate", 0) == 0) {
             const orchard::Vec3 at = flat ? orchard::Vec3{m_view.pan_camera().center.x, m_view.pan_camera().center.y, 0.0f} : m_view.orbit_camera().target;
             if (kind.rfind("item:", 0) == 0) {
@@ -6271,6 +6907,32 @@ private:
                 m_scene.transform(pt)->position = flat ? orchard::Vec3{i == 0 ? -4.0f : 4.0f, 0.0f, 0.0f} : offsets[i];
             }
             return route;
+        }
+        if (kind.rfind("plant:", 0) == 0) {
+            if (flat) return orchard::Entity{};
+            const std::string model = kind.substr(6);
+            const orchard::editor::PlantInfo* info = orchard::editor::plant_info(model);
+            if (!info) return orchard::Entity{};
+            const std::string label = info->label.substr(0, info->label.find(" ("));
+            const orchard::Entity e = m_scene.create(label, parent);
+            const std::string src = "Assets/Models/" + model + ".glb";
+            if (m_project && !fs::exists(m_project->path_of(src))) orchard::editor::write_plant_model(model, m_project->path_of(src));
+            m_scene.add_model(e).source = src;
+            m_scene.add_body(e).type = orchard::BodyType::fixed;
+            if (info->solid) {
+                orchard::Collider* c = m_scene.add_collider(e, orchard::ColliderShape::cylinder);
+                c->size = {info->trunk_radius * 2.0f, info->height * 0.45f, info->trunk_radius * 2.0f};
+                c->offset = {0.0f, info->height * 0.225f, 0.0f};
+                c->surface = info->surface;
+            } else {
+                orchard::Collider* c = m_scene.add_collider(e, orchard::ColliderShape::box);
+                c->size = {info->height * 0.9f, info->height * 0.8f, info->height * 0.9f};
+                c->offset = {0.0f, info->height * 0.4f, 0.0f};
+                c->sensor = true;
+                c->surface = info->surface;
+            }
+            m_scene.transform(e)->position = m_view.orbit_camera().target;
+            return e;
         }
         if (kind == "barrel" || kind == "crate") {
             const bool barrel = kind == "barrel";
@@ -6884,6 +7546,7 @@ private:
                 m_mouse_x = x;
                 m_mouse_y = y;
                 if (screen_open()) {
+                    hud_hover(x, y);
                     redraw();
                     return std::string("ok");
                 }
@@ -7080,6 +7743,8 @@ private:
             out += std::string("pick\tfluid_quality\tFluid quality\t") + std::to_string(ph.fluid_quality) + "\t0=Low (fastest)|1=Medium|2=High|3=Ultra\n";
             num("particle_budget", "Most particles alive at once", ph.particle_budget, 1000, 1000000, 1000, "box");
             out += std::string("pick\tparticle_quality\tParticle quality (how far away they stay detailed)\t") + std::to_string(ph.particle_quality) + "\t0=Low (fastest)|1=Medium|2=High|3=Ultra\n";
+            out += std::string("pick\tparticle_look\tLook of every particle effect (overrides each emitter)\t") + (ph.particle_look.empty() ? std::string("as-set") : ph.particle_look) + "\tas-set=As each emitter is set|simple=Simple (the older look)|better=Better (softer, more detailed)|plain=Plain (soft dots, fastest)\n";
+            if (!flat) yes("plant_sway", "Trees, bushes and grass sway in the wind", ph.plant_sway);
             return out;
         });
 
@@ -7128,6 +7793,8 @@ private:
             else if (key == "fluid_quality") ph.fluid_quality = whole(0, 3);
             else if (key == "particle_budget") ph.particle_budget = whole(100, 2000000);
             else if (key == "particle_quality") ph.particle_quality = whole(0, 3);
+            else if (key == "plant_sway") ph.plant_sway = on;
+            else if (key == "particle_look") ph.particle_look = value == "simple" || value == "better" || value == "plain" ? value : std::string();
             else return std::string("error\tunknown setting '") + key + "'";
             ph.quality = orchard::PhysicsQuality::custom;
             m_project->info().physics = ph;
@@ -7649,9 +8316,31 @@ private:
 
         native("details", [this](const std::vector<std::string>& f) { return details(entity(arg(f, 0))); });
 
-        native("inspect", [this](const std::vector<std::string>& f) { return inspect(entity(arg(f, 0))); });
+        native("inspect", [this](const std::vector<std::string>& f) { return arg(f, 0) == "rules" ? rules_inspect() : inspect(entity(arg(f, 0))); });
 
         native("inspect_set", [this](const std::vector<std::string>& f) {
+            if (arg(f, 0) == "rules") {
+                const std::string key = arg(f, 1);
+                if (key.rfind("rule.", 0) != 0) return std::string();
+                std::string value = arg(f, 2);
+                const orchard::GameRule* r = orchard::game_rule(key.substr(5));
+                if (!r) return std::string();
+                if (r->kind == "text") {
+                    std::string real;
+                    for (std::size_t i = 0; i < value.size(); ++i) {
+                        if (value[i] == '\\' && i + 1 < value.size() && value[i + 1] == 'n') {
+                            real += '\n';
+                            ++i;
+                        } else {
+                            real += value[i];
+                        }
+                    }
+                    value = real;
+                }
+                m_scene.set_rule(key.substr(5), value);
+                touched();
+                return std::string("ok");
+            }
             const orchard::Entity e = entity(arg(f, 0));
             const std::string r = inspect_set(e, arg(f, 1), arg(f, 2));
             if (!r.empty()) {
@@ -7767,6 +8456,7 @@ private:
     float m_player_pitch = 0.0f;
     float m_player_fall = 0.0f;
     std::chrono::steady_clock::time_point m_particle_burst_until{};
+    bool m_plants_swaying = false;
     std::string m_template_path;
     std::optional<orchard::Scene> m_main_scene;
     orchard::Entity m_main_selected;

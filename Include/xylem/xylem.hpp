@@ -218,6 +218,8 @@ public:
     void fluid_draws(std::vector<FluidDraw>& out) const;
     float fluid_surface(orchard::Vec3 point) const;
     float fluid_depth(orchard::Vec3 point) const override;
+    std::shared_ptr<const orchard::TerrainHeights> terrain_heights(orchard::Entity e) const override;
+    orchard::Vec3 up_axis() const override;
     float mass(orchard::Entity e) const override;
     orchard::Vec3 fluid_velocity(orchard::Vec3 point) const;
     std::size_t fluid_brush(FluidBrush brush, orchard::Vec3 point, float radius, orchard::Vec3 velocity, int material = 0);

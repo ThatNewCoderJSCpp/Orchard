@@ -112,6 +112,7 @@ struct AiWorld::Impl {
 
         bool want_move = false;
         Vec3 goal;
+        Vec3 slip_wish;
         bool run = false;
         float reach = 0.5f;
         NavPath path;
@@ -880,7 +881,7 @@ struct AiWorld::Impl {
         }
         Vec3 wish{};
         bool jump = false;
-        const float speed = (a.run ? c->run_speed : c->walk_speed) * (game ? game->move_scale(a.e) : 1.0f);
+        const float speed = std::max(0.0f, (a.run ? c->run_speed : c->walk_speed) * (game ? game->move_scale(a.e) : 1.0f) - (game ? game->ground_minus(a.e) : 0.0f));
         if (a.want_move && flat_dist(p, a.goal, f2) <= std::max(0.25f, a.reach) && std::fabs(p.y - a.goal.y) < 2.5f) a.want_move = false;
         if (a.want_move && speed > 0.0f) {
             NavGrid& nav = nav_of(a);
@@ -969,6 +970,13 @@ struct AiWorld::Impl {
                 a.stuck_check = time;
             }
         }
+        const float slip = game ? game->ground_slip(a.e) : 0.0f;
+        if (slip > 0.01f) {
+            a.slip_wish = a.slip_wish + (wish - a.slip_wish) * std::clamp(dt_s * (1.0f - slip) * 10.0f, 0.0f, 1.0f);
+            wish = a.slip_wish;
+        } else {
+            a.slip_wish = wish;
+        }
         const float rise = c->jump > 0.05f ? std::sqrt(2.0f * (physics ? physics->gravity() : 9.81f) * std::max(0.3f, c->jump + 0.15f)) : 0.0f;
         if (physics && physics->has_body(a.e)) {
             physics->walk(a.e, wish, jump && rise > 0.0f, rise, dt_s);
@@ -1028,7 +1036,7 @@ struct AiWorld::Impl {
         Mover m;
         m.position = p;
         m.velocity = a.velocity;
-        m.max_speed = (a.run ? c->run_speed : c->walk_speed) * (game ? game->move_scale(a.e) : 1.0f);
+        m.max_speed = std::max(0.0f, (a.run ? c->run_speed : c->walk_speed) * (game ? game->move_scale(a.e) : 1.0f) - (game ? game->ground_minus(a.e) : 0.0f));
         m.radius = c->radius;
         Vec3 steer_v{};
         if (a.want_move) steer_v = arrive(m, a.goal, 2.0f, a.reach * 0.5f);

@@ -148,6 +148,11 @@ std::vector<ItemStack>* Gameplay::list_of(Entity owner, const std::string& list)
     Inventory& inv = *m_scene->inventory(owner);
     if (list == "items") return &inv.items;
     if (list == "hotbar") return &inv.hotbar_items;
+    if (list == "cursor") {
+        Carry& c = carry(owner);
+        if (c.cursor.empty()) c.cursor.resize(1);
+        return &c.cursor;
+    }
     if (list.rfind("container:", 0) == 0) {
         const auto it = inv.worn.find(list.substr(10));
         return it == inv.worn.end() ? nullptr : &it->second.contents;
@@ -224,7 +229,7 @@ bool Gameplay::move_item(Entity from, const std::string& from_list, int from_ind
         ItemStack* dst = stack_at(to_owner, dest, 0);
         if (!dst) return false;
         if (!dst->empty()) {
-            if (dst->item == moving.item && dst->contents.empty() && moving.contents.empty() && dst->amount < cap) {
+            if (can_merge(*dst, moving) && dst->amount < cap) {
                 const float put = std::min(cap - dst->amount, amount);
                 dst->amount += put;
                 src->amount -= put;
@@ -254,10 +259,14 @@ bool Gameplay::move_item(Entity from, const std::string& from_list, int from_ind
     }
     std::vector<ItemStack>* dst_list = list_of(to_owner, to_list);
     if (!dst_list) return false;
-    const bool slotted = (to_list == "items" && dst_inv.style == InventoryStyle::slots) || to_list == "hotbar";
+    const bool slotted = (to_list == "items" && dst_inv.style == InventoryStyle::slots) || to_list == "hotbar" || to_list == "cursor";
     const bool gridded = (to_list == "items" && dst_inv.style == InventoryStyle::grid) || to_list.rfind("container:", 0) == 0;
     if (to_list == "items" && dst_inv.style == InventoryStyle::slots) dst_list->resize(static_cast<std::size_t>(std::max(0, dst_inv.columns * dst_inv.rows)));
     if (to_list == "hotbar") dst_list->resize(static_cast<std::size_t>(std::max(0, dst_inv.hotbar_slots)));
+    if (to_list == "cursor") {
+        dst_list->resize(1);
+        if (to_index < 0) to_index = 0;
+    }
     if (fo != to_owner || from_list != to_list) {
         if (dst_inv.max_weight > 0.0f && to_list == "items" && inventory_weight(m_scene->items(), dst_inv) + stack_weight(m_scene->items(), moving) > dst_inv.max_weight + 1e-4f) return false;
         if (dst_inv.style == InventoryStyle::volume && dst_inv.max_volume > 0.0f && to_list == "items" && inventory_volume(m_scene->items(), dst_inv) + stack_volume(m_scene->items(), moving) > dst_inv.max_volume + 1e-4f) return false;
@@ -279,7 +288,7 @@ bool Gameplay::move_item(Entity from, const std::string& from_list, int from_ind
             moving.x = moving.y = -1;
             dst = moving;
             src->amount -= moving.amount;
-        } else if (dst.item == moving.item && dst.contents.empty() && moving.contents.empty()) {
+        } else if (can_merge(dst, moving)) {
             const float put = std::min(cap - dst.amount, amount);
             if (put <= 0.0f) return false;
             dst.amount += put;
@@ -316,7 +325,7 @@ bool Gameplay::move_item(Entity from, const std::string& from_list, int from_ind
         if (x >= 0 && y >= 0) {
             for (std::size_t i = 0; i < dst_list->size(); ++i) {
                 ItemStack& other = (*dst_list)[i];
-                if (static_cast<int>(i) == ignore || other.empty() || other.item != moving.item || !other.contents.empty()) continue;
+                if (static_cast<int>(i) == ignore || other.empty() || !can_merge(other, moving)) continue;
                 if (x >= other.x && x < other.x + stack_w(m_scene->items(), other) && y >= other.y && y < other.y + stack_h(m_scene->items(), other)) {
                     const float put = std::min(cap - other.amount, amount);
                     if (put <= 0.0f) return false;
@@ -350,7 +359,7 @@ bool Gameplay::move_item(Entity from, const std::string& from_list, int from_ind
     } else {
         bool merged = false;
         for (ItemStack& other : *dst_list) {
-            if (&other == src || other.empty() || other.item != moving.item || !other.contents.empty() || !moving.contents.empty()) continue;
+            if (&other == src || other.empty() || !can_merge(other, moving)) continue;
             const float put = std::min(cap - other.amount, moving.amount);
             if (put <= 0.0f) continue;
             other.amount += put;
@@ -397,8 +406,12 @@ Entity Gameplay::spawn_item(const std::string& item, float amount, Vec3 at, cons
     p.stack.item = item;
     p.stack.amount = amount;
     if (d->magazine > 0 && (d->kind == ItemKind::gun || d->kind == ItemKind::bow)) p.stack.loaded = static_cast<float>(d->magazine);
+    fill_for_world(p.stack, std::string());
     p.look = look;
-    m_scene->add_model(e).source = "Assets/Models/Items/" + item + "-" + look + ".glb";
+    std::string model = look;
+    if (d->kind == ItemKind::magazine) model = p.stack.loaded > 0.0f ? "full" : "empty";
+    if (d->kind == ItemKind::ammo && !d->cartridge_class.empty()) model = (amount <= 1.0f ? "round_" : "pile_") + (p.stack.variant.empty() ? std::string("fmj") : p.stack.variant);
+    m_scene->add_model(e).source = "Assets/Models/Items/" + item + "-" + model + ".glb";
     m_scene->add_tag(e, "pickup");
     if (look == "realistic" && (d->kind == ItemKind::potion || d->kind == ItemKind::drink)) {
         const Entity liquid = m_scene->create("Liquid", e);
@@ -437,8 +450,11 @@ bool Gameplay::pick_up(Entity e, Entity pickup) {
     if (!p || p->stack.empty()) return false;
     Inventory& inv = *m_scene->inventory(o);
     float added = 0.0f;
-    if (p->stack.contents.empty() && p->stack.durability == 1.0f && p->stack.loaded == 0.0f) {
+    cue_sound("pickup", position(o), o, 0.5f);
+    if (p->stack.contents.empty() && p->stack.durability == 1.0f && p->stack.loaded == 0.0f && p->stack.variant.empty() && p->stack.enchant.empty() && p->stack.ammo.empty() && p->stack.mag.empty()) {
         added = give(o, p->stack.item, p->stack.amount);
+    } else if (p->stack.contents.empty() && p->stack.loaded == 0.0f && p->stack.mag.empty() && item_def(p->stack.item) && item_def(p->stack.item)->stackable()) {
+        added = give_stack(o, p->stack);
     } else {
         ItemStack unique = p->stack;
         const ItemDef* d = item_def(unique.item);
@@ -728,6 +744,7 @@ bool Gameplay::use_item(Entity e, const std::string& list, int index) {
 
 bool Gameplay::consume(Entity e, const ItemDef& d, ItemStack& s) {
     const Entity h = holder(e);
+    cue_sound(sound_for(d, "use"), position(e), e, 0.7f);
     const bool continuous = d.continuous;
     const float part = continuous ? std::min(s.amount, 0.25f) : 1.0f;
     const float k = continuous ? part : 1.0f;
@@ -817,7 +834,10 @@ std::string Gameplay::stance(Entity e) const {
 }
 
 void Gameplay::set_aiming(Entity e, bool on) {
-    carry(e).aiming = on;
+    Carry& c = carry(e);
+    if (on != c.aiming && on && m_scene)
+        if (const ItemDef* d = held_def(e); d && d->kind == ItemKind::gun) cue_sound(sound_for(*d, "aim"), position(e), e, 0.5f);
+    c.aiming = on;
 }
 
 void Gameplay::set_blocking(Entity e, bool on) {
@@ -869,7 +889,6 @@ Entity Gameplay::ray_skip(Vec3 origin, Vec3 dir, float max_distance, Entity skip
         for (Entity at = hit; m_scene->alive(at); at = m_scene->parent(at))
             if (at == skip || (m_scene->alive(skip_owner) && at == skip_owner)) mine = true;
         if (mine || m_scene->pickup(owner)) {
-            // Starting inside the shooter (the eye is inside its capsule) the ray hits right away, so step further.
             const float step = d < 0.005f ? 0.08f : 0.02f;
             start = p + dir * step;
             left -= d + step;
@@ -924,6 +943,14 @@ int Gameplay::fire(Entity shooter, Vec3 origin, Vec3 direction, const ItemDef& w
             pr.effect_time = w.effect_time;
             pr.effect_chance = w.effect_chance;
             pr.blast_radius = w.blast_radius;
+            pr.armor_scale = m_mods.armor_scale;
+            pr.ricochet = m_mods.ricochet;
+            pr.stagger = m_mods.stagger;
+            pr.breaks_up = m_mods.breaks_up;
+            pr.tracer = m_mods.tracer;
+            pr.variant = m_mods.variant;
+            pr.effects = m_mods.effects.empty() ? w.effects : m_mods.effects;
+            pr.extra_damage = m_mods.extra_damage.empty() ? w.extra_damage : m_mods.extra_damage;
             Tracer t;
             t.from = origin + d * 0.3f;
             t.to = m_scene->alive(hit) ? p : origin + d * reach;
@@ -960,6 +987,14 @@ int Gameplay::fire(Entity shooter, Vec3 origin, Vec3 direction, const ItemDef& w
             pr.effect_time = w.effect_time;
             pr.effect_chance = w.effect_chance;
             pr.life = pr.thrown ? std::max(6.0f, w.fuse + 2.0f) : 8.0f;
+            pr.armor_scale = m_mods.armor_scale;
+            pr.ricochet = m_mods.ricochet;
+            pr.stagger = m_mods.stagger;
+            pr.breaks_up = m_mods.breaks_up;
+            pr.tracer = m_mods.tracer;
+            pr.variant = m_mods.variant;
+            pr.effects = m_mods.effects.empty() ? w.effects : m_mods.effects;
+            pr.extra_damage = m_mods.extra_damage.empty() ? w.extra_damage : m_mods.extra_damage;
             pr.trail.push_back(pr.position);
             m_projectiles.push_back(pr);
         }
@@ -1000,8 +1035,10 @@ void Gameplay::hit_with(Projectile& p, Entity hit, Vec3 point, Vec3 normal) {
     d.amount = dmg;
     d.type = p.damage_type;
     d.attacker = p.owner;
-    d.knockback = dir * (p.mass * speed);
+    d.knockback = dir * (p.mass * speed * p.stagger);
+    d.armor_scale = p.armor_scale;
     apply_damage(owner, d);
+    if (!p.effects.empty() || !p.extra_damage.empty()) apply_hit_extras(owner, p.owner, p.effects, p.extra_damage, std::clamp(dmg / std::max(1e-3f, p.damage), 0.05f, 1.0f));
     std::string effect = p.effect;
     float chance = p.effect_chance, etime = p.effect_time;
     if (ammo && !ammo->effect.empty()) {
@@ -1013,11 +1050,18 @@ void Gameplay::hit_with(Projectile& p, Entity hit, Vec3 point, Vec3 normal) {
     if (p.magic || p.damage_type == "fire") {
         if (const Health* hp = m_scene->alive(holder(owner)) ? m_scene->health(holder(owner)) : nullptr; hp && hp->flammable && p.damage_type == "fire") ignite(holder(owner), 6.0f);
     }
+    const bool soft = m_scene->alive(holder(owner));
+    const bool surfaces = m_scene->rule_on("surface_bullets");
+    const std::string surf = soft ? std::string("flesh") : surface_of(hit, point);
+    const SurfaceDef* sd = surface_def(surf);
     if (!p.magic) {
-        const Entity fx = add_effect(*m_scene, "impact", Entity{}, 0.35f, m_now);
-        if (m_scene->alive(fx)) {
-            if (Transform* t = m_scene->transform(fx)) t->position = point;
-            m_temporary.emplace_back(fx, m_now + 0.6);
+        if (surfaces) surface_hit(hit, point, normal, surf);
+        else {
+            const Entity fx = add_effect(*m_scene, "impact", Entity{}, 0.35f, m_now);
+            if (m_scene->alive(fx)) {
+                if (Transform* t = m_scene->transform(fx)) t->position = point;
+                m_temporary.emplace_back(fx, m_now + 0.6);
+            }
         }
     }
     if (p.thrown) {
@@ -1026,7 +1070,6 @@ void Gameplay::hit_with(Projectile& p, Entity hit, Vec3 point, Vec3 normal) {
         p.done = true;
         return;
     }
-    const bool soft = m_scene->alive(holder(owner));
     if (p.penetration > 0.5f && soft) {
         p.penetration -= 1.0f;
         p.velocity = p.velocity * 0.6f;
@@ -1034,10 +1077,26 @@ void Gameplay::hit_with(Projectile& p, Entity hit, Vec3 point, Vec3 normal) {
         p.owner = owner;
         return;
     }
-    if (p.drag > 0.0f && !soft && dot(dir, normal) > -0.25f && speed > 50.0f) {
-        p.velocity = (p.velocity - normal * (2.0f * dot(p.velocity, normal))) * 0.5f;
+    if (p.breaks_up && !soft) {
+        p.done = true;
+        return;
+    }
+    if (surfaces && sd && !soft && sd->resistance > 0.0f && p.penetration >= sd->resistance && speed > 60.0f) {
+        p.penetration -= sd->resistance;
+        p.velocity = p.velocity * std::clamp(1.0f - sd->slows_bullets, 0.05f, 1.0f);
+        p.damage *= std::clamp(1.0f - sd->slows_bullets * 0.6f, 0.1f, 1.0f);
+        p.position = point + dir * 0.3f;
+        p.owner = owner;
+        return;
+    }
+    const float graze = std::asin(std::clamp(-dot(dir, normal), -1.0f, 1.0f)) * 57.2957795f;
+    const float max_graze = surfaces && sd ? sd->ricochet_angle : 14.5f;
+    const float bounce_chance = std::min(1.0f, p.ricochet * (surfaces && sd ? sd->ricochet * 0.7f : 1.0f));
+    if (!soft && (p.drag > 0.0f || surfaces) && graze <= max_graze && speed > 50.0f && random(0.0, 1.0) < bounce_chance) {
+        p.velocity = (p.velocity - normal * (2.0f * dot(p.velocity, normal))) * (surfaces && sd && sd->ricochet > 1.5f ? 0.7f : 0.5f);
         p.position = point + normal * 0.02f;
         p.damage *= 0.5f;
+        if (surfaces) cue_sound("ricochet", point, Entity{}, 0.5f);
         return;
     }
     p.done = true;
@@ -1138,6 +1197,31 @@ void Gameplay::tick_projectiles(float dt) {
                 if (p.thrown && !p.done && length(p.velocity) < 0.6f) p.velocity = Vec3{};
             } else {
                 p.position = p.position + step;
+                if (m_physics && !p.magic && m_scene->rule_on("surface_bullets")) {
+                    const float depth = m_physics->fluid_depth(p.position);
+                    if (depth > 0.0f && !p.wet) {
+                        p.wet = true;
+                        const Vec3 up = m_physics->up_axis();
+                        const Vec3 at = p.position + up * depth;
+                        const Vec3 d = normalize(p.velocity);
+                        const float graze = std::asin(std::clamp(-dot(d, up), -1.0f, 1.0f)) * 57.2957795f;
+                        const SurfaceDef* water = surface_def("water");
+                        surface_hit(Entity{}, at, up, "water");
+                        if (!p.thrown && water && graze <= water->ricochet_angle && length(p.velocity) > 80.0f && random(0.0, 1.0) < std::min(1.0f, p.ricochet * water->ricochet)) {
+                            p.velocity = (p.velocity - up * (2.0f * dot(p.velocity, up))) * 0.6f;
+                            p.position = at + up * 0.02f;
+                            p.wet = false;
+                            cue_sound("ricochet", at, Entity{}, 0.4f);
+                        }
+                    } else if (depth <= 0.0f) {
+                        p.wet = false;
+                    }
+                    if (p.wet) {
+                        const float k = p.thrown ? 3.0f : 260.0f;
+                        p.velocity = p.velocity * std::exp(-k * h);
+                        if (!p.thrown && length(p.velocity) < 12.0f) p.done = true;
+                    }
+                }
             }
         }
         if (p.trail.empty() || length(p.trail.back() - p.position) > 0.5f) {
@@ -1155,6 +1239,9 @@ bool Gameplay::melee_attack(Entity e, const ItemDef& w, ItemStack& stack) {
     if (m_now < c.next_use || stunned(e)) return false;
     if (w.stamina > 0.0f && !use_stamina(e, w.stamina)) return false;
     c.next_use = m_now + 1.0 / std::max(0.05f, w.rate);
+    c.swing = 1.0f;
+    c.swing_dir = -c.swing_dir;
+    cue_sound(sound_for(w, "swing"), position(e), e, 0.8f);
     Vec3 origin, dir;
     aim_of(e, origin, dir);
     const float reach = std::max(0.3f, w.range);
@@ -1175,6 +1262,8 @@ bool Gameplay::melee_attack(Entity e, const ItemDef& w, ItemStack& stack) {
         apply_damage(target, d);
         if (!w.effect.empty() && m_scene->alive(h) && random(0.0, 1.0) < w.effect_chance) apply_effect(h, w.effect, w.effect_time, 1.0f, e);
         if (w.damage_type == "fire" && m_scene->alive(h) && m_scene->health(h)->flammable) ignite(h, 4.0f);
+        const std::string fx = stack_enchant_effects(stack), extra = stack_enchant_damage(stack);
+        apply_hit_extras(target, e, w.effects.empty() ? fx : (fx.empty() ? w.effects : w.effects + ", " + fx), w.extra_damage.empty() ? extra : (extra.empty() ? w.extra_damage : w.extra_damage + ", " + extra));
     };
     Vec3 p;
     float dist = 0.0f;
@@ -1285,6 +1374,8 @@ bool Gameplay::throw_item(Entity e, const ItemDef& w, float power, const std::st
     Carry& c = carry(e);
     if (m_now < c.next_use) return false;
     c.next_use = m_now + 0.6;
+    c.swing = 1.0f;
+    cue_sound(sound_for(w, "throw"), position(e), e, 0.7f);
     Vec3 origin, dir;
     aim_of(e, origin, dir);
     if (m_scene->dimension() != Dimension::two_d) dir = normalize(dir + Vec3{0.0f, 0.12f, 0.0f});
@@ -1316,20 +1407,147 @@ bool Gameplay::use_held(Entity e, bool pressed, bool held_down, float dt, const 
     }
     switch (d->kind) {
     case ItemKind::gun: {
-        if (reloading(who) || m_now < c.next_use || stunned(who)) return false;
-        if (!(pressed || (held_down && d->automatic))) return false;
-        if (d->magazine > 0 && s->loaded < 1.0f) {
-            if (pressed) reload(who, hand);
+        if (c.reload_rounds > 0 && pressed && s->loaded >= 1.0f) finish_reload(who);
+        if (!held_down && !pressed) c.burst_left = 0;
+        if (reloading(who) || cycling(who) || m_now < c.next_use || stunned(who)) return false;
+        const std::string act = gun_action_of(*d);
+        const std::vector<std::string> modes = modes_for(*d);
+        const std::string mode = !s->fire_mode.empty() && std::find(modes.begin(), modes.end(), s->fire_mode) != modes.end() ? s->fire_mode : modes.front();
+        const int burst = burst_size(*d, mode);
+        if (pressed && burst > 0) c.burst_left = burst;
+        const bool want = pressed || (held_down && mode == "auto") || (held_down && burst > 0 && c.burst_left > 0);
+        if (!want) return false;
+        const std::string click_rule = m_scene->rule("dry_click");
+        auto click = [&]() {
+            if (click_rule != "never") cue_sound(sound_for(*d, "empty"), position(who), who, 0.7f);
+            c.next_use = m_now + 0.25;
+            c.burst_left = 0;
+        };
+        if (s->action == "jammed") {
+            if (pressed) {
+                click();
+                if (m_scene->rule_on("auto_reload")) cycle_weapon(who, hand);
+            }
+            return false;
+        }
+        if (s->action == "spent") {
+            if (pressed) cycle_weapon(who, hand);
+            return false;
+        }
+        if (s->action == "open") {
+            if (pressed) {
+                if (click_rule == "always") click();
+                else c.next_use = m_now + 0.25;
+                if (s->loaded >= 1.0f) cycle_weapon(who, hand);
+                else if (m_scene->rule_on("auto_reload")) {
+                    m_quiet_reload = click_rule != "always";
+                    reload(who, hand);
+                    m_quiet_reload = false;
+                }
+            }
+            return false;
+        }
+        if (d->magazine > 0 && (s->loaded < 1.0f || s->action == "empty")) {
+            if (pressed) {
+                click();
+                if (s->loaded >= 1.0f && s->action == "empty") {
+                    if (m_scene->rule_on("auto_reload")) cycle_weapon(who, hand);
+                } else if (m_scene->rule_on("auto_reload")) reload(who, hand);
+            }
             return false;
         }
         Vec3 origin, dir;
         aim_of(who, origin, dir);
         ItemDef shot = *d;
-        if (const ItemDef* a = item_def(d->ammo); a && a->damage > 0.0f && a->kind == ItemKind::ammo) shot.damage *= a->damage;
+        const ItemCatalog& cat = m_scene->items();
+        const std::string ammo_id = s->ammo.empty() ? d->ammo : s->ammo;
+        const ItemDef* a = item_def(ammo_id);
+        std::string variant = s->variant;
+        if (variant.empty() && a) variant = default_variant(cat, *a);
+        const BulletType* bt = variant.empty() ? nullptr : cat.bullet(variant);
+        m_mods = ShotMods{};
+        if (a && a->kind == ItemKind::ammo) {
+            if (a->damage > 0.0f) shot.damage *= a->damage;
+            const ItemDef* base = item_def(d->ammo);
+            if (base && base != a && a->grain > 0.0f && base->grain > 0.0f && a->speed > 0.0f && base->speed > 0.0f) {
+                const float ratio = (a->grain * a->speed * a->speed) / (base->grain * base->speed * base->speed);
+                shot.damage *= std::clamp(std::sqrt(ratio), 0.3f, 2.5f);
+                shot.speed *= std::clamp(a->speed / base->speed, 0.5f, 1.5f);
+            }
+            if (a->grain > 0.0f || a->projectile_mass > 0.0f) shot.projectile_mass = bullet_grain(cat, *a, variant) / grains_per_kg;
+            if (!a->effect.empty()) {
+                shot.effect = a->effect;
+                shot.effect_time = a->effect_time;
+                shot.effect_chance = a->effect_chance;
+            }
+            m_mods.effects = a->effects;
+            m_mods.extra_damage = a->extra_damage;
+        }
+        if (bt) {
+            shot.damage *= bt->damage;
+            shot.penetration *= bt->penetration;
+            shot.drag *= bt->drag;
+            shot.spread *= bt->spread;
+            shot.speed *= bt->speed;
+            if (bt->pellets > 0) shot.pellets = bt->pellets;
+            if (!bt->damage_type.empty()) shot.damage_type = bt->damage_type;
+            m_mods.armor_scale = bt->armor;
+            m_mods.ricochet = bt->ricochet;
+            m_mods.stagger = bt->stagger;
+            m_mods.breaks_up = bt->breaks_up;
+            m_mods.tracer = bt->tracer;
+            m_mods.variant = bt->id;
+            m_mods.effects = parse_effect_rolls(m_mods.effects).empty() ? bt->effects : m_mods.effects + (bt->effects.empty() ? "" : ", " + bt->effects);
+            m_mods.extra_damage = m_mods.extra_damage.empty() ? bt->extra_damage : m_mods.extra_damage + (bt->extra_damage.empty() ? "" : ", " + bt->extra_damage);
+        }
+        for (const std::string& part : {d->effects, stack_enchant_effects(*s)})
+            if (!part.empty()) m_mods.effects = m_mods.effects.empty() ? part : m_mods.effects + ", " + part;
+        for (const std::string& part : {d->extra_damage, stack_enchant_damage(*s)})
+            if (!part.empty()) m_mods.extra_damage = m_mods.extra_damage.empty() ? part : m_mods.extra_damage + ", " + part;
+        if (shot.pellets > 1) {
+            const float split = 1.0f / static_cast<float>(shot.pellets);
+            std::map<std::string, float> extra = parse_amounts(m_mods.extra_damage);
+            for (auto& [k, v] : extra) v *= split;
+            m_mods.extra_damage = amounts_text(extra);
+        }
+        if (act == "revolver_da" && needs_working(*d)) shot.spread *= 0.6f;
         fire(who, origin, dir, shot, 1.0f);
+        m_mods = ShotMods{};
         if (d->magazine > 0) s->loaded -= 1.0f;
         s->durability = std::max(0.0f, s->durability - 0.0005f);
         c.next_use = m_now + 1.0 / std::max(0.05f, d->rate);
+        if (burst > 0) {
+            c.burst_left = std::max(0, c.burst_left - 1);
+            if (c.burst_left == 0) c.next_use = m_now + std::max(0.25, 1.0 / std::max(0.05f, d->rate));
+        }
+        c.kick = std::min(1.5f, c.kick + 0.45f + d->recoil * 0.08f);
+        const bool suppressed = d->has("suppressed");
+        cue_sound(sound_for(*d, "fire"), position(who), who, suppressed ? 0.45f : 1.0f, 1.0f, std::max(0.0f, m_scene->rule_number("gun_loudness")) * (suppressed ? 0.25f : 1.0f));
+        const std::string ammo_used = ammo_id;
+        if (needs_working(*d)) {
+            s->action = "spent";
+            if (!by_hand(*d) && (s->loaded >= 1.0f || cycle_kind_for(*d) != "hammer")) cycle_weapon(who, hand);
+        } else if (act == "semi" || act == "auto" || act == "open_bolt" || act == "burst" || act == "belt" || act == "rotary" || (act.empty() && d->feed == "magazine")) {
+            eject_casing(who, *d, ammo_used);
+            if (s->loaded < 1.0f) {
+                if (d->slide_lock && act != "open_bolt") {
+                    s->action = "open";
+                    if (d->id == "m1_garand" || d->id == "m1_garand_tanker") cue_sound("garand_ping", position(who), who, 0.9f);
+                    else cue_sound("slide_lock", position(who), who, 0.5f);
+                } else {
+                    s->action = "empty";
+                }
+            }
+        }
+        if (m_scene->rule_on("jams") && s->loaded >= 1.0f && !needs_working(*d) && act != "energy" && act != "revolver_da" && act != "break") {
+            const float base = d->jam_chance > 0.0f ? d->jam_chance : 0.002f;
+            const float wear = 1.0f + (1.0f - std::clamp(s->durability, 0.0f, 1.0f)) * 30.0f;
+            if (random(0.0, 1.0) < base * wear * std::max(0.0f, m_scene->rule_number("jam_rate"))) {
+                s->action = "jammed";
+                c.burst_left = 0;
+                cue_sound("jam", position(who), who, 0.7f);
+            }
+        }
         return true;
     }
     case ItemKind::bow: {
@@ -1352,6 +1570,7 @@ bool Gameplay::use_held(Entity e, bool pressed, bool held_down, float dt, const 
         if (pressed && count(who, d->ammo) + s->loaded >= 1.0f) {
             c.drawing = true;
             c.draw = 0.0f;
+            cue_sound(sound_for(*d, "draw"), position(who), who, 0.6f);
             return true;
         }
         if (c.drawing && held_down) c.draw += dt;
@@ -1393,6 +1612,8 @@ bool Gameplay::release_held(Entity e, const std::string& hand) {
     const float power = d->draw_time > 0.0f ? std::min(1.0f, c.draw / d->draw_time) : 1.0f;
     if (power < 0.15f) return false;
     if (take(who, d->ammo, 1.0f) < 1.0f) return false;
+    cue_sound(sound_for(*d, "fire"), position(who), who, 0.8f, 1.0f, 8.0f);
+    c.kick = 0.6f;
     Vec3 origin, dir;
     aim_of(who, origin, dir);
     ItemDef shot = *d;
@@ -1406,21 +1627,6 @@ bool Gameplay::release_held(Entity e, const std::string& hand) {
         if (a->effect == "burning") shot.damage_type = "fire";
     }
     fire(who, origin, dir, shot, power);
-    return true;
-}
-
-bool Gameplay::reload(Entity e, const std::string& hand) {
-    const Entity o = inventory_owner(e);
-    const Entity who = m_scene && m_scene->alive(o) ? o : e;
-    ItemStack* s = held(who, hand);
-    const ItemDef* d = s ? item_def(s->item) : nullptr;
-    if (!d || d->magazine <= 0 || reloading(who)) return false;
-    const float need = static_cast<float>(d->magazine) - s->loaded;
-    if (need < 1.0f) return false;
-    const float got = d->ammo.empty() ? need : take(who, d->ammo, need);
-    if (got < 1.0f && !d->ammo.empty()) return false;
-    s->loaded += std::floor(got);
-    carry(who).reload_until = m_now + std::max(0.0f, d->reload);
     return true;
 }
 
@@ -1445,13 +1651,14 @@ void Gameplay::refresh_visuals(Entity e) {
     if (inv.worn["mainhand"].empty())
         if (ItemStack* h = held(e, "mainhand")) want.emplace_back("mainhand", h);
     std::string key;
-    for (const auto& [slot, s] : want) key += slot + "=" + s->item + ";";
+    for (const auto& [slot, s] : want) key += slot + "=" + s->item + (s->action == "open" ? "!open" : "") + ";";
     Carry& c = carry(e);
     if (key == c.visual_key) return;
     c.visual_key = key;
     for (Entity v : c.visuals)
         if (m_scene->alive(v)) m_scene->destroy(v);
     c.visuals.clear();
+    c.hand_visual = Entity{};
     const float k = 1.0f;
     for (const auto& [slot, s] : want) {
         const ItemDef* d = item_def(s->item);
@@ -1468,7 +1675,12 @@ void Gameplay::refresh_visuals(Entity e) {
             t->position = a.at * k;
             t->rotation = from_euler(a.euler);
         }
-        m_scene->add_model(v).source = "Assets/Models/Items/" + d->id + "-worn.glb";
+        if (slot == "mainhand") {
+            c.hand_visual = v;
+            c.hand_pos = a.at * k;
+            c.hand_rot = from_euler(a.euler);
+        }
+        m_scene->add_model(v).source = "Assets/Models/Items/" + d->id + (d->kind == ItemKind::gun && s->action == "open" ? "-worn_open.glb" : "-worn.glb");
         m_scene->add_tag(v, "worn-visual");
         if (!d->texture.empty()) m_scene->add_material(v).base_map = d->texture;
         c.visuals.push_back(v);
@@ -1502,15 +1714,29 @@ void Gameplay::tick_items(double now, float dt) {
             if (s.empty() || slot == "mainhand" || slot == "offhand") continue;
             const ItemDef* d = item_def(s.item);
             if (d && !d->effect.empty() && d->effect_time < 0.0f) effects.push_back(d->effect);
+            if (d)
+                for (const EffectRoll& r : parse_effect_rolls(d->worn_effects))
+                    if (std::find(effects.begin(), effects.end(), r.effect) == effects.end()) effects.push_back(r.effect);
         }
         const Entity h = m_scene->alive(holder(e)) ? holder(e) : e;
         for (const std::string& ef : c.worn_effects)
             if (std::find(effects.begin(), effects.end(), ef) == effects.end()) remove_effect(h, ef);
         for (const std::string& ef : effects)
-            if (effect_stacks(h, ef) == 0) apply_effect(h, ef, -1.0f);
+            if (effect_stacks(h, ef) == 0) {
+                float strength = 1.0f;
+                for (const auto& [slot, s] : inv->worn)
+                    if (const ItemDef* d = s.empty() ? nullptr : item_def(s.item))
+                        for (const EffectRoll& r : parse_effect_rolls(d->worn_effects))
+                            if (r.effect == ef) strength = r.strength;
+                apply_effect(h, ef, -1.0f, strength);
+            }
         c.worn_effects = effects;
         if (inv->equipment) refresh_visuals(e);
     }
+    tick_ground(dt);
+    tick_reloads();
+    tick_actions();
+    tick_animations(dt);
     tick_projectiles(dt);
     tick_slosh(dt);
 }

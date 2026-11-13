@@ -274,6 +274,46 @@ public:
     static double rain_at(double x, double y, double z) { return lib_number(ORCHARD_GAME_RAIN_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()); }
     static double snow_at(double x, double y, double z) { return lib_number(ORCHARD_GAME_SNOW_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()); }
     static bool is_sheltered(double x, double y, double z) { return lib_number(ORCHARD_GAME_IS_SHELTERED, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()) != 0.0; }
+    static double load_magazine(const Entity& target, const std::string& list, double index) { return lib_number(ORCHARD_GAME_LOAD_MAGAZINE, target, Entity(), std::vector<double>{static_cast<double>(index)}, lib_join({list})); }
+    static double unload_magazine(const Entity& target, const std::string& list, double index) { return lib_number(ORCHARD_GAME_UNLOAD_MAGAZINE, target, Entity(), std::vector<double>{static_cast<double>(index)}, lib_join({list})); }
+    static bool unload_weapon(const Entity& target) { return lib_number(ORCHARD_GAME_UNLOAD_WEAPON, target, Entity(), std::vector<double>{}, std::string()) != 0.0; }
+    static bool choose_ammo(const Entity& target, const std::string& ammo, const std::string& variant = "") { return lib_number(ORCHARD_GAME_CHOOSE_AMMO, target, Entity(), std::vector<double>{}, lib_join({ammo, variant})) != 0.0; }
+    static std::string loaded_ammo(const Entity& target) { return lib_text(ORCHARD_GAME_LOADED_AMMO, target, Entity(), std::vector<double>{}, std::string()); }
+    static std::string loaded_variant(const Entity& target) { return lib_text(ORCHARD_GAME_LOADED_VARIANT, target, Entity(), std::vector<double>{}, std::string()); }
+    static double loaded_rounds(const Entity& target) { return lib_number(ORCHARD_GAME_LOADED_ROUNDS, target, Entity(), std::vector<double>{}, std::string()); }
+    static double give_ammo(const Entity& target, const std::string& ammo, const std::string& variant, double amount) { return lib_number(ORCHARD_GAME_GIVE_AMMO, target, Entity(), std::vector<double>{static_cast<double>(amount)}, lib_join({ammo, variant})); }
+    static double ammo_count(const Entity& target, const std::string& ammo, const std::string& variant = "") { return lib_number(ORCHARD_GAME_AMMO_COUNT, target, Entity(), std::vector<double>{}, lib_join({ammo, variant})); }
+    static std::string ammo_info(const std::string& item) { return lib_text(ORCHARD_GAME_AMMO_INFO, Entity(), Entity(), std::vector<double>{}, lib_join({item})); }
+    static bool ammo_fits(const std::string& gun, const std::string& ammo) { return lib_number(ORCHARD_GAME_AMMO_FITS, Entity(), Entity(), std::vector<double>{}, lib_join({gun, ammo})) != 0.0; }
+    static std::string bullet_setting(const std::string& variant, const std::string& setting) { return lib_text(ORCHARD_GAME_BULLET_SETTING, Entity(), Entity(), std::vector<double>{}, lib_join({variant, setting})); }
+    static bool define_bullet(const std::string& variant, const std::string& setting, const std::string& value) { return lib_number(ORCHARD_GAME_DEFINE_BULLET, Entity(), Entity(), std::vector<double>{}, lib_join({variant, setting, value})) != 0.0; }
+    static std::string game_rule(const std::string& rule) { return lib_text(ORCHARD_GAME_GAME_RULE, Entity(), Entity(), std::vector<double>{}, lib_join({rule})); }
+    static bool set_game_rule(const std::string& rule, const std::string& value) { return lib_number(ORCHARD_GAME_SET_GAME_RULE, Entity(), Entity(), std::vector<double>{}, lib_join({rule, value})) != 0.0; }
+    static bool inventory_click(const Entity& target, const Entity& other, const std::string& list, double index, const std::string& action) { return lib_number(ORCHARD_GAME_INVENTORY_CLICK, target, other, std::vector<double>{static_cast<double>(index)}, lib_join({list, action})) != 0.0; }
+    static std::string cursor_item(const Entity& target) { return lib_text(ORCHARD_GAME_CURSOR_ITEM, target, Entity(), std::vector<double>{}, std::string()); }
+    static double cursor_amount(const Entity& target) { return lib_number(ORCHARD_GAME_CURSOR_AMOUNT, target, Entity(), std::vector<double>{}, std::string()); }
+    static bool return_cursor(const Entity& target) { return lib_number(ORCHARD_GAME_RETURN_CURSOR, target, Entity(), std::vector<double>{}, std::string()) != 0.0; }
+    static std::string next_item_event(const Entity& target) { return lib_text(ORCHARD_GAME_NEXT_ITEM_EVENT, target, Entity(), std::vector<double>{}, std::string()); }
+    static std::string describe(const Entity& target, const std::string& lines) { return lib_text(ORCHARD_GAME_DESCRIBE, target, Entity(), std::vector<double>{}, lib_join({lines})); }
+    static void set_look_info(const Entity& target, const std::string& text) { lib_number(ORCHARD_GAME_SET_LOOK_INFO, target, Entity(), std::vector<double>{}, lib_join({text})); }
+    static bool enchant_item(const Entity& target, const std::string& list, double index, const std::string& enchant) { return lib_number(ORCHARD_GAME_ENCHANT_ITEM, target, Entity(), std::vector<double>{static_cast<double>(index)}, lib_join({list, enchant})) != 0.0; }
+    static void play_item_sound(const std::string& name, double x, double y, double z) { lib_number(ORCHARD_GAME_PLAY_ITEM_SOUND, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, lib_join({name})); }
+    static double worn_resist(const Entity& target, const std::string& damage_type) { return lib_number(ORCHARD_GAME_WORN_RESIST, target, Entity(), std::vector<double>{}, lib_join({damage_type})); }
+    static std::string find_guns(const std::string& filter) { return lib_text(ORCHARD_GAME_FIND_GUNS, Entity(), Entity(), std::vector<double>{}, lib_join({filter})); }
+    static std::string gun_info(const std::string& item) { return lib_text(ORCHARD_GAME_GUN_INFO, Entity(), Entity(), std::vector<double>{}, lib_join({item})); }
+    static std::string gun_state(const Entity& target) { return lib_text(ORCHARD_GAME_GUN_STATE, target, Entity(), std::vector<double>{}, std::string()); }
+    static bool cycle_weapon(const Entity& target) { return lib_number(ORCHARD_GAME_CYCLE_WEAPON, target, Entity(), std::vector<double>{}, std::string()) != 0.0; }
+    static std::string fire_mode(const Entity& target) { return lib_text(ORCHARD_GAME_FIRE_MODE, target, Entity(), std::vector<double>{}, std::string()); }
+    static bool set_fire_mode(const Entity& target, const std::string& mode) { return lib_number(ORCHARD_GAME_SET_FIRE_MODE, target, Entity(), std::vector<double>{}, lib_join({mode})) != 0.0; }
+    static bool next_fire_mode(const Entity& target) { return lib_number(ORCHARD_GAME_NEXT_FIRE_MODE, target, Entity(), std::vector<double>{}, std::string()) != 0.0; }
+    static std::string surface_under(const Entity& target) { return lib_text(ORCHARD_GAME_SURFACE_UNDER, target, Entity(), std::vector<double>{}, std::string()); }
+    static std::string surface_at(double x, double y, double z) { return lib_text(ORCHARD_GAME_SURFACE_AT, Entity(), Entity(), std::vector<double>{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)}, std::string()); }
+    static std::string wading_in(const Entity& target) { return lib_text(ORCHARD_GAME_WADING_IN, target, Entity(), std::vector<double>{}, std::string()); }
+    static double ground_speed(const Entity& target) { return lib_number(ORCHARD_GAME_GROUND_SPEED, target, Entity(), std::vector<double>{}, std::string()); }
+    static bool set_ground_speed(const Entity& target, const std::string& speed) { return lib_number(ORCHARD_GAME_SET_GROUND_SPEED, target, Entity(), std::vector<double>{}, lib_join({speed})) != 0.0; }
+    static bool define_surface(const std::string& surface, const std::string& setting, const std::string& value) { return lib_number(ORCHARD_GAME_DEFINE_SURFACE, Entity(), Entity(), std::vector<double>{}, lib_join({surface, setting, value})) != 0.0; }
+    static std::string surface_setting(const std::string& surface, const std::string& setting) { return lib_text(ORCHARD_GAME_SURFACE_SETTING, Entity(), Entity(), std::vector<double>{}, lib_join({surface, setting})); }
+    static bool set_surface(const Entity& target, const std::string& surface) { return lib_number(ORCHARD_GAME_SET_SURFACE, target, Entity(), std::vector<double>{}, lib_join({surface})) != 0.0; }
 
 private:
     static std::vector<double>& buffer() {
@@ -505,6 +545,46 @@ inline double wind_z_at(double x, double y, double z) { return Lib::wind_z_at(x,
 inline double rain_at(double x, double y, double z) { return Lib::rain_at(x, y, z); }
 inline double snow_at(double x, double y, double z) { return Lib::snow_at(x, y, z); }
 inline bool is_sheltered(double x, double y, double z) { return Lib::is_sheltered(x, y, z); }
+inline double load_magazine(const Entity& target, const std::string& list, double index) { return Lib::load_magazine(target, list, index); }
+inline double unload_magazine(const Entity& target, const std::string& list, double index) { return Lib::unload_magazine(target, list, index); }
+inline bool unload_weapon(const Entity& target) { return Lib::unload_weapon(target); }
+inline bool choose_ammo(const Entity& target, const std::string& ammo, const std::string& variant = "") { return Lib::choose_ammo(target, ammo, variant); }
+inline std::string loaded_ammo(const Entity& target) { return Lib::loaded_ammo(target); }
+inline std::string loaded_variant(const Entity& target) { return Lib::loaded_variant(target); }
+inline double loaded_rounds(const Entity& target) { return Lib::loaded_rounds(target); }
+inline double give_ammo(const Entity& target, const std::string& ammo, const std::string& variant, double amount) { return Lib::give_ammo(target, ammo, variant, amount); }
+inline double ammo_count(const Entity& target, const std::string& ammo, const std::string& variant = "") { return Lib::ammo_count(target, ammo, variant); }
+inline std::string ammo_info(const std::string& item) { return Lib::ammo_info(item); }
+inline bool ammo_fits(const std::string& gun, const std::string& ammo) { return Lib::ammo_fits(gun, ammo); }
+inline std::string bullet_setting(const std::string& variant, const std::string& setting) { return Lib::bullet_setting(variant, setting); }
+inline bool define_bullet(const std::string& variant, const std::string& setting, const std::string& value) { return Lib::define_bullet(variant, setting, value); }
+inline std::string game_rule(const std::string& rule) { return Lib::game_rule(rule); }
+inline bool set_game_rule(const std::string& rule, const std::string& value) { return Lib::set_game_rule(rule, value); }
+inline bool inventory_click(const Entity& target, const Entity& other, const std::string& list, double index, const std::string& action) { return Lib::inventory_click(target, other, list, index, action); }
+inline std::string cursor_item(const Entity& target) { return Lib::cursor_item(target); }
+inline double cursor_amount(const Entity& target) { return Lib::cursor_amount(target); }
+inline bool return_cursor(const Entity& target) { return Lib::return_cursor(target); }
+inline std::string next_item_event(const Entity& target) { return Lib::next_item_event(target); }
+inline std::string describe(const Entity& target, const std::string& lines) { return Lib::describe(target, lines); }
+inline void set_look_info(const Entity& target, const std::string& text) { Lib::set_look_info(target, text); }
+inline bool enchant_item(const Entity& target, const std::string& list, double index, const std::string& enchant) { return Lib::enchant_item(target, list, index, enchant); }
+inline void play_item_sound(const std::string& name, double x, double y, double z) { Lib::play_item_sound(name, x, y, z); }
+inline double worn_resist(const Entity& target, const std::string& damage_type) { return Lib::worn_resist(target, damage_type); }
+inline std::string find_guns(const std::string& filter) { return Lib::find_guns(filter); }
+inline std::string gun_info(const std::string& item) { return Lib::gun_info(item); }
+inline std::string gun_state(const Entity& target) { return Lib::gun_state(target); }
+inline bool cycle_weapon(const Entity& target) { return Lib::cycle_weapon(target); }
+inline std::string fire_mode(const Entity& target) { return Lib::fire_mode(target); }
+inline bool set_fire_mode(const Entity& target, const std::string& mode) { return Lib::set_fire_mode(target, mode); }
+inline bool next_fire_mode(const Entity& target) { return Lib::next_fire_mode(target); }
+inline std::string surface_under(const Entity& target) { return Lib::surface_under(target); }
+inline std::string surface_at(double x, double y, double z) { return Lib::surface_at(x, y, z); }
+inline std::string wading_in(const Entity& target) { return Lib::wading_in(target); }
+inline double ground_speed(const Entity& target) { return Lib::ground_speed(target); }
+inline bool set_ground_speed(const Entity& target, const std::string& speed) { return Lib::set_ground_speed(target, speed); }
+inline bool define_surface(const std::string& surface, const std::string& setting, const std::string& value) { return Lib::define_surface(surface, setting, value); }
+inline std::string surface_setting(const std::string& surface, const std::string& setting) { return Lib::surface_setting(surface, setting); }
+inline bool set_surface(const Entity& target, const std::string& surface) { return Lib::set_surface(target, surface); }
 
 inline double result(long long i) { return Lib::result(i); }
 

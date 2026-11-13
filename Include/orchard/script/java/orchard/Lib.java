@@ -402,4 +402,46 @@ public class Lib {
     public static double rainAt(double x, double y, double z) { return Native.game(481, 0, 0, new double[] {x, y, z}, ""); }
     public static double snowAt(double x, double y, double z) { return Native.game(482, 0, 0, new double[] {x, y, z}, ""); }
     public static boolean isSheltered(double x, double y, double z) { return Native.game(483, 0, 0, new double[] {x, y, z}, "") != 0.0; }
+    public static double loadMagazine(Entity target, String list, double index) { return Native.game(490, libId(target), 0, new double[] {index}, libJoin(list)); }
+    public static double unloadMagazine(Entity target, String list, double index) { return Native.game(491, libId(target), 0, new double[] {index}, libJoin(list)); }
+    public static boolean unloadWeapon(Entity target) { return Native.game(492, libId(target), 0, new double[] {}, "") != 0.0; }
+    public static boolean chooseAmmo(Entity target, String ammo, String variant) { return Native.game(493, libId(target), 0, new double[] {}, libJoin(ammo, variant)) != 0.0; }
+    public static boolean chooseAmmo(Entity target, String ammo) { return chooseAmmo(target, ammo, ""); }
+    public static String loadedAmmo(Entity target) { return Native.gameText(494, libId(target), 0, new double[] {}, ""); }
+    public static String loadedVariant(Entity target) { return Native.gameText(495, libId(target), 0, new double[] {}, ""); }
+    public static double loadedRounds(Entity target) { return Native.game(496, libId(target), 0, new double[] {}, ""); }
+    public static double giveAmmo(Entity target, String ammo, String variant, double amount) { return Native.game(497, libId(target), 0, new double[] {amount}, libJoin(ammo, variant)); }
+    public static double ammoCount(Entity target, String ammo, String variant) { return Native.game(498, libId(target), 0, new double[] {}, libJoin(ammo, variant)); }
+    public static double ammoCount(Entity target, String ammo) { return ammoCount(target, ammo, ""); }
+    public static String ammoInfo(String item) { return Native.gameText(499, 0, 0, new double[] {}, libJoin(item)); }
+    public static boolean ammoFits(String gun, String ammo) { return Native.game(500, 0, 0, new double[] {}, libJoin(gun, ammo)) != 0.0; }
+    public static String bulletSetting(String variant, String setting) { return Native.gameText(501, 0, 0, new double[] {}, libJoin(variant, setting)); }
+    public static boolean defineBullet(String variant, String setting, String value) { return Native.game(502, 0, 0, new double[] {}, libJoin(variant, setting, value)) != 0.0; }
+    public static String gameRule(String rule) { return Native.gameText(503, 0, 0, new double[] {}, libJoin(rule)); }
+    public static boolean setGameRule(String rule, String value) { return Native.game(504, 0, 0, new double[] {}, libJoin(rule, value)) != 0.0; }
+    public static boolean inventoryClick(Entity target, Entity other, String list, double index, String action) { return Native.game(505, libId(target), libId(other), new double[] {index}, libJoin(list, action)) != 0.0; }
+    public static String cursorItem(Entity target) { return Native.gameText(506, libId(target), 0, new double[] {}, ""); }
+    public static double cursorAmount(Entity target) { return Native.game(507, libId(target), 0, new double[] {}, ""); }
+    public static boolean returnCursor(Entity target) { return Native.game(508, libId(target), 0, new double[] {}, "") != 0.0; }
+    public static String nextItemEvent(Entity target) { return Native.gameText(509, libId(target), 0, new double[] {}, ""); }
+    public static String describe(Entity target, String lines) { return Native.gameText(510, libId(target), 0, new double[] {}, libJoin(lines)); }
+    public static void setLookInfo(Entity target, String text) { Native.game(511, libId(target), 0, new double[] {}, libJoin(text)); }
+    public static boolean enchantItem(Entity target, String list, double index, String enchant) { return Native.game(512, libId(target), 0, new double[] {index}, libJoin(list, enchant)) != 0.0; }
+    public static void playItemSound(String name, double x, double y, double z) { Native.game(513, 0, 0, new double[] {x, y, z}, libJoin(name)); }
+    public static double wornResist(Entity target, String damage_type) { return Native.game(514, libId(target), 0, new double[] {}, libJoin(damage_type)); }
+    public static String findGuns(String filter) { return Native.gameText(515, 0, 0, new double[] {}, libJoin(filter)); }
+    public static String gunInfo(String item) { return Native.gameText(516, 0, 0, new double[] {}, libJoin(item)); }
+    public static String gunState(Entity target) { return Native.gameText(517, libId(target), 0, new double[] {}, ""); }
+    public static boolean cycleWeapon(Entity target) { return Native.game(518, libId(target), 0, new double[] {}, "") != 0.0; }
+    public static String fireMode(Entity target) { return Native.gameText(519, libId(target), 0, new double[] {}, ""); }
+    public static boolean setFireMode(Entity target, String mode) { return Native.game(520, libId(target), 0, new double[] {}, libJoin(mode)) != 0.0; }
+    public static boolean nextFireMode(Entity target) { return Native.game(521, libId(target), 0, new double[] {}, "") != 0.0; }
+    public static String surfaceUnder(Entity target) { return Native.gameText(522, libId(target), 0, new double[] {}, ""); }
+    public static String surfaceAt(double x, double y, double z) { return Native.gameText(523, 0, 0, new double[] {x, y, z}, ""); }
+    public static String wadingIn(Entity target) { return Native.gameText(524, libId(target), 0, new double[] {}, ""); }
+    public static double groundSpeed(Entity target) { return Native.game(525, libId(target), 0, new double[] {}, ""); }
+    public static boolean setGroundSpeed(Entity target, String speed) { return Native.game(526, libId(target), 0, new double[] {}, libJoin(speed)) != 0.0; }
+    public static boolean defineSurface(String surface, String setting, String value) { return Native.game(527, 0, 0, new double[] {}, libJoin(surface, setting, value)) != 0.0; }
+    public static String surfaceSetting(String surface, String setting) { return Native.gameText(528, 0, 0, new double[] {}, libJoin(surface, setting)); }
+    public static boolean setSurface(Entity target, String surface) { return Native.game(529, libId(target), 0, new double[] {}, libJoin(surface)) != 0.0; }
 }

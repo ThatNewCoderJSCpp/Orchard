@@ -2372,6 +2372,12 @@ grove::get_by_id("reset-cam").on("click", [](grove::Event&: e) -> void {
     call("reset_camera", "");
 });
 
+grove::get_by_id("game-open").on("click", [](grove::Event&: e) -> void {
+    inspecting = "rules";
+    fill_inspect();
+    grove::get_by_id("inspect-dialog").open_modal();
+});
+
 grove::get_by_id("physics-open").on("click", [](grove::Event&: e) -> void {
     string: r = call("physics_settings", "");
     if (failed(r)) then {

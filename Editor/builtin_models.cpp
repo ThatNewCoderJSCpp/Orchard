@@ -1,4 +1,5 @@
 #include "builtin_models.hpp"
+#include "plant_models.hpp"
 
 #include <orchard/items.hpp>
 
@@ -241,28 +242,121 @@ C4 rgb(orchard::Vec3 c, float shade = 1.0f, float a = 1.0f) {
     return {std::clamp(c.x * shade, 0.0f, 1.0f), std::clamp(c.y * shade, 0.0f, 1.0f), std::clamp(c.z * shade, 0.0f, 1.0f), a};
 }
 
-// Every held item points along -Z (the way the holder faces) with the grip at the origin.
-void item_gun(MeshData& m, const orchard::ItemDef& d, int q) {
+void item_gun(MeshData& m, const orchard::ItemDef& d, int q, bool open = false) {
     const float L = std::clamp(d.length, 0.12f, 2.0f);
-    const C4 metal = rgb(d.color), dark = rgb(d.color, 0.6f), wood = rgb(d.accent);
+    const C4 metal = rgb(d.color), dark = rgb(d.color, 0.6f), wood = rgb(d.accent), black{0.08f, 0.08f, 0.09f, 1.0f};
+    const std::string act = orchard::gun_action_of(d);
+    const std::string& sh = d.shape;
+    const bool revolver = sh == "revolver" || act == "revolver_da" || act == "revolver_sa";
+    const bool handgun = sh == "pistol" || revolver || sh == "flintlock";
+    const bool bullpup = sh == "bullpup";
+    const bool launcher = sh == "launcher";
     const bool rifle = L > 0.45f;
-    const float body = rifle ? L * 0.45f : L * 0.7f;
-    box(m, {0.0f, 0.05f, -body * 0.5f + 0.05f}, {0.025f, 0.035f, body * 0.5f}, metal);
-    const float barrel_start = -body + 0.05f;
-    rod(m, {0.0f, 0.06f, barrel_start}, {0.0f, 0.06f, -L + 0.08f}, rifle ? 0.012f : 0.01f, dark, q >= 2 ? 12 : 6);
-    box(m, {0.0f, -0.04f, 0.0f}, {0.018f, 0.06f, 0.025f}, wood);
-    if (d.magazine > 1 && d.magazine < 200) box(m, {0.0f, -0.03f, -0.07f}, {0.014f, 0.05f, 0.02f}, dark);
-    if (rifle) box(m, {0.0f, 0.03f, 0.08f + L * 0.12f}, {0.02f, 0.045f, L * 0.13f}, wood);
+    if (launcher && d.ammo != "40mm" && d.ammo != "flare") {
+        rod(m, {0.0f, 0.06f, 0.35f}, {0.0f, 0.06f, -L + 0.35f}, 0.045f, metal, q >= 1 ? 16 : 8);
+        box(m, {0.0f, -0.02f, 0.0f}, {0.015f, 0.05f, 0.02f}, black);
+        if (q >= 1) box(m, {0.03f, 0.11f, -0.1f}, {0.012f, 0.02f, 0.05f}, black);
+        return;
+    }
+    if (handgun) {
+        const float body = L * 0.75f;
+        const float back = open ? 0.035f : 0.0f;
+        if (revolver) {
+            box(m, {0.0f, 0.05f, -0.01f}, {0.012f, 0.022f, 0.03f}, metal);
+            rod(m, {0.0f, 0.052f, -0.035f}, {0.0f, 0.052f, -0.075f}, 0.024f, metal, q >= 1 ? 12 : 6);
+            if (q >= 1)
+                for (int i = 0; i < 6; ++i) {
+                    const float a = two_pi * static_cast<float>(i) / 6.0f;
+                    rod(m, {std::cos(a) * 0.014f, 0.052f + std::sin(a) * 0.014f, -0.0745f}, {std::cos(a) * 0.014f, 0.052f + std::sin(a) * 0.014f, -0.076f}, 0.005f, black, 6);
+                }
+            rod(m, {0.0f, 0.06f, -0.075f}, {0.0f, 0.06f, -L + 0.02f}, 0.008f, metal, q >= 1 ? 10 : 6);
+            box(m, {0.0f, 0.075f, 0.022f}, {0.004f, 0.012f, 0.008f}, dark);
+            box(m, {0.0f, -0.015f, 0.025f}, {0.013f, 0.045f, 0.018f}, wood);
+            if (q >= 1) rod(m, {0.0f, 0.03f, -0.03f}, {0.0f, 0.005f, -0.01f}, 0.003f, dark, 6);
+            return;
+        }
+        box(m, {0.0f, 0.06f, -body * 0.5f + 0.04f + back}, {0.013f, 0.018f, body * 0.5f}, metal);
+        box(m, {0.0f, 0.032f, -body * 0.45f + 0.03f}, {0.012f, 0.012f, body * 0.42f}, d.color.x < 0.2f ? black : dark);
+        rod(m, {0.0f, 0.06f, -body + 0.04f + back}, {0.0f, 0.06f, -body + 0.03f - (open ? 0.002f : 0.0f)}, 0.007f, dark, 8);
+        if (open) rod(m, {0.0f, 0.06f, -body + 0.04f}, {0.0f, 0.06f, -body + 0.08f + back}, 0.0072f, rgb(orchard::Vec3{0.55f, 0.56f, 0.58f}), 8);
+        box(m, {0.0f, -0.015f, 0.018f}, {0.012f, 0.05f, 0.018f}, d.color.x < 0.2f ? black : wood);
+        if (d.magazine > 12 && d.gun_class == "machine_pistol") box(m, {0.0f, -0.08f, 0.018f}, {0.01f, 0.03f, 0.014f}, black);
+        if (q >= 1) {
+            box(m, {0.0f, 0.081f, -body + 0.05f + back}, {0.002f, 0.004f, 0.003f}, dark);
+            box(m, {0.0f, 0.081f, 0.03f + back}, {0.006f, 0.004f, 0.003f}, dark);
+            rod(m, {0.0f, 0.02f, -0.005f}, {0.0f, 0.005f, -0.02f}, 0.003f, dark, 6);
+            for (int i = 0; i < 4; ++i) box(m, {0.0135f, 0.062f, 0.02f - i * 0.006f + back}, {0.0006f, 0.012f, 0.0015f}, dark);
+        }
+        if (d.has("suppressed")) rod(m, {0.0f, 0.06f, -body + 0.03f}, {0.0f, 0.06f, -body - 0.12f}, 0.016f, black, 12);
+        return;
+    }
+    const float body = bullpup ? L * 0.55f : rifle ? L * 0.42f : L * 0.6f;
+    const float rz0 = bullpup ? 0.18f : 0.05f;
+    box(m, {0.0f, 0.05f, rz0 - body * 0.5f}, {0.024f, 0.034f, body * 0.5f}, metal);
+    const float barrel_start = rz0 - body;
+    const bool doubles = act == "break" && d.magazine == 2;
+    if (doubles) {
+        rod(m, {-0.012f, 0.06f, barrel_start}, {-0.012f, 0.06f, -L + 0.02f}, 0.011f, dark, q >= 1 ? 12 : 6);
+        rod(m, {0.012f, 0.06f, barrel_start}, {0.012f, 0.06f, -L + 0.02f}, 0.011f, dark, q >= 1 ? 12 : 6);
+    } else {
+        rod(m, {0.0f, 0.06f, barrel_start}, {0.0f, 0.06f, -L + 0.06f}, rifle ? 0.011f : 0.009f, dark, q >= 2 ? 12 : 6);
+    }
+    box(m, {0.0f, -0.035f, bullpup ? 0.02f - body * 0.45f : 0.0f}, {0.016f, 0.05f, 0.022f}, act == "lever" || d.accent.x > 0.3f ? wood : black);
+    const bool tube = act == "pump" || act == "lever" || (sh == "shotgun" && d.feed == "internal");
+    if (tube && !doubles) rod(m, {0.0f, 0.035f, barrel_start}, {0.0f, 0.035f, -L * 0.85f}, 0.009f, dark, 8);
+    if (act == "pump") box(m, {0.0f, 0.035f, barrel_start - L * 0.18f + (open ? 0.05f : 0.0f)}, {0.022f, 0.022f, L * 0.1f}, wood);
+    else if (rifle && !bullpup && !doubles) box(m, {0.0f, 0.045f, barrel_start - L * 0.12f}, {0.02f, 0.022f, L * 0.13f}, wood);
+    if (act == "lever") {
+        rod(m, {0.0f, 0.0f, 0.03f}, {0.0f, -0.05f, 0.03f}, 0.004f, metal, 6);
+        rod(m, {0.0f, -0.05f, 0.03f}, {0.0f, -0.06f, -0.04f}, 0.004f, metal, 6);
+        rod(m, {0.0f, -0.06f, -0.04f}, {0.0f, 0.0f, -0.06f}, 0.004f, metal, 6);
+    }
+    if (act == "bolt" || act == "straight_pull") {
+        const float bz = rz0 - 0.03f + (open ? 0.06f : 0.0f);
+        rod(m, {0.02f, 0.065f, bz}, {0.06f, act == "bolt" ? 0.045f : 0.065f, bz}, 0.004f, metal, 6);
+        ellipsoid(m, {0.062f, act == "bolt" ? 0.044f : 0.065f, bz}, {0.008f, 0.008f, 0.008f}, metal, 4, 8);
+    } else if (!tube && !doubles && act != "muzzle") {
+        box(m, {0.026f, 0.06f, rz0 - body * 0.35f + (open ? 0.03f : 0.0f)}, {0.004f, 0.006f, 0.012f}, dark);
+    }
+    const bool belt = d.feed == "belt";
+    const bool detachable = d.feed == "magazine" && d.magazine > 1;
+    const float mag_z = bullpup ? rz0 - 0.03f : rz0 - body * 0.55f;
+    if (belt) {
+        box(m, {0.06f, 0.0f, mag_z}, {0.035f, 0.05f, 0.05f}, rgb(orchard::Vec3{0.33f, 0.37f, 0.22f}));
+        if (q >= 1) for (int i = 0; i < 4; ++i) rod(m, {0.025f, 0.05f - i * 0.008f, mag_z - 0.02f + i * 0.01f}, {0.025f, 0.05f - i * 0.008f, mag_z - 0.02f + i * 0.01f + 0.004f}, 0.004f, rgb(orchard::Vec3{0.85f, 0.68f, 0.3f}), 6);
+    } else if (detachable) {
+        if (d.magazine >= 50 && d.gun_class != "pdw") {
+            rod(m, {-0.025f, -0.03f, mag_z}, {0.025f, -0.03f, mag_z}, 0.06f, black, q >= 1 ? 14 : 8);
+        } else {
+            const bool curved = d.caliber == "762x39" || d.caliber == "545x39" || d.ammo == "762x39" || d.ammo == "545x39";
+            const float len = std::clamp(0.05f + static_cast<float>(d.magazine) * 0.0035f, 0.05f, 0.2f);
+            const int segs = curved ? 4 : 1;
+            for (int i = 0; i < segs; ++i) {
+                const float k0 = static_cast<float>(i) / segs, k1 = static_cast<float>(i + 1) / segs;
+                const float lean = curved ? (k0 + k1) * 0.5f * (k0 + k1) * 0.5f * 0.06f : 0.0f;
+                box(m, {0.0f, 0.02f - len * (k0 + k1) * 0.5f, mag_z - lean}, {0.012f, len * 0.5f / segs, 0.022f}, black);
+            }
+        }
+    }
+    if (rifle && !bullpup) {
+        if (d.gun_class == "smg" || d.gun_class == "pdw" || d.has("folding")) rod(m, {0.0f, 0.04f, rz0}, {0.0f, 0.03f, rz0 + L * 0.3f}, 0.005f, dark, 6);
+        else box(m, {0.0f, 0.03f, rz0 + L * 0.13f}, {0.018f, 0.04f, L * 0.13f}, wood);
+    }
+    if (bullpup) box(m, {0.0f, 0.02f, rz0 + 0.04f}, {0.02f, 0.045f, 0.04f}, black);
     if (q >= 1) {
-        box(m, {0.0f, 0.095f, -L + 0.11f}, {0.003f, 0.01f, 0.004f}, dark);
-        box(m, {0.0f, 0.09f, 0.02f}, {0.008f, 0.008f, 0.006f}, dark);
-        box(m, {0.0f, -0.005f, -0.03f}, {0.004f, 0.012f, 0.02f}, dark);
+        box(m, {0.0f, 0.085f, -L + 0.09f}, {0.003f, 0.012f, 0.004f}, dark);
+        box(m, {0.0f, 0.087f, rz0 - 0.02f}, {0.008f, 0.008f, 0.006f}, dark);
+        box(m, {0.0f, -0.005f, (bullpup ? -body * 0.45f : 0.0f) - 0.03f}, {0.004f, 0.012f, 0.02f}, dark);
     }
     if (q >= 2) {
-        if (rifle) rod(m, {0.0f, 0.04f, barrel_start + 0.05f}, {0.0f, 0.04f, barrel_start - L * 0.25f}, 0.02f, wood, 10);
-        if (d.has("scoped") || d.category.find("Sniper") != std::string::npos) rod(m, {0.0f, 0.12f, -0.05f}, {0.0f, 0.12f, -0.3f}, 0.022f, dark, 14);
-        rod(m, {0.0f, 0.06f, -L + 0.08f}, {0.0f, 0.06f, -L + 0.06f}, rifle ? 0.016f : 0.013f, dark, 12);
+        if (d.has("scoped") || d.category.find("Sniper") != std::string::npos) {
+            rod(m, {0.0f, 0.115f, rz0 - 0.02f}, {0.0f, 0.115f, rz0 - 0.3f}, 0.018f, black, 14);
+            rod(m, {0.0f, 0.115f, rz0 - 0.3f}, {0.0f, 0.115f, rz0 - 0.34f}, 0.024f, black, 14);
+            rod(m, {0.0f, 0.115f, rz0 + 0.01f}, {0.0f, 0.115f, rz0 - 0.02f}, 0.021f, black, 14);
+        }
+        if (!doubles) rod(m, {0.0f, 0.06f, -L + 0.08f}, {0.0f, 0.06f, -L + 0.05f}, rifle ? 0.015f : 0.012f, dark, 12);
     }
+    if (d.has("suppressed")) rod(m, {0.0f, 0.06f, -L + 0.06f}, {0.0f, 0.06f, -L - 0.12f}, 0.022f, black, 12);
 }
 
 void item_melee(MeshData& m, const orchard::ItemDef& d, int q) {
@@ -355,7 +449,6 @@ void item_flask(MeshData& m, const orchard::ItemDef& d, int q, bool liquid_only)
     const float r = bottle ? 0.035f : 0.045f, h = bottle ? 0.2f : 0.09f;
     const C4 liquid = rgb(d.color, 1.0f, q >= 2 ? 0.85f : 1.0f);
     if (liquid_only) {
-        // The sloshing part: a flattened blob that the game tilts with motion.
         ellipsoid(m, {0.0f, bottle ? h * 0.35f : r * 0.8f, 0.0f}, {r * 0.88f, bottle ? h * 0.33f : r * 0.62f, r * 0.88f}, liquid, 6, 12);
         return;
     }
@@ -371,7 +464,6 @@ void item_wear(MeshData& m, const orchard::ItemDef& d, int q, bool worn) {
     const C4 c = rgb(d.color), a = rgb(d.accent);
     const std::string& slot = d.wear;
     if (!worn) {
-        // Folded or packed version for the ground.
         if (d.kind == orchard::ItemKind::container) box(m, {0.0f, 0.15f, 0.0f}, {0.15f, 0.15f, 0.08f}, c);
         else if (slot == "head") ellipsoid(m, {0.0f, 0.06f, 0.0f}, {0.11f, 0.07f, 0.12f}, c, 6, 10);
         else if (slot == "feet") { box(m, {-0.06f, 0.04f, 0.0f}, {0.045f, 0.04f, 0.12f}, c); box(m, {0.06f, 0.04f, 0.0f}, {0.045f, 0.04f, 0.12f}, c); }
@@ -380,7 +472,6 @@ void item_wear(MeshData& m, const orchard::ItemDef& d, int q, bool worn) {
         if (q >= 1 && d.kind == orchard::ItemKind::container) box(m, {0.0f, 0.15f, 0.085f}, {0.1f, 0.08f, 0.02f}, a);
         return;
     }
-    // Worn shells, sized for a 1.8 m humanoid with its feet at the origin of the anchor slot.
     const float t = d.kind == orchard::ItemKind::armor ? 0.03f : 0.012f;
     const int rs = q >= 2 ? 10 : 6, ss = q >= 2 ? 16 : 8;
     if (slot == "head") ellipsoid(m, {0.0f, 0.0f, 0.0f}, {0.115f + t, 0.12f + t, 0.125f + t}, c, rs, ss);
@@ -416,20 +507,110 @@ void item_wear(MeshData& m, const orchard::ItemDef& d, int q, bool worn) {
     }
 }
 
+void item_round(MeshData& m, const orchard::ItemDef& d, const orchard::BulletType* b, V at, float scale) {
+    const float len = std::max(0.006f, d.length) * scale;
+    const float r = std::clamp(len * (d.cartridge_class == "shotgun" ? 0.28f : d.cartridge_class == "airgun" ? 0.45f : 0.18f), 0.002f, 0.02f);
+    const C4 casing = rgb(d.color);
+    const C4 jacket = rgb(b && (b->tip == "soft" || b->tip == "flat") ? orchard::Vec3{0.55f, 0.55f, 0.58f} : orchard::Vec3{0.78f, 0.48f, 0.25f});
+    const C4 tip = rgb(b ? b->tip_color : orchard::Vec3{0.78f, 0.48f, 0.25f});
+    if (d.cartridge_class == "shotgun") {
+        rod(m, at, {at.x, at.y + len * 0.2f, at.z}, r * 1.05f, rgb(orchard::Vec3{0.85f, 0.68f, 0.3f}), 10);
+        rod(m, {at.x, at.y + len * 0.2f, at.z}, {at.x, at.y + len, at.z}, r, tip, 10);
+        return;
+    }
+    const float case_len = len * (d.cartridge_class == "airgun" ? 0.0f : d.cartridge_class == "rifle" || d.cartridge_class == "specialty" ? 0.65f : 0.5f);
+    if (case_len > 0.0f) rod(m, at, {at.x, at.y + case_len, at.z}, r, casing, 10);
+    const float bullet_r = d.cartridge_class == "rifle" || d.cartridge_class == "specialty" ? r * 0.62f : r * 0.92f;
+    const float nose_len = len - case_len;
+    const std::string shape = b ? b->tip : std::string("round");
+    const int segs = 5;
+    for (int i = 0; i < segs; ++i) {
+        const float k0 = static_cast<float>(i) / segs, k1 = static_cast<float>(i + 1) / segs;
+        auto radius = [&](float k) {
+            if (shape == "flat") return bullet_r;
+            if (shape == "pointed" || shape == "boat") return bullet_r * std::sqrt(std::max(0.0f, 1.0f - k * k));
+            return bullet_r * std::sqrt(std::max(0.0f, 1.0f - std::pow(k, 2.4f)));
+        };
+        const bool painted = (shape == "pointed" || shape == "open") ? k0 >= 0.7f : (shape == "soft" || shape == "hollow") ? k0 >= 0.78f : false;
+        cone(m, at.y + case_len + nose_len * k0, at.y + case_len + nose_len * k1, radius(k0), std::max(0.0004f, radius(k1)), 10, painted ? tip : jacket, 0u, 0.0f);
+    }
+}
+
 MeshData build_item(const orchard::ItemDef& d, const std::string& variant) {
     MeshData m;
+    if (d.kind == orchard::ItemKind::ammo && (variant.rfind("round_", 0) == 0 || variant.rfind("pile_", 0) == 0)) {
+        const std::string bid = variant.substr(variant.find('_') + 1);
+        const orchard::BulletType* bt = nullptr;
+        for (const orchard::BulletType& x : orchard::bullet_types())
+            if (x.id == bid) bt = &x;
+        if (variant.rfind("round_", 0) == 0) {
+            item_round(m, d, bt, {0.0f, 0.0f, 0.0f}, 1.0f);
+        } else {
+            const float step = std::max(0.006f, d.length) * 0.5f;
+            for (int i = 0; i < 6; ++i) {
+                const float a = static_cast<float>(i) * 2.399f;
+                item_round(m, d, bt, {std::cos(a) * step * std::sqrt(static_cast<float>(i)), 0.0f, std::sin(a) * step * std::sqrt(static_cast<float>(i))}, 1.0f);
+            }
+        }
+    } else if (d.kind == orchard::ItemKind::magazine && (variant == "full" || variant == "empty" || variant == "detailed" || variant == "simple" || variant == "realistic")) {
+        const C4 dark = rgb(d.color);
+        const C4 brass = rgb(orchard::Vec3{0.85f, 0.68f, 0.3f});
+        const bool full = variant != "empty";
+        if (d.shape == "drum") {
+            m = MeshData{};
+            rod(m, {0.0f, 0.0f, -0.035f}, {0.0f, 0.0f, 0.035f}, 0.09f, dark, 18);
+            box(m, {0.0f, 0.1f, 0.0f}, {0.02f, 0.04f, 0.015f}, dark);
+            if (full) rod(m, {0.0f, 0.14f, 0.0f}, {0.0f, 0.16f, 0.0f}, 0.004f, brass, 8);
+        } else if (d.shape == "ammo_box") {
+            box(m, {0.0f, 0.06f, 0.0f}, {0.12f, 0.06f, 0.05f}, rgb(orchard::Vec3{0.33f, 0.37f, 0.22f}));
+            if (full)
+                for (int i = 0; i < 6; ++i) rod(m, {-0.09f + i * 0.035f, 0.12f, 0.0f}, {-0.09f + i * 0.035f, 0.145f, 0.0f}, 0.005f, brass, 8);
+        } else {
+            const float h = d.shape == "mag_pistol" ? 0.11f : 0.18f;
+            const float w = d.shape == "mag_pistol" ? 0.014f : 0.016f;
+            const float depth = d.shape == "mag_pistol" ? 0.03f : 0.06f;
+            const int segs = d.shape == "mag_pistol" ? 1 : 4;
+            for (int i = 0; i < segs; ++i) {
+                const float k0 = static_cast<float>(i) / segs, k1 = static_cast<float>(i + 1) / segs;
+                const float lean0 = d.shape == "mag_pistol" ? 0.0f : k0 * k0 * 0.05f, lean1 = d.shape == "mag_pistol" ? 0.0f : k1 * k1 * 0.05f;
+                box(m, {0.0f, h * (1.0f - (k0 + k1) * 0.5f), (lean0 + lean1) * 0.5f}, {w, h * 0.5f / segs, depth * 0.5f}, dark);
+            }
+            box(m, {0.0f, -0.005f, (d.shape == "mag_pistol" ? 0.0f : 0.05f)}, {w * 1.2f, 0.006f, depth * 0.55f}, dark);
+            if (full) {
+                rod(m, {0.0f, h, -depth * 0.2f}, {0.0f, h + 0.004f, -depth * 0.2f}, w * 0.7f, brass, 8);
+                cone(m, h + 0.004f, h + 0.016f, w * 0.55f, 0.001f, 8, rgb(orchard::Vec3{0.78f, 0.48f, 0.25f}), 0u, 0.0f);
+            }
+        }
+        V lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+        for (V p : m.positions) {
+            lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+            hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+        }
+        const V c{(lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f};
+        for (V& p : m.positions) p = {p.x - c.x, p.y - c.y, p.z - c.z};
+        return m;
+    }
+    if (!m.positions.empty()) {
+        V lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+        for (V p : m.positions) {
+            lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+            hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+        }
+        const V c{(lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f};
+        for (V& p : m.positions) p = {p.x - c.x, p.y - c.y, p.z - c.z};
+        return m;
+    }
     const int q = variant == "simple" ? 0 : variant == "realistic" ? 2 : 1;
     using K = orchard::ItemKind;
     if (variant == "liquid") {
         item_flask(m, d, 2, true);
         return m;
     }
-    const bool worn = variant == "worn";
+    const bool worn = variant == "worn" || variant == "worn_open";
     if (worn && d.kind != K::clothing && d.kind != K::armor && d.kind != K::trinket && d.kind != K::container && d.kind != K::holster && !d.wearable()) {
-        // Held in a hand: same mesh as on the ground, but with the grip at the origin.
         MeshData held;
         switch (d.kind) {
-        case K::gun: item_gun(held, d, 1); break;
+        case K::gun: item_gun(held, d, 1, variant == "worn_open"); break;
         case K::melee: case K::tool: item_melee(held, d, 1); break;
         case K::bow: item_bow(held, d, 1); break;
         case K::magic: item_magic(held, d, 1); break;
@@ -476,7 +657,6 @@ MeshData build_item(const orchard::ItemDef& d, const std::string& variant) {
     }
     }
     if (m.positions.empty()) box(m, {0.0f, 0.05f, 0.0f}, {0.05f, 0.05f, 0.05f}, rgb(d.color));
-    // Lying on the ground the item's collider is centred on it, so centre the mesh too.
     V lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
     for (V p : m.positions) {
         lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
@@ -498,7 +678,11 @@ void put(std::string& bin, const std::vector<T>& v) {
 } // namespace
 
 const std::vector<std::string>& builtin_model_names() {
-    static const std::vector<std::string> all = {"tree", "pine", "bush", "rock", "character-pixel", "character-mannequin", "character-robot"};
+    static const std::vector<std::string> all = [] {
+        std::vector<std::string> v = {"tree", "pine", "bush", "rock", "character-pixel", "character-mannequin", "character-robot"};
+        for (const PlantInfo& p : plant_models()) v.push_back(p.name);
+        return v;
+    }();
     return all;
 }
 
@@ -554,7 +738,163 @@ static std::string glb_of(const MeshData& m, const std::string& name) {
 }
 
 
+
+namespace {
+
+struct Canvas {
+    int size = 64;
+    std::vector<std::uint8_t> px;
+
+    explicit Canvas(int n) : size(n), px(static_cast<std::size_t>(n * n * 4), 0) {}
+
+    void plot(int x, int y, Vec3 c, float a = 1.0f) {
+        if (x < 0 || y < 0 || x >= size || y >= size || a <= 0.0f) return;
+        std::uint8_t* p = &px[static_cast<std::size_t>((y * size + x) * 4)];
+        const float old = p[3] / 255.0f;
+        const float out = a + old * (1.0f - a);
+        auto mix = [&](std::uint8_t& ch, float v) {
+            const float prev = ch / 255.0f;
+            const float res = out > 0.0f ? (std::clamp(v, 0.0f, 1.0f) * a + prev * old * (1.0f - a)) / out : 0.0f;
+            ch = static_cast<std::uint8_t>(std::clamp(res, 0.0f, 1.0f) * 255.0f + 0.5f);
+        };
+        mix(p[0], c.x);
+        mix(p[1], c.y);
+        mix(p[2], c.z);
+        p[3] = static_cast<std::uint8_t>(std::clamp(out, 0.0f, 1.0f) * 255.0f + 0.5f);
+    }
+
+    void cylinder_rect(float x0, float y0, float x1, float y1, Vec3 c) {
+        for (int y = static_cast<int>(std::floor(y0)); y < static_cast<int>(std::ceil(y1)); ++y)
+            for (int x = static_cast<int>(std::floor(x0)); x < static_cast<int>(std::ceil(x1)); ++x) {
+                const float u = (x + 0.5f - x0) / std::max(0.5f, x1 - x0);
+                const float shade = 0.55f + 0.75f * std::sin(std::clamp(u, 0.0f, 1.0f) * 3.14159f) - 0.25f * u;
+                plot(x, y, {c.x * shade, c.y * shade, c.z * shade});
+            }
+    }
+
+    void nose(float x0, float x1, float base_y, float tip_y, const std::string& tip, Vec3 c, Vec3 tip_color) {
+        const float h = base_y - tip_y;
+        for (int y = static_cast<int>(std::floor(tip_y)); y < static_cast<int>(std::ceil(base_y)); ++y) {
+            const float k = std::clamp((base_y - (y + 0.5f)) / std::max(0.5f, h), 0.0f, 1.0f);
+            float half = (x1 - x0) * 0.5f;
+            if (tip == "flat") half *= k > 0.85f ? 0.92f : 1.0f;
+            else if (tip == "pointed" || tip == "boat") half *= std::sqrt(std::max(0.0f, 1.0f - k * k)) * (1.0f - k * 0.15f);
+            else half *= std::sqrt(std::max(0.0f, 1.0f - std::pow(k, 2.4f)));
+            const float cx = (x0 + x1) * 0.5f;
+            for (int x = static_cast<int>(std::floor(cx - half)); x < static_cast<int>(std::ceil(cx + half)); ++x) {
+                const float u = (x + 0.5f - (cx - half)) / std::max(0.5f, half * 2.0f);
+                const float shade = 0.55f + 0.75f * std::sin(std::clamp(u, 0.0f, 1.0f) * 3.14159f) - 0.25f * u;
+                const bool painted = (tip == "pointed" || tip == "open") ? k > 0.7f : (tip == "soft" || tip == "hollow") ? k > 0.78f : false;
+                Vec3 col = painted ? tip_color : c;
+                if (tip == "hollow" && k > 0.93f && std::fabs(x + 0.5f - cx) < half * 0.55f) col = {0.12f, 0.08f, 0.05f};
+                plot(x, y, {col.x * shade, col.y * shade, col.z * shade});
+            }
+        }
+    }
+
+    void disc(float cx, float cy, float r, Vec3 c, float a = 1.0f) {
+        for (int y = static_cast<int>(cy - r - 1); y <= static_cast<int>(cy + r + 1); ++y)
+            for (int x = static_cast<int>(cx - r - 1); x <= static_cast<int>(cx + r + 1); ++x) {
+                const float d = std::hypot(x + 0.5f - cx, y + 0.5f - cy);
+                if (d <= r) {
+                    const float shade = 1.15f - 0.5f * ((x + 0.5f - cx) + (y + 0.5f - cy)) / std::max(1.0f, r);
+                    plot(x, y, {c.x * shade * 0.8f, c.y * shade * 0.8f, c.z * shade * 0.8f}, a * std::clamp(r - d + 0.5f, 0.0f, 1.0f));
+                }
+            }
+    }
+};
+
+void draw_round(Canvas& cv, float cx, float bottom, float width, float height, const ItemDef& d, Vec3 bullet, Vec3 tip_color, const std::string& tip) {
+    const std::string& klass = d.cartridge_class;
+    if (klass == "airgun") {
+        const float w = width * 1.2f;
+        cv.cylinder_rect(cx - w * 0.5f, bottom - height * 0.35f, cx + w * 0.5f, bottom, bullet);
+        cv.cylinder_rect(cx - w * 0.22f, bottom - height * 0.65f, cx + w * 0.22f, bottom - height * 0.35f, bullet);
+        cv.nose(cx - w * 0.42f, cx + w * 0.42f, bottom - height * 0.65f, bottom - height, tip, bullet, tip_color);
+        return;
+    }
+    if (klass == "shotgun") {
+        const Vec3 brass{0.85f, 0.68f, 0.3f};
+        cv.cylinder_rect(cx - width * 0.5f, bottom - height * 0.22f, cx + width * 0.5f, bottom, brass);
+        cv.cylinder_rect(cx - width * 0.47f, bottom - height, cx + width * 0.47f, bottom - height * 0.22f, tip_color);
+        for (int i = 0; i < 3; ++i) cv.cylinder_rect(cx - width * 0.47f, bottom - height + 2.0f + i * 2.0f, cx + width * 0.47f, bottom - height + 3.0f + i * 2.0f, Vec3{tip_color.x * 0.7f, tip_color.y * 0.7f, tip_color.z * 0.7f});
+        return;
+    }
+    const float case_h = height * (klass == "rifle" || klass == "specialty" ? 0.62f : 0.5f);
+    cv.cylinder_rect(cx - width * 0.5f, bottom - case_h, cx + width * 0.5f, bottom, d.color);
+    cv.cylinder_rect(cx - width * 0.55f, bottom - height * 0.06f, cx + width * 0.55f, bottom, Vec3{d.color.x * 0.85f, d.color.y * 0.85f, d.color.z * 0.85f});
+    const float bw = klass == "rifle" || klass == "specialty" ? width * 0.62f : width * 0.92f;
+    if (klass == "rifle" || klass == "specialty") cv.cylinder_rect(cx - width * 0.5f, bottom - case_h - height * 0.06f, cx + width * 0.5f, bottom - case_h, d.color);
+    const float neck = bottom - case_h - (klass == "rifle" || klass == "specialty" ? height * 0.06f : 0.0f);
+    cv.nose(cx - bw * 0.5f, cx + bw * 0.5f, neck, bottom - height, tip, bullet, tip_color);
+}
+
+} // namespace
+
+std::vector<std::uint8_t> item_icon_rgba(const ItemDef& d, const std::string& variant, const BulletType* bullet, float fill, int size) {
+    Canvas cv(size);
+    const float s = static_cast<float>(size);
+    const Vec3 copper{0.78f, 0.48f, 0.25f};
+    const Vec3 lead{0.55f, 0.55f, 0.58f};
+    Vec3 tip_color = bullet ? bullet->tip_color : copper;
+    std::string tip = bullet ? bullet->tip : std::string("round");
+    Vec3 body = copper;
+    if (bullet && (bullet->tip == "soft" || bullet->tip == "flat")) body = bullet->tip == "flat" ? lead : copper;
+    if (bullet && (bullet->id == "frangible" || bullet->id == "rubber")) body = bullet->tip_color;
+    if (d.cartridge_class == "airgun") body = lead;
+    if (d.kind == ItemKind::ammo) {
+        const bool pile = variant.rfind("pile", 0) == 0;
+        const float w = d.cartridge_class == "shotgun" ? s * 0.26f : d.cartridge_class == "rimfire" ? s * 0.12f : d.cartridge_class == "airgun" ? s * 0.18f : s * 0.17f;
+        const float h = d.cartridge_class == "airgun" ? s * 0.3f : std::clamp(s * (0.35f + std::log10(std::max(10.0f, d.cartridge_grain)) * 0.12f), s * 0.3f, s * 0.88f);
+        if (pile) {
+            draw_round(cv, s * 0.3f, s * 0.92f, w * 0.85f, h * 0.85f, d, body, tip_color, tip);
+            draw_round(cv, s * 0.7f, s * 0.92f, w * 0.85f, h * 0.85f, d, body, tip_color, tip);
+            draw_round(cv, s * 0.5f, s * 0.96f, w * 0.85f, h * 0.85f, d, body, tip_color, tip);
+        } else {
+            draw_round(cv, s * 0.5f, s * 0.94f, w, h, d, body, tip_color, tip);
+        }
+    } else if (d.kind == ItemKind::magazine) {
+        const bool drum = d.shape == "drum";
+        const bool box = d.shape == "ammo_box";
+        const Vec3 dark{0.16f, 0.16f, 0.17f};
+        if (drum) {
+            cv.disc(s * 0.5f, s * 0.55f, s * 0.36f, dark);
+            cv.disc(s * 0.5f, s * 0.55f, s * 0.12f, Vec3{0.3f, 0.3f, 0.32f});
+            if (fill > 0.0f) cv.disc(s * 0.5f, s * 0.18f, s * 0.06f, copper);
+        } else if (box) {
+            cv.cylinder_rect(s * 0.15f, s * 0.3f, s * 0.85f, s * 0.92f, Vec3{0.33f, 0.37f, 0.22f});
+            cv.cylinder_rect(s * 0.15f, s * 0.24f, s * 0.85f, s * 0.32f, Vec3{0.25f, 0.28f, 0.18f});
+            if (fill > 0.0f)
+                for (int i = 0; i < 5; ++i) cv.nose(s * (0.22f + i * 0.12f), s * (0.3f + i * 0.12f), s * 0.24f, s * 0.12f, "pointed", copper, copper);
+        } else {
+            const float w = d.shape == "mag_pistol" ? s * 0.26f : s * 0.32f;
+            const float top = s * 0.18f;
+            for (int y = static_cast<int>(top); y < static_cast<int>(s * 0.95f); ++y) {
+                const float k = (y - top) / (s * 0.77f);
+                const float lean = d.shape == "mag_pistol" ? 0.0f : k * k * s * 0.14f;
+                for (int x = static_cast<int>(s * 0.5f - w * 0.5f + lean); x < static_cast<int>(s * 0.5f + w * 0.5f + lean); ++x) {
+                    const float u = (x - (s * 0.5f - w * 0.5f + lean)) / w;
+                    const float shade = 0.7f + 0.5f * std::sin(u * 3.14159f);
+                    cv.plot(x, y, {dark.x * shade, dark.y * shade, dark.z * shade});
+                }
+            }
+            const float win_top = s * 0.3f, win_bot = s * 0.85f;
+            for (int i = 0; i < 6; ++i) {
+                const float y = win_bot - (win_bot - win_top) * (i + 0.5f) / 6.0f;
+                const bool on = fill * 6.0f > i;
+                cv.disc(s * 0.5f + (d.shape == "mag_pistol" ? 0.0f : ((y - top) / (s * 0.77f)) * ((y - top) / (s * 0.77f)) * s * 0.14f), y, s * 0.03f, on ? Vec3{0.85f, 0.68f, 0.3f} : Vec3{0.08f, 0.08f, 0.08f});
+            }
+            if (fill > 0.0f) {
+                cv.cylinder_rect(s * 0.5f - w * 0.32f, top - s * 0.04f, s * 0.5f + w * 0.32f, top + s * 0.01f, Vec3{0.85f, 0.68f, 0.3f});
+                cv.nose(s * 0.5f - w * 0.28f, s * 0.5f + w * 0.28f, top - s * 0.04f, top - s * 0.16f, tip, body, tip_color);
+            }
+        }
+    }
+    return cv.px;
+}
+
 std::string builtin_model_glb(const std::string& name) {
+    if (is_plant_model(name)) return plant_model_glb(name);
     return glb_of(build(name), name);
 }
 

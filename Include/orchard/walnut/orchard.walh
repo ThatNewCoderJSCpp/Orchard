@@ -327,6 +327,46 @@ extern "C++" from "<orchard/script/script_lib.hpp>" {
         static function rain_at(short float: x, short float: y, short float: z) -> short float;
         static function snow_at(short float: x, short float: y, short float: z) -> short float;
         static function is_sheltered(short float: x, short float: y, short float: z) -> bool;
+        static function load_magazine(const NativeEntity&: target, const string&: list, short float: index) -> short float;
+        static function unload_magazine(const NativeEntity&: target, const string&: list, short float: index) -> short float;
+        static function unload_weapon(const NativeEntity&: target) -> bool;
+        static function choose_ammo(const NativeEntity&: target, const string&: ammo, const string&: bullet_type) -> bool;
+        static function loaded_ammo(const NativeEntity&: target) -> string;
+        static function loaded_variant(const NativeEntity&: target) -> string;
+        static function loaded_rounds(const NativeEntity&: target) -> short float;
+        static function give_ammo(const NativeEntity&: target, const string&: ammo, const string&: bullet_type, short float: amount) -> short float;
+        static function ammo_count(const NativeEntity&: target, const string&: ammo, const string&: bullet_type) -> short float;
+        static function ammo_info(const string&: item) -> string;
+        static function ammo_fits(const string&: gun, const string&: ammo) -> bool;
+        static function bullet_setting(const string&: bullet_type, const string&: setting) -> string;
+        static function define_bullet(const string&: bullet_type, const string&: setting, const string&: value) -> bool;
+        static function game_rule(const string&: rule) -> string;
+        static function set_game_rule(const string&: rule, const string&: value) -> bool;
+        static function inventory_click(const NativeEntity&: target, const NativeEntity&: other, const string&: list, short float: index, const string&: action) -> bool;
+        static function cursor_item(const NativeEntity&: target) -> string;
+        static function cursor_amount(const NativeEntity&: target) -> short float;
+        static function return_cursor(const NativeEntity&: target) -> bool;
+        static function next_item_event(const NativeEntity&: target) -> string;
+        static function describe(const NativeEntity&: target, const string&: lines) -> string;
+        static function set_look_info(const NativeEntity&: target, const string&: info) -> void;
+        static function enchant_item(const NativeEntity&: target, const string&: list, short float: index, const string&: enchant) -> bool;
+        static function play_item_sound(const string&: name, short float: x, short float: y, short float: z) -> void;
+        static function worn_resist(const NativeEntity&: target, const string&: damage_type) -> short float;
+        static function find_guns(const string&: filter) -> string;
+        static function gun_info(const string&: item) -> string;
+        static function gun_state(const NativeEntity&: target) -> string;
+        static function cycle_weapon(const NativeEntity&: target) -> bool;
+        static function fire_mode(const NativeEntity&: target) -> string;
+        static function set_fire_mode(const NativeEntity&: target, const string&: mode) -> bool;
+        static function next_fire_mode(const NativeEntity&: target) -> bool;
+        static function surface_under(const NativeEntity&: target) -> string;
+        static function surface_at(short float: x, short float: y, short float: z) -> string;
+        static function wading_in(const NativeEntity&: target) -> string;
+        static function ground_speed(const NativeEntity&: target) -> short float;
+        static function set_ground_speed(const NativeEntity&: target, const string&: speed) -> bool;
+        static function define_surface(const string&: surface, const string&: setting, const string&: value) -> bool;
+        static function surface_setting(const string&: surface, const string&: setting) -> string;
+        static function set_surface(const NativeEntity&: target, const string&: surface) -> bool;
     } end class NativeLib
 } end extern
 
@@ -1810,5 +1850,165 @@ function snow_at(short float: x, short float: y, short float: z) -> short float 
 function is_sheltered(short float: x, short float: y, short float: z) -> bool {
     return NativeLib::is_sheltered(x, y, z);
 } end function is_sheltered
+function load_magazine(const Entity&: target, const string&: list, short float: index) -> short float {
+    return NativeLib::load_magazine(target.raw, list, index);
+} end function load_magazine
+
+function unload_magazine(const Entity&: target, const string&: list, short float: index) -> short float {
+    return NativeLib::unload_magazine(target.raw, list, index);
+} end function unload_magazine
+
+function unload_weapon(const Entity&: target) -> bool {
+    return NativeLib::unload_weapon(target.raw);
+} end function unload_weapon
+
+function choose_ammo(const Entity&: target, const string&: ammo, const string&: bullet_type) -> bool {
+    return NativeLib::choose_ammo(target.raw, ammo, bullet_type);
+} end function choose_ammo
+
+function loaded_ammo(const Entity&: target) -> string {
+    return NativeLib::loaded_ammo(target.raw);
+} end function loaded_ammo
+
+function loaded_variant(const Entity&: target) -> string {
+    return NativeLib::loaded_variant(target.raw);
+} end function loaded_variant
+
+function loaded_rounds(const Entity&: target) -> short float {
+    return NativeLib::loaded_rounds(target.raw);
+} end function loaded_rounds
+
+function give_ammo(const Entity&: target, const string&: ammo, const string&: bullet_type, short float: amount) -> short float {
+    return NativeLib::give_ammo(target.raw, ammo, bullet_type, amount);
+} end function give_ammo
+
+function ammo_count(const Entity&: target, const string&: ammo, const string&: bullet_type) -> short float {
+    return NativeLib::ammo_count(target.raw, ammo, bullet_type);
+} end function ammo_count
+
+function ammo_info(const string&: item) -> string {
+    return NativeLib::ammo_info(item);
+} end function ammo_info
+
+function ammo_fits(const string&: gun, const string&: ammo) -> bool {
+    return NativeLib::ammo_fits(gun, ammo);
+} end function ammo_fits
+
+function bullet_setting(const string&: bullet_type, const string&: setting) -> string {
+    return NativeLib::bullet_setting(bullet_type, setting);
+} end function bullet_setting
+
+function define_bullet(const string&: bullet_type, const string&: setting, const string&: value) -> bool {
+    return NativeLib::define_bullet(bullet_type, setting, value);
+} end function define_bullet
+
+function game_rule(const string&: rule) -> string {
+    return NativeLib::game_rule(rule);
+} end function game_rule
+
+function set_game_rule(const string&: rule, const string&: value) -> bool {
+    return NativeLib::set_game_rule(rule, value);
+} end function set_game_rule
+
+function inventory_click(const Entity&: target, const Entity&: other, const string&: list, short float: index, const string&: action) -> bool {
+    return NativeLib::inventory_click(target.raw, other.raw, list, index, action);
+} end function inventory_click
+
+function cursor_item(const Entity&: target) -> string {
+    return NativeLib::cursor_item(target.raw);
+} end function cursor_item
+
+function cursor_amount(const Entity&: target) -> short float {
+    return NativeLib::cursor_amount(target.raw);
+} end function cursor_amount
+
+function return_cursor(const Entity&: target) -> bool {
+    return NativeLib::return_cursor(target.raw);
+} end function return_cursor
+
+function next_item_event(const Entity&: target) -> string {
+    return NativeLib::next_item_event(target.raw);
+} end function next_item_event
+
+function describe(const Entity&: target, const string&: lines) -> string {
+    return NativeLib::describe(target.raw, lines);
+} end function describe
+
+function set_look_info(const Entity&: target, const string&: info) -> void {
+    NativeLib::set_look_info(target.raw, info);
+} end function set_look_info
+
+function enchant_item(const Entity&: target, const string&: list, short float: index, const string&: enchant) -> bool {
+    return NativeLib::enchant_item(target.raw, list, index, enchant);
+} end function enchant_item
+
+function play_item_sound(const string&: name, short float: x, short float: y, short float: z) -> void {
+    NativeLib::play_item_sound(name, x, y, z);
+} end function play_item_sound
+
+function worn_resist(const Entity&: target, const string&: damage_type) -> short float {
+    return NativeLib::worn_resist(target.raw, damage_type);
+} end function worn_resist
+
+function find_guns(const string&: filter) -> string {
+    return NativeLib::find_guns(filter);
+} end function find_guns
+
+function gun_info(const string&: item) -> string {
+    return NativeLib::gun_info(item);
+} end function gun_info
+
+function gun_state(const Entity&: target) -> string {
+    return NativeLib::gun_state(target.raw);
+} end function gun_state
+
+function cycle_weapon(const Entity&: target) -> bool {
+    return NativeLib::cycle_weapon(target.raw);
+} end function cycle_weapon
+
+function fire_mode(const Entity&: target) -> string {
+    return NativeLib::fire_mode(target.raw);
+} end function fire_mode
+
+function set_fire_mode(const Entity&: target, const string&: mode) -> bool {
+    return NativeLib::set_fire_mode(target.raw, mode);
+} end function set_fire_mode
+
+function next_fire_mode(const Entity&: target) -> bool {
+    return NativeLib::next_fire_mode(target.raw);
+} end function next_fire_mode
+
+function surface_under(const Entity&: target) -> string {
+    return NativeLib::surface_under(target.raw);
+} end function surface_under
+
+function surface_at(short float: x, short float: y, short float: z) -> string {
+    return NativeLib::surface_at(x, y, z);
+} end function surface_at
+
+function wading_in(const Entity&: target) -> string {
+    return NativeLib::wading_in(target.raw);
+} end function wading_in
+
+function ground_speed(const Entity&: target) -> short float {
+    return NativeLib::ground_speed(target.raw);
+} end function ground_speed
+
+function set_ground_speed(const Entity&: target, const string&: speed) -> bool {
+    return NativeLib::set_ground_speed(target.raw, speed);
+} end function set_ground_speed
+
+function define_surface(const string&: surface, const string&: setting, const string&: value) -> bool {
+    return NativeLib::define_surface(surface, setting, value);
+} end function define_surface
+
+function surface_setting(const string&: surface, const string&: setting) -> string {
+    return NativeLib::surface_setting(surface, setting);
+} end function surface_setting
+
+function set_surface(const Entity&: target, const string&: surface) -> bool {
+    return NativeLib::set_surface(target.raw, surface);
+} end function set_surface
+
 
 export this

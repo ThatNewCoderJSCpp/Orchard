@@ -695,6 +695,73 @@ const char* host_game_text(int op, orchard_entity entity, orchard_entity other, 
         out = r.gameplay().last_damage_type(e);
         return out.c_str();
     }
+    if (op == ORCHARD_GAME_LOADED_AMMO) {
+        out = r.gameplay().loaded_ammo(e);
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_LOADED_VARIANT) {
+        out = r.gameplay().loaded_variant(e);
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_AMMO_INFO) {
+        if (Scene* sc = r.scene()) out = ammo_info(sc->items(), part(t, 0));
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_BULLET_SETTING) {
+        if (Scene* sc = r.scene())
+            if (const BulletType* bt = sc->items().bullet(part(t, 0))) out = bullet_field(*bt, part(t, 1));
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_GAME_RULE) {
+        if (Scene* sc = r.scene()) out = sc->rule(part(t, 0));
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_CURSOR_ITEM) {
+        if (const ItemStack* c = r.gameplay().cursor(e); c && !c->empty()) out = c->item;
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_NEXT_ITEM_EVENT) {
+        ItemEvent ev;
+        if (r.gameplay().next_item_event(e, ev)) out = ev.event + "|" + ev.action + "|" + ev.item + "|" + ev.list + "|" + std::to_string(ev.index);
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_DESCRIBE) {
+        out = r.gameplay().describe(e, part(t, 0));
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_FIND_GUNS) {
+        if (Scene* sc = r.scene())
+            for (const ItemDef* gd : find_guns(sc->items(), part(t, 0))) out += (out.empty() ? "" : ",") + gd->id;
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_GUN_INFO) {
+        if (Scene* sc = r.scene()) out = gun_info(sc->items(), part(t, 0));
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_GUN_STATE) {
+        out = r.gameplay().gun_state(e);
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_FIRE_MODE) {
+        out = r.gameplay().fire_mode(e);
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_SURFACE_UNDER) {
+        out = r.gameplay().surface_under(e);
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_SURFACE_AT) {
+        out = r.gameplay().surface_at(Vec3{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))});
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_WADING_IN) {
+        out = r.gameplay().wading_in(e);
+        return out.c_str();
+    }
+    if (op == ORCHARD_GAME_SURFACE_SETTING) {
+        out = r.gameplay().surface_setting(part(t, 0), part(t, 1));
+        return out.c_str();
+    }
     if (op == ORCHARD_GAME_ITEM_SETTING) {
         if (const ItemDef* def = r.gameplay().item_def(part(t, 0))) out = item_field(*def, part(t, 1));
         return out.c_str();
@@ -1034,6 +1101,68 @@ double host_items(int op, const Entity& e, const Entity& o, const double* args, 
     }
 }
 
+double host_ammo(int op, const Entity& e, const Entity& o, const double* args, int count, const char* text) {
+    Gameplay& g = rt().gameplay();
+    Scene* s = rt().scene();
+    auto arg = [args, count](int i, double fallback) { return args && i < count ? args[i] : fallback; };
+    const std::vector<std::string> t = split_text(text);
+    auto i32 = [&](int i, double fallback) { return static_cast<int>(std::floor(arg(i, fallback))); };
+    auto b = [](bool v) { return v ? 1.0 : 0.0; };
+    switch (op) {
+    case ORCHARD_GAME_LOAD_MAGAZINE: return g.load_magazine(e, part(t, 0), i32(0, 0.0));
+    case ORCHARD_GAME_UNLOAD_MAGAZINE: return g.unload_magazine(e, part(t, 0), i32(0, 0.0));
+    case ORCHARD_GAME_UNLOAD_WEAPON: return b(g.unload(e));
+    case ORCHARD_GAME_CHOOSE_AMMO: return b(g.choose_ammo(e, part(t, 0), part(t, 1)));
+    case ORCHARD_GAME_LOADED_ROUNDS: return g.loaded_rounds(e);
+    case ORCHARD_GAME_GIVE_AMMO: {
+        ItemStack st;
+        st.item = part(t, 0);
+        st.variant = part(t, 1);
+        st.amount = static_cast<float>(arg(0, 1.0));
+        if (st.variant.empty() && s)
+            if (const ItemDef* d = s->items().find(st.item)) st.variant = default_variant(s->items(), *d);
+        return g.give_stack(e, st);
+    }
+    case ORCHARD_GAME_AMMO_COUNT: return g.count_variant(e, part(t, 0), part(t, 1));
+    case ORCHARD_GAME_AMMO_FITS: {
+        if (!s) return 0.0;
+        const ItemDef* gun = s->items().find(part(t, 0));
+        const ItemDef* ammo = s->items().find(part(t, 1));
+        if (!gun || !ammo) return 0.0;
+        return b(ammo->kind == ItemKind::magazine ? magazine_fits(*gun, *ammo) : gun->kind == ItemKind::magazine ? magazine_takes(*gun, *ammo) : ammo_fits(*gun, *ammo));
+    }
+    case ORCHARD_GAME_DEFINE_BULLET: return s ? b(set_bullet_field(s->items().define_bullet(part(t, 0)), part(t, 1), part(t, 2))) : 0.0;
+    case ORCHARD_GAME_SET_GAME_RULE: {
+        if (!s) return 0.0;
+        s->set_rule(part(t, 0), part(t, 1));
+        return 1.0;
+    }
+    case ORCHARD_GAME_INVENTORY_CLICK: return b(g.inventory_action(e, o.valid() ? o : e, part(t, 0), i32(0, 0.0), -1, -1, part(t, 1), "script"));
+    case ORCHARD_GAME_CURSOR_AMOUNT: {
+        const ItemStack* c = g.cursor(e);
+        return c ? c->amount : 0.0;
+    }
+    case ORCHARD_GAME_RETURN_CURSOR: return b(g.return_cursor(e));
+    case ORCHARD_GAME_SET_LOOK_INFO: g.set_look_info(e, part(t, 0)); return 0.0;
+    case ORCHARD_GAME_ENCHANT_ITEM: {
+        ItemStack* st = g.stack_at(e, part(t, 0), i32(0, 0.0));
+        if (!st || st->empty()) return 0.0;
+        st->enchant = part(t, 1);
+        return 1.0;
+    }
+    case ORCHARD_GAME_PLAY_ITEM_SOUND: g.cue_sound(part(t, 0), Vec3{static_cast<float>(arg(0, 0.0)), static_cast<float>(arg(1, 0.0)), static_cast<float>(arg(2, 0.0))}); return 0.0;
+    case ORCHARD_GAME_WORN_RESIST: return g.worn_resist(e, part(t, 0));
+    case ORCHARD_GAME_CYCLE_WEAPON: return b(g.cycle_weapon(e));
+    case ORCHARD_GAME_SET_FIRE_MODE: return b(g.set_fire_mode(e, part(t, 0)));
+    case ORCHARD_GAME_NEXT_FIRE_MODE: return b(g.next_fire_mode(e));
+    case ORCHARD_GAME_GROUND_SPEED: return g.ground_speed(e);
+    case ORCHARD_GAME_SET_GROUND_SPEED: return b(g.set_ground_speed(e, part(t, 0)));
+    case ORCHARD_GAME_DEFINE_SURFACE: return b(g.define_surface(part(t, 0), part(t, 1), part(t, 2)));
+    case ORCHARD_GAME_SET_SURFACE: return b(g.set_surface(e, part(t, 0)));
+    default: return 0.0;
+    }
+}
+
 double host_game(int op, orchard_entity entity, orchard_entity other, const double* args, int count, const char* text) {
     if (!g_runtime) return 0.0;
     Gameplay& g = rt().gameplay();
@@ -1043,6 +1172,7 @@ double host_game(int op, orchard_entity entity, orchard_entity other, const doub
     const std::string tag = text ? std::string(text) : std::string();
     if (op >= ORCHARD_GAME_APPLY_DAMAGE && op <= ORCHARD_GAME_CONVERT_UNITS) return host_damage(op, e, o, args, count, text);
     if (op >= ORCHARD_GAME_GIVE_ITEM && op <= ORCHARD_GAME_IS_SHELTERED) return host_items(op, e, o, args, count, text);
+    if (op >= ORCHARD_GAME_LOAD_MAGAZINE && op <= ORCHARD_GAME_SET_SURFACE) return host_ammo(op, e, o, args, count, text);
     switch (op) {
     case ORCHARD_GAME_HEALTH: return g.health(e);
     case ORCHARD_GAME_MAX_HEALTH: return g.max_health(e);
@@ -2157,6 +2287,7 @@ bool ScriptRuntime::start(const Project& project, Scene& scene) {
     }
     m_running = true;
     m_gameplay.start(&scene, m_physics);
+    m_gameplay.prepare_world();
     m_sound_commands.clear();
     m_sounds_playing.clear();
     m_source_sounds.clear();
@@ -2218,6 +2349,18 @@ void ScriptRuntime::tick(double dt) {
     for (std::size_t i = 0; i < m_instances.size(); ++i) call_at(i, ORCHARD_HOOK_TICK, dt);
     if (m_gameplay.running()) m_gameplay.tick(dt, m_time);
     if (m_ai.running()) m_ai.tick(dt, m_time);
+    for (const SoundCue& c : m_gameplay.take_sound_cues()) {
+        if (m_project && c.clip.rfind("Assets/Sounds/Items/", 0) == 0) {
+            const std::string path = m_project->path_of(c.clip);
+            std::error_code ec;
+            if (!std::filesystem::exists(path, ec)) {
+                std::string stem = c.clip.substr(20);
+                if (stem.size() > 4) stem.resize(stem.size() - 4);
+                write_item_sound(stem, path);
+            }
+        }
+        play_sound(c.clip, c.at, c.follow, true, c.volume, c.pitch, false, c.range, c.loudness);
+    }
 }
 
 void ScriptRuntime::stop() {

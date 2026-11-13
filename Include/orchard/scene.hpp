@@ -4,6 +4,7 @@
 #include "items.hpp"
 #include "math.hpp"
 #include "terrain.hpp"
+#include "surfaces.hpp"
 
 #include <cstdint>
 #include <map>
@@ -210,6 +211,7 @@ struct Collider {
     std::string name;
     float mass = 0.0f;
     std::uint32_t locks = 0;
+    std::string surface;
     TriangleRule triangle = TriangleRule::sss;
     Vec3 triangle_sides{1.0f, 1.0f, 1.0f};
     Vec3 triangle_angles{60.0f, 60.0f, 60.0f};
@@ -390,6 +392,7 @@ struct Material {
     Vec3 emission{0.0f, 0.0f, 0.0f};
     float emission_strength = 1.0f;
     float transmission = 0.0f;
+    float translucency = 0.0f;
     float ior = 1.5f;
     float abbe = 0.0f;
     bool thin = false;
@@ -909,6 +912,13 @@ public:
     bool remove_climate(Entity e);
     ItemCatalog& items() { return m_items; }
     const ItemCatalog& items() const { return m_items; }
+    SurfaceCatalog& surfaces() { return m_surfaces; }
+    const SurfaceCatalog& surfaces() const { return m_surfaces; }
+    std::string rule(const std::string& key) const;
+    float rule_number(const std::string& key) const;
+    bool rule_on(const std::string& key) const;
+    void set_rule(const std::string& key, const std::string& value);
+    const std::map<std::string, std::string>& rules() const { return m_rules; }
     Survival* survival(Entity e);
     const Survival* survival(Entity e) const;
     Survival& add_survival(Entity e);
@@ -998,6 +1008,8 @@ private:
     std::vector<std::uint32_t> m_free;
     std::size_t m_alive = 0;
     ItemCatalog m_items;
+    SurfaceCatalog m_surfaces;
+    std::map<std::string, std::string> m_rules;
 };
 
 } // namespace orchard

@@ -637,6 +637,7 @@ struct World::Impl {
     TerrainSource terrain_source;
     std::vector<std::pair<orchard::Entity, fp::RigidBody3D*>> statics;
     std::size_t terrains = 0;
+    std::map<std::uint64_t, std::shared_ptr<const orchard::TerrainHeights>> terrain_cache;
     std::size_t scatter_colliders = 0;
     std::vector<std::string> warnings;
     std::map<std::string, std::optional<Trunk>> trunks;
@@ -745,6 +746,7 @@ struct World::Impl {
                 heights = made;
             }
             if (!heights->valid()) continue;
+            terrain_cache[e.id()] = heights;
             const orchard::Vec3 pos = world_position(s, e);
             const orchard::Quat rot = orchard::normalize(world_rotation(s, e) * frame);
             const orchard::Vec3 ts = terrain_axis_scale(world_scale(s, e), frame);
@@ -925,6 +927,7 @@ struct World::Impl {
         sim3.reset();
         statics.clear();
         terrains = 0;
+        terrain_cache.clear();
         scatter_colliders = 0;
         warnings.clear();
         trunks.clear();
@@ -1545,6 +1548,7 @@ void World::clear() {
     m->volume_looks.clear();
     m->statics.clear();
     m->terrains = 0;
+    m->terrain_cache.clear();
     m->scatter_colliders = 0;
     m->trunks.clear();
     m->sim3.reset();
@@ -1674,6 +1678,15 @@ void World::fluid_draws(std::vector<FluidDraw>& out) const {
 float World::fluid_surface(orchard::Vec3 point) const {
     if (m->fluids2) return static_cast<float>(m->fluids2->surface_height(RVec2{static_cast<Real>(point.x), static_cast<Real>(point.y)}));
     return m->fluids ? static_cast<float>(m->fluids->surface_height(v3(point))) : -1e30f;
+}
+
+std::shared_ptr<const orchard::TerrainHeights> World::terrain_heights(orchard::Entity e) const {
+    auto it = m->terrain_cache.find(e.id());
+    return it == m->terrain_cache.end() ? nullptr : it->second;
+}
+
+orchard::Vec3 World::up_axis() const {
+    return m->settings.up;
 }
 
 float World::fluid_depth(orchard::Vec3 point) const {

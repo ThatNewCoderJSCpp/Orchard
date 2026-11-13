@@ -929,7 +929,7 @@ Light Light::area(float w, float h, float strength) {
 }
 
 const std::vector<std::string>& Material::presets() {
-    static const std::vector<std::string> all = {"default", "matte", "plastic", "rubber", "metal", "gold", "copper", "chrome", "mirror", "glass", "frosted-glass", "flint-glass", "crystal", "diamond", "water", "ice", "window", "glow"};
+    static const std::vector<std::string> all = {"default", "matte", "plastic", "rubber", "metal", "gold", "copper", "chrome", "mirror", "glass", "frosted-glass", "flint-glass", "crystal", "diamond", "water", "ice", "window", "glow", "leaf", "paper", "cloth", "wax"};
     return all;
 }
 
@@ -1413,6 +1413,16 @@ std::optional<Material> Material::named(const std::string& name) {
             m.abbe = 0.0f;
             m.thin = true;
         }
+        return m;
+    }
+    if (s == "leaf" || s == "leaves" || s == "paper" || s == "cloth" || s == "wax") {
+        m.roughness = s == "wax" ? 0.4f : 0.65f;
+        m.double_sided = true;
+        m.translucency = s == "wax" ? 0.7f : s == "paper" ? 0.45f : s == "cloth" ? 0.35f : 0.55f;
+        if (s == "leaf" || s == "leaves") m.color = {0.25f, 0.45f, 0.14f};
+        if (s == "paper") m.color = {0.92f, 0.9f, 0.84f};
+        if (s == "cloth") m.color = {0.7f, 0.65f, 0.58f};
+        if (s == "wax") m.color = {0.95f, 0.88f, 0.7f};
         return m;
     }
     if (s == "glow" || s == "emissive" || s == "neon") {
@@ -3326,6 +3336,7 @@ std::string material_line(std::size_t n, const Material& m) {
     t("opacity-map", m.opacity_map);
     f("normal-strength", m.normal_strength, d.normal_strength);
     f("alpha-cutoff", m.alpha_cutoff, d.alpha_cutoff);
+    f("translucency", m.translucency, d.translucency);
     f("tiling-u", m.tiling_u, d.tiling_u);
     f("tiling-v", m.tiling_v, d.tiling_v);
     f("offset-u", m.offset_u, d.offset_u);
@@ -3446,6 +3457,7 @@ void read_material(std::istringstream& row, Material& m) {
         else if (key == "opacity-map") m.opacity_map = unescape_token(v);
         else if (key == "normal-strength") m.normal_strength = x;
         else if (key == "alpha-cutoff") m.alpha_cutoff = x;
+        else if (key == "translucency") m.translucency = std::clamp(x, 0.0f, 1.0f);
         else if (key == "tiling-u") m.tiling_u = x;
         else if (key == "tiling-v") m.tiling_v = x;
         else if (key == "offset-u") m.offset_u = x;
@@ -3463,6 +3475,27 @@ void read_material(std::istringstream& row, Material& m) {
 }
 
 } // namespace
+
+std::string Scene::rule(const std::string& key) const {
+    if (const auto it = m_rules.find(key); it != m_rules.end()) return it->second;
+    const GameRule* r = game_rule(key);
+    return r ? r->fallback : std::string();
+}
+
+float Scene::rule_number(const std::string& key) const {
+    return static_cast<float>(std::atof(rule(key).c_str()));
+}
+
+bool Scene::rule_on(const std::string& key) const {
+    const std::string v = rule(key);
+    return !v.empty() && v != "0" && v != "false";
+}
+
+void Scene::set_rule(const std::string& key, const std::string& value) {
+    const GameRule* r = game_rule(key);
+    if (r && r->fallback == value) m_rules.erase(key);
+    else m_rules[key] = value;
+}
 
 std::string Scene::save() const {
     std::ostringstream out;
@@ -3531,6 +3564,7 @@ std::string Scene::save() const {
             if (!c.name.empty()) out << " name:" << escape_token(c.name);
             if (c.locks != 0) out << " locks:" << c.locks;
             if (c.locked(collider_lock_mass) && c.mass > 0.0f) out << " mass:" << number(c.mass);
+            if (!c.surface.empty()) out << " surface:" << escape_token(c.surface);
             out << "\n";
         }
         if (s.light) out << light_line(n, *s.light);
@@ -3629,6 +3663,7 @@ std::string Scene::save() const {
             if (pk.auto_pickup) out << " auto:1";
             if (pk.respawn != 0.0f) out << " respawn:" << number(pk.respawn);
             if (pk.look != "detailed") out << " look:" << escape_token(pk.look);
+            if (!pk.fill.empty()) out << " fill:" << escape_token(pk.fill);
             out << "\n";
         }
         if (s.climate) {
@@ -3750,11 +3785,34 @@ std::string Scene::save() const {
         if (!s.bone.empty()) out << "bone " << n << " " << escape_token(s.bone) << "\n";
         if (!s.instance_of.empty()) out << "instance " << n << " " << s.instance_of << "\n";
     }
+    for (const auto& [key, value] : m_rules) out << "rule " << escape_token(key) << " " << (value.empty() ? std::string("%00") : escape_token(value)) << "\n";
+    for (const auto& [id, b] : m_items.bullets) {
+        BulletType blank;
+        const BulletType* base = nullptr;
+        for (const BulletType& x : bullet_types())
+            if (x.id == id) base = &x;
+        out << "bullet-def " << escape_token(id);
+        for (const std::string& key : bullet_field_keys()) {
+            const std::string v = bullet_field(b, key);
+            if (v != bullet_field(base ? *base : blank, key)) out << " " << key << ":" << (v.empty() ? std::string("%00") : escape_token(v));
+        }
+        out << "\n";
+    }
+    for (const auto& [id, sd] : m_surfaces.custom) {
+        const SurfaceDef* base = builtin_surface(id);
+        SurfaceDef blank;
+        out << "surface-def " << escape_token(id);
+        for (const std::string& key : surface_field_keys()) {
+            const std::string v = surface_field(sd, key);
+            if (!base || v != surface_field(*base, key)) out << " " << key << ":" << (v.empty() ? std::string("%00") : escape_token(v));
+        }
+        out << "\n";
+    }
     for (const auto& [id, def] : m_items.custom) {
         const ItemDef* base = builtin_item(id);
         ItemDef blank;
         out << "item-def " << escape_token(id);
-        for (const char* key : {"name", "category", "shape", "description", "kind", "size", "weight", "volume", "max_stack", "continuous", "unit", "grid_w", "grid_h", "length", "color", "accent", "texture", "tags", "damage", "damage_type", "knockback", "rate", "range", "magazine", "ammo", "reload", "speed", "spread", "pellets", "automatic", "two_handed", "block", "blast_radius", "mana", "spell", "ballistics", "effect", "use_effect", "heal", "food", "water", "wear", "armor", "insulation", "capacity", "slots_w", "slots_h", "holster_kinds", "holster_size", "holster_count"}) {
+        for (const std::string& key : item_field_keys()) {
             const std::string v = item_field(def, key);
             if (v != item_field(base ? *base : blank, key)) out << " " << key << ":" << (v.empty() ? std::string("%00") : escape_token(v));
         }
@@ -3786,6 +3844,39 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
     while (std::getline(in, line)) {
         ++line_no;
         if (line.empty()) continue;
+        if (line.rfind("rule ", 0) == 0) {
+            std::istringstream rl(line);
+            std::string word, key, value;
+            rl >> word >> key >> value;
+            scene.set_rule(unescape_token(key), value == "%00" ? std::string() : unescape_token(value));
+            continue;
+        }
+        if (line.rfind("surface-def ", 0) == 0) {
+            std::istringstream defs(line);
+            std::string word, id;
+            defs >> word >> id;
+            SurfaceDef& sd = scene.surfaces().define(unescape_token(id));
+            for (std::string token; defs >> token;) {
+                const std::size_t colon = token.find(':');
+                if (colon == std::string::npos) continue;
+                const std::string v = token.substr(colon + 1);
+                set_surface_field(sd, token.substr(0, colon), v == "%00" ? std::string() : unescape_token(v));
+            }
+            continue;
+        }
+        if (line.rfind("bullet-def ", 0) == 0) {
+            std::istringstream defs(line);
+            std::string word, id;
+            defs >> word >> id;
+            BulletType& b = scene.items().define_bullet(unescape_token(id));
+            for (std::string token; defs >> token;) {
+                const std::size_t colon = token.find(':');
+                if (colon == std::string::npos) continue;
+                const std::string v = token.substr(colon + 1);
+                set_bullet_field(b, token.substr(0, colon), v == "%00" ? std::string() : unescape_token(v));
+            }
+            continue;
+        }
         if (line.rfind("item-def ", 0) == 0) {
             std::istringstream defs(line);
             std::string word, id;
@@ -3911,6 +4002,7 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     } else if (key == "auto") pk.auto_pickup = v != "0";
                     else if (key == "respawn") pk.respawn = static_cast<float>(std::atof(v.c_str()));
                     else if (key == "look") pk.look = v;
+                    else if (key == "fill") pk.fill = v;
                 }
                 continue;
             }
@@ -4251,6 +4343,10 @@ std::optional<Scene> Scene::load(const std::string& text, std::string* error) {
                     }
                     if (key == "roll") {
                         c.rolling_friction = std::max(0.0f, static_cast<float>(std::atof(val.c_str())));
+                        continue;
+                    }
+                    if (key == "surface") {
+                        c.surface = unescape_token(val);
                         continue;
                     }
                     if (key == "spin") {

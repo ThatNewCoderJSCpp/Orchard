@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <map>
+#include <string>
 #include <optional>
 
 namespace orchard {
@@ -226,6 +228,91 @@ void build(Builder& b, const std::string& name) {
             e->size = 0.04f * b.k;
             e->size_end = 0.04f * b.k;
         }
+    } else if (name.rfind("impact-", 0) == 0 || name.rfind("footstep-", 0) == 0) {
+        const std::string k = name.substr(name.find('-') + 1);
+        const bool step = name.rfind("footstep-", 0) == 0;
+        auto puff = [&](Vec3 c, int n, float size, float life) {
+            if (Emitter* e = b.once("Puff", "dust-burst", n)) {
+                e->color = c;
+                e->color_end = Vec3{c.x * 0.9f, c.y * 0.9f, c.z * 0.9f};
+                e->size = size * b.k;
+                e->size_end = size * 2.2f * b.k;
+                e->lifetime = life;
+                e->speed = step ? 0.6f : 1.6f;
+            }
+        };
+        auto chips = [&](Vec3 c, int n, float size, float speed) {
+            if (Emitter* e = b.once("Chips", "debris", n)) {
+                e->color = c;
+                e->color_end = c;
+                e->size = e->size_end = size * b.k;
+                e->speed = speed;
+                e->spread = 45.0f;
+                e->lifetime = 0.7f;
+            }
+        };
+        auto sparks = [&](int n, float spread) {
+            if (Emitter* e = b.once("Sparks", "sparks", n)) {
+                e->spread = spread;
+                e->lifetime = 0.35f;
+                e->speed = 6.0f;
+            }
+        };
+        if (k == "metal") {
+            sparks(26, 60.0f);
+            if (Emitter* e = b.once("Flash", "flash", 1)) {
+                e->size = 0.12f * b.k;
+                e->lifetime = 0.04f;
+            }
+        } else if (k == "concrete" || k == "brick") {
+            const Vec3 c = k == "brick" ? Vec3{0.62f, 0.36f, 0.27f} : Vec3{0.68f, 0.67f, 0.64f};
+            puff(c, 10, 0.08f, 0.9f);
+            chips(c, 8, 0.03f, 4.0f);
+            sparks(4, 40.0f);
+        } else if (k == "wood") {
+            puff(Vec3{0.6f, 0.47f, 0.32f}, 5, 0.05f, 0.6f);
+            chips(Vec3{0.62f, 0.45f, 0.26f}, 10, 0.03f, 3.5f);
+        } else if (k == "dirt" || k == "grass" || k == "mud") {
+            const Vec3 c = k == "mud" ? Vec3{0.28f, 0.21f, 0.13f} : Vec3{0.45f, 0.35f, 0.24f};
+            puff(c, step ? 4 : 12, step ? 0.05f : 0.09f, 1.0f);
+            if (!step) chips(c, 10, 0.025f, 3.0f);
+            if (k == "grass" && !step) chips(Vec3{0.3f, 0.5f, 0.2f}, 6, 0.02f, 2.0f);
+        } else if (k == "leaves") {
+            chips(Vec3{0.32f, 0.5f, 0.22f}, 12, 0.03f, 1.5f);
+        } else if (k == "sand" || k == "dust") {
+            puff(k == "sand" ? Vec3{0.85f, 0.77f, 0.58f} : Vec3{0.7f, 0.68f, 0.64f}, step ? 5 : 14, step ? 0.05f : 0.08f, 1.1f);
+        } else if (k == "snow") {
+            puff(Vec3{0.96f, 0.97f, 1.0f}, step ? 5 : 16, step ? 0.05f : 0.1f, 1.2f);
+            if (!step) chips(Vec3{0.95f, 0.96f, 1.0f}, 10, 0.03f, 2.5f);
+        } else if (k == "water" || k == "splash") {
+            if (Emitter* e = b.once("Drops", "splash", step ? 12 : 30)) {
+                e->size *= step ? 0.4f : 0.6f;
+                e->speed *= step ? 0.4f : 0.8f;
+            }
+        } else if (k == "glass") {
+            chips(Vec3{0.8f, 0.92f, 0.98f}, 18, 0.02f, 4.5f);
+            sparks(3, 30.0f);
+        } else if (k == "flesh") {
+            puff(Vec3{0.45f, 0.05f, 0.04f}, 6, 0.05f, 0.4f);
+        } else {
+            puff(Vec3{0.6f, 0.6f, 0.6f}, 8, 0.07f, 0.8f);
+        }
+    } else if (name == "casing-eject" || name == "shell-eject") {
+        const bool shell = name == "shell-eject";
+        if (Emitter* e = b.once("Casing", "debris", 1)) {
+            e->color = e->color_end = shell ? Vec3{0.75f, 0.12f, 0.1f} : Vec3{0.85f, 0.68f, 0.3f};
+            e->size = e->size_end = (shell ? 0.035f : 0.018f) * b.k;
+            e->direction = Vec3{1.0f, 0.8f, 0.0f};
+            e->spread = 15.0f;
+            e->speed = 3.0f;
+            e->gravity = 1.0f;
+            e->lifetime = 1.2f;
+            e->collide = true;
+            e->bounce = 0.4f;
+            e->stretch = 0.0f;
+            e->glow = 0.0f;
+            e->lit = true;
+        }
     } else if (name == "splash") {
         b.once("Drops", "splash", 70);
         if (Emitter* e = b.once("Mist", "steam", 10)) {
@@ -247,7 +334,9 @@ float scale_for(const std::string& name) {
 } // namespace
 
 const std::vector<std::string>& effect_names() {
-    static const std::vector<std::string> all = {"explosion", "explosion-small", "explosion-big", "fire", "campfire", "inferno", "torch", "burning", "steam-vent", "welding", "electric", "smoke-grenade", "muzzle-flash", "impact", "splash", "scorch"};
+    static const std::vector<std::string> all = {"explosion", "explosion-small", "explosion-big", "fire", "campfire", "inferno", "torch", "burning", "steam-vent", "welding", "electric", "smoke-grenade", "muzzle-flash", "impact", "splash", "scorch",
+                                                 "impact-metal", "impact-concrete", "impact-brick", "impact-wood", "impact-dirt", "impact-grass", "impact-leaves", "impact-sand", "impact-mud", "impact-snow", "impact-water", "impact-glass", "impact-dust", "impact-flesh",
+                                                 "footstep-snow", "footstep-dust", "footstep-mud", "footstep-splash", "casing-eject", "shell-eject"};
     return all;
 }
 
@@ -268,17 +357,28 @@ const char* effect_label(const std::string& name) {
     if (name == "impact") return "Bullet impact (dust, sparks, chips)";
     if (name == "splash") return "Water splash";
     if (name == "scorch") return "Scorch mark (black burn on the ground)";
+    if (name.rfind("impact-", 0) == 0) {
+        static std::map<std::string, std::string> labels;
+        auto it = labels.find(name);
+        if (it == labels.end()) it = labels.emplace(name, "Bullet impact on " + name.substr(7)).first;
+        return it->second.c_str();
+    }
+    if (name.rfind("footstep-", 0) == 0) return "Footstep puff";
+    if (name == "casing-eject") return "Ejected brass casing";
+    if (name == "shell-eject") return "Ejected shotgun shell";
     return "Effect";
 }
 
 bool effect_is_one_shot(const std::string& name) {
-    return name.rfind("explosion", 0) == 0 || name == "muzzle-flash" || name == "impact" || name == "splash" || name == "scorch";
+    return name.rfind("explosion", 0) == 0 || name == "muzzle-flash" || name == "impact" || name == "splash" || name == "scorch" || name.rfind("impact-", 0) == 0 || name.rfind("footstep-", 0) == 0 || name == "casing-eject" || name == "shell-eject";
 }
 
 float effect_length(const std::string& name) {
     if (name.rfind("explosion", 0) == 0) return 7.0f * std::max(1.0f, scale_for(name));
     if (name == "muzzle-flash") return 1.5f;
-    if (name == "impact") return 2.0f;
+    if (name == "impact" || name.rfind("impact-", 0) == 0) return 2.0f;
+    if (name.rfind("footstep-", 0) == 0) return 1.2f;
+    if (name == "casing-eject" || name == "shell-eject") return 1.5f;
     if (name == "splash") return 2.0f;
     if (name == "scorch") return 300.0f;
     return 0.0f;

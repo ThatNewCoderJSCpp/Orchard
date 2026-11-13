@@ -200,6 +200,10 @@ void Gameplay::stop() {
     m_projectiles.clear();
     m_tracers.clear();
     m_respawns.clear();
+    m_ground.clear();
+    m_ground_override.clear();
+    m_volume_spots.clear();
+    m_volume_built = false;
     m_next_wet.clear();
     m_slosh.clear();
 }
@@ -490,6 +494,7 @@ float Gameplay::hurt(Entity e, const Damage& d, float amount) {
     float resist = 0.0f;
     if (amount > 0.0f && d.type != "true") {
         if (const auto r = hp.resist.find(d.type); r != hp.resist.end()) resist = r->second;
+        resist += worn_resist(h, d.type);
         amount *= 1.0f - std::min(resist, 1.0f);
         amount *= effect_product(h, &EffectDef::damage_taken);
         float shielded = 0.0f;
@@ -553,6 +558,7 @@ float Gameplay::hurt(Entity e, const Damage& d, float amount) {
         const float own = hp.armor;
         if (!type_listed(hp.armor_types, d.type, false)) hp.armor = 0.0f;
         hp.armor += worn;
+        hp.armor *= std::max(0.0f, d.armor_scale);
         amount = std::max(0.0f, armored(hp, d, amount, vars));
         hp.armor = own;
         if (hp.armor_wear > 0.0f && before > amount) hp.armor = std::max(0.0f, hp.armor - (before - amount) * hp.armor_wear);
@@ -572,6 +578,35 @@ float Gameplay::hurt(Entity e, const Damage& d, float amount) {
     }
     if (amount == 0.0f) return hp.value;
     st.last_type = d.type;
+    if (m_scene->alive(d.attacker) && d.key != "thorns" && d.key != "extra" && !d.over_time() && d.attacker != h) {
+        const Entity o = inventory_owner(h);
+        if (const Inventory* inv = m_scene->alive(o) ? m_scene->inventory(o) : nullptr) {
+            std::string fx, extra;
+            for (const auto& [slot, s] : inv->worn) {
+                if (s.empty() || slot == "mainhand" || slot == "offhand") continue;
+                const ItemDef* wd = item_def(s.item);
+                if (!wd) continue;
+                if (!wd->thorns.empty()) fx += (fx.empty() ? "" : ", ") + wd->thorns;
+                if (!wd->thorns_damage.empty()) extra += (extra.empty() ? "" : ", ") + wd->thorns_damage;
+            }
+            if (!fx.empty() || !extra.empty()) {
+                const Entity attacker = d.attacker;
+                const float left = damage(h, amount, d.attacker);
+                for (const auto& [type, a] : parse_amounts(extra)) {
+                    Damage back;
+                    back.amount = a;
+                    back.type = type;
+                    back.attacker = h;
+                    back.key = "thorns";
+                    if (m_scene->alive(attacker) && m_scene->health(holder(attacker))) apply_damage(attacker, back);
+                }
+                if (m_scene->alive(attacker) && m_scene->alive(holder(attacker)))
+                    for (const EffectRoll& r : parse_effect_rolls(fx))
+                        if (random(0.0, 1.0) < r.chance) apply_effect(holder(attacker), r.effect, r.duration, r.strength, h);
+                return left;
+            }
+        }
+    }
     return damage(h, amount, d.attacker);
 }
 
@@ -810,13 +845,13 @@ bool Gameplay::stunned(Entity e) const {
 }
 
 float Gameplay::move_scale(Entity e) const {
-    return effect_product(e, &EffectDef::speed) * load_speed(e);
+    return effect_product(e, &EffectDef::speed) * load_speed(e) * ground_speed(e);
 }
 
 float Gameplay::jump_scale(Entity e) const {
     const Entity s = survivor(e);
     const bool heavy = m_scene && m_scene->alive(s) && m_scene->survival(s)->weight_on && encumbrance(e) > 1.0f;
-    return heavy ? 0.0f : effect_product(e, &EffectDef::jump) * load_speed(e);
+    return heavy ? 0.0f : effect_product(e, &EffectDef::jump) * load_speed(e) * ground_jump(e);
 }
 
 float Gameplay::carried_weight(Entity e) const {
@@ -825,7 +860,22 @@ float Gameplay::carried_weight(Entity e) const {
     const Survival& sv = *m_scene->survival(s);
     float w = sv.carried;
     const Entity o = inventory_owner(s);
-    if (m_scene->alive(o) && m_scene->inventory(o)->count_weight) w += inventory_weight(m_scene->items(), *m_scene->inventory(o));
+    if (m_scene->alive(o) && m_scene->inventory(o)->count_weight) {
+        const Inventory& inv = *m_scene->inventory(o);
+        const ItemCatalog& cat = m_scene->items();
+        w += inventory_weight(cat, inv);
+        const bool worn_rule = m_scene->rule_on("worn_weight"), held_rule = m_scene->rule_on("held_weight");
+        for (const auto& [slot, st] : inv.worn) {
+            if (st.empty()) continue;
+            const bool hand = slot == "mainhand" || slot == "offhand";
+            if (hand && !held_rule) w -= stack_weight(cat, st);
+            if (!hand && !worn_rule && inv.worn_weight) {
+                float inside = 0.0f;
+                for (const ItemStack& c : st.contents) inside += stack_weight(cat, c);
+                w -= stack_weight(cat, st) - inside;
+            }
+        }
+    }
     if (!sv.count_items) return w;
     for (Entity c : m_scene->subtree(s)) {
         if (c == s || !m_scene->has_tag(c, "item")) continue;
@@ -990,7 +1040,9 @@ bool Gameplay::use_stamina(Entity e, float amount) {
 
 Exertion Gameplay::exert(Entity e, float walk_speed, float sprint_speed, bool sprint, bool moving, bool jump, float dt) {
     Exertion out;
+    if (m_scene && m_scene->alive(e)) m_ground[e.id()];
     const float scale = move_scale(e);
+    out.slip = ground_slip(e);
     out.jump = jump_scale(e);
     out.can_jump = jump && out.jump > 0.0f && !stunned(e);
     const Entity s = survivor(e);
@@ -1002,7 +1054,9 @@ Exertion Gameplay::exert(Entity e, float walk_speed, float sprint_speed, bool sp
         const float need = st.sprinted ? 0.0f : sv->sprint_min;
         if (may_sprint && (sv->stamina <= 0.0f || sv->stamina < need)) may_sprint = false;
         if (may_sprint) {
-            sv->stamina = std::max(0.0f, sv->stamina - sv->sprint_cost * (1.0f + encumbrance(s) * sv->load_stamina) * std::max(0.0f, dt));
+            auto gi = m_ground.find(e.id());
+            const float ground_cost = gi == m_ground.end() ? 1.0f : gi->second.stamina;
+            sv->stamina = std::max(0.0f, sv->stamina - sv->sprint_cost * ground_cost * (1.0f + encumbrance(s) * sv->load_stamina) * std::max(0.0f, dt));
             st.stamina_used_at = m_now;
         }
         if (out.can_jump && sv->stamina < sv->jump_cost * 0.5f) out.can_jump = false;
@@ -1010,7 +1064,7 @@ Exertion Gameplay::exert(Entity e, float walk_speed, float sprint_speed, bool sp
     }
     if (sv) state(s).sprinting = may_sprint;
     out.sprinting = may_sprint;
-    out.speed = (may_sprint ? sprint_speed : walk_speed) * scale;
+    out.speed = std::max(0.0f, (may_sprint ? sprint_speed : walk_speed) * scale - ground_minus(e));
     return out;
 }
 

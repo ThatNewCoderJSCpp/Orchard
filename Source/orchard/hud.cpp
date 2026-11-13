@@ -220,7 +220,6 @@ HudLayout inventory_layout(const ItemCatalog& cat, const Inventory& inv, float s
         const bool olisty = other->style == InventoryStyle::weight || other->style == InventoryStyle::volume || other->style == InventoryStyle::pouches;
         other_w = (olisty ? std::max(260.0f, c * 6.0f) : other->columns * c + (other->columns + 1) * p) + 16.0f;
     }
-    // Too big for the screen (a small window, or a chest open beside it): shrink the cells to fit.
     const float need_w = total_w + other_w, room_w = sw - 16.0f, room_h = sh - 16.0f;
     if ((need_w > room_w || total_h > room_h) && c > 16.5f) {
         const float k = std::min(room_w / std::max(1.0f, need_w), room_h / std::max(1.0f, total_h)) * 0.98f;

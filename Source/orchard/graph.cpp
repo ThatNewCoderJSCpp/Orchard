@@ -397,6 +397,46 @@ std::vector<NodeType> make_types() {
     t.push_back({"rain_at", "Rain At", "Weather", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("amount", N)}, false});
     t.push_back({"snow_at", "Snow At", "Weather", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("amount", N)}, false});
     t.push_back({"is_sheltered", "Is Sheltered", "Weather", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("result", B)}, false});
+    t.push_back({"load_magazine", "Load Magazine", "Ammo", {in("in", X), in("target", T, ""), in("list", T, "items"), in("index", N, "0"), out("then", X)}, false});
+    t.push_back({"unload_magazine", "Unload Magazine", "Ammo", {in("in", X), in("target", T, ""), in("list", T, "items"), in("index", N, "0"), out("then", X)}, false});
+    t.push_back({"unload_weapon", "Unload Weapon", "Ammo", {in("in", X), in("target", T, ""), out("then", X)}, false});
+    t.push_back({"choose_ammo", "Choose Ammo", "Ammo", {in("in", X), in("target", T, ""), in("ammo", T, "9mm"), in("variant", T, "hp"), out("then", X)}, false});
+    t.push_back({"loaded_ammo", "Loaded Ammo", "Ammo", {in("target", T, ""), out("ammo", T)}, false});
+    t.push_back({"loaded_variant", "Loaded Bullet Type", "Ammo", {in("target", T, ""), out("variant", T)}, false});
+    t.push_back({"loaded_rounds", "Rounds Loaded", "Ammo", {in("target", T, ""), out("rounds", N)}, false});
+    t.push_back({"give_ammo", "Give Ammo", "Ammo", {in("in", X), in("target", T, ""), in("ammo", T, "9mm"), in("variant", T, "fmj"), in("amount", N, "30"), out("then", X)}, false});
+    t.push_back({"ammo_count", "Ammo Count", "Ammo", {in("target", T, ""), in("ammo", T, "9mm"), in("variant", T, ""), out("count", N)}, false});
+    t.push_back({"ammo_info", "Ammo Info", "Ammo", {in("item", T, "9mm"), out("info", T)}, false});
+    t.push_back({"ammo_fits", "Ammo Fits", "Ammo", {in("gun", T, "glock17"), in("ammo", T, "9mm"), out("result", B)}, false});
+    t.push_back({"define_bullet", "Define Bullet Type", "Ammo", {in("in", X), in("variant", T, "silver"), in("setting", T, "extra_damage"), in("value", T, "magic=10"), out("then", X)}, false});
+    t.push_back({"bullet_setting", "Bullet Type Setting", "Ammo", {in("variant", T, "hp"), in("setting", T, "damage"), out("value", T)}, false});
+    t.push_back({"inventory_click", "Inventory Click", "Items", {in("in", X), in("target", T, ""), in("other", T, ""), in("list", T, "items"), in("index", N, "0"), in("action", T, "pick_half"), out("then", X)}, false});
+    t.push_back({"cursor_item", "Item On Cursor", "Items", {in("target", T, ""), out("item", T)}, false});
+    t.push_back({"cursor_amount", "Amount On Cursor", "Items", {in("target", T, ""), out("amount", N)}, false});
+    t.push_back({"return_cursor", "Put Cursor Back", "Items", {in("in", X), in("target", T, ""), out("then", X)}, false});
+    t.push_back({"next_item_event", "Next Inventory Event", "Items", {in("target", T, ""), out("event", T)}, false});
+    t.push_back({"enchant_item", "Enchant Item", "Items", {in("in", X), in("target", T, ""), in("list", T, "worn:mainhand"), in("index", N, "0"), in("enchant", T, "fire=5, burning:3:0.5"), out("then", X)}, false});
+    t.push_back({"worn_resist", "Worn Resistance", "Items", {in("target", T, ""), in("damage_type", T, "fire"), out("value", N)}, false});
+    t.push_back({"game_rule", "Game Rule", "Game", {in("rule", T, "reload"), out("value", T)}, false});
+    t.push_back({"set_game_rule", "Set Game Rule", "Game", {in("in", X), in("rule", T, "reload"), in("value", T, "keep"), out("then", X)}, false});
+    t.push_back({"describe", "Describe", "Game", {in("target", T, ""), in("lines", T, "{name} {health}/{max_health}"), out("text", T)}, false});
+    t.push_back({"find_guns", "Find Guns", "Weapons", {in("filter", T, "class=pistol, ammo=9mm"), out("guns", T)}, false});
+    t.push_back({"gun_info", "Gun Info", "Weapons", {in("item", T, "glock17"), out("info", T)}, false});
+    t.push_back({"gun_state", "Gun State", "Weapons", {in("target", T, ""), out("state", T)}, false});
+    t.push_back({"cycle_weapon", "Work the Action", "Weapons", {in("in", X), in("target", T, ""), out("then", X)}, false});
+    t.push_back({"fire_mode", "Fire Mode", "Weapons", {in("target", T, ""), out("mode", T)}, false});
+    t.push_back({"set_fire_mode", "Set Fire Mode", "Weapons", {in("in", X), in("target", T, ""), in("mode", T, "semi"), out("then", X)}, false});
+    t.push_back({"next_fire_mode", "Next Fire Mode", "Weapons", {in("in", X), in("target", T, ""), out("then", X)}, false});
+    t.push_back({"surface_under", "Surface Underfoot", "Ground", {in("target", T, ""), out("surface", T)}, false});
+    t.push_back({"surface_at", "Surface At", "Ground", {in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("surface", T)}, false});
+    t.push_back({"wading_in", "Wading In", "Ground", {in("target", T, ""), out("surface", T)}, false});
+    t.push_back({"ground_speed", "Ground Speed", "Ground", {in("target", T, ""), out("speed", N)}, false});
+    t.push_back({"set_ground_speed", "Set Ground Speed", "Ground", {in("in", X), in("target", T, ""), in("speed", T, "50%"), out("then", X)}, false});
+    t.push_back({"define_surface", "Define Surface", "Ground", {in("in", X), in("surface", T, "snow"), in("setting", T, "walk"), in("value", T, "70%"), out("then", X)}, false});
+    t.push_back({"surface_setting", "Surface Setting", "Ground", {in("surface", T, "snow"), in("setting", T, "walk"), out("value", T)}, false});
+    t.push_back({"set_surface", "Set Surface", "Ground", {in("in", X), in("target", T, ""), in("surface", T, "metal"), out("then", X)}, false});
+    t.push_back({"set_look_info", "Set Look-at Info", "Game", {in("in", X), in("target", T, ""), in("text", T, ""), out("then", X)}, false});
+    t.push_back({"play_item_sound", "Play Item Sound", "Game", {in("in", X), in("name", T, "gunshot_rifle"), in("x", N, "0"), in("y", N, "0"), in("z", N, "0"), out("then", X)}, false});
     add_brain_types(t);
     return t;
 }
@@ -443,6 +483,46 @@ struct SimpleCall {
 
 const std::map<std::string, SimpleCall>& simple_calls() {
     static const std::map<std::string, SimpleCall> calls = {
+        {"load_magazine", {"load_magazine", true, {"list", "index"}}},
+        {"unload_magazine", {"unload_magazine", true, {"list", "index"}}},
+        {"unload_weapon", {"unload_weapon", true, {}}},
+        {"choose_ammo", {"choose_ammo", true, {"ammo", "variant"}}},
+        {"loaded_ammo", {"loaded_ammo", true, {}}},
+        {"loaded_variant", {"loaded_variant", true, {}}},
+        {"loaded_rounds", {"loaded_rounds", true, {}}},
+        {"give_ammo", {"give_ammo", true, {"ammo", "variant", "amount"}}},
+        {"ammo_count", {"ammo_count", true, {"ammo", "variant"}}},
+        {"ammo_info", {"ammo_info", false, {"item"}}},
+        {"ammo_fits", {"ammo_fits", false, {"gun", "ammo"}}},
+        {"define_bullet", {"define_bullet", false, {"variant", "setting", "value"}}},
+        {"bullet_setting", {"bullet_setting", false, {"variant", "setting"}}},
+        {"inventory_click", {"inventory_click", true, {"@other", "list", "index", "action"}}},
+        {"cursor_item", {"cursor_item", true, {}}},
+        {"cursor_amount", {"cursor_amount", true, {}}},
+        {"return_cursor", {"return_cursor", true, {}}},
+        {"next_item_event", {"next_item_event", true, {}}},
+        {"enchant_item", {"enchant_item", true, {"list", "index", "enchant"}}},
+        {"worn_resist", {"worn_resist", true, {"damage_type"}}},
+        {"game_rule", {"game_rule", false, {"rule"}}},
+        {"set_game_rule", {"set_game_rule", false, {"rule", "value"}}},
+        {"describe", {"describe", true, {"lines"}}},
+        {"find_guns", {"find_guns", false, {"filter"}}},
+        {"gun_info", {"gun_info", false, {"item"}}},
+        {"gun_state", {"gun_state", true, {}}},
+        {"cycle_weapon", {"cycle_weapon", true, {}}},
+        {"fire_mode", {"fire_mode", true, {}}},
+        {"set_fire_mode", {"set_fire_mode", true, {"mode"}}},
+        {"next_fire_mode", {"next_fire_mode", true, {}}},
+        {"surface_under", {"surface_under", true, {}}},
+        {"surface_at", {"surface_at", false, {"x", "y", "z"}}},
+        {"wading_in", {"wading_in", true, {}}},
+        {"ground_speed", {"ground_speed", true, {}}},
+        {"set_ground_speed", {"set_ground_speed", true, {"speed"}}},
+        {"define_surface", {"define_surface", false, {"surface", "setting", "value"}}},
+        {"surface_setting", {"surface_setting", false, {"surface", "setting"}}},
+        {"set_surface", {"set_surface", true, {"surface"}}},
+        {"set_look_info", {"set_look_info", true, {"text"}}},
+        {"play_item_sound", {"play_item_sound", false, {"name", "x", "y", "z"}}},
         {"give_item", {"give_item", true, {"item", "amount"}}},
         {"take_item", {"take_item", true, {"item", "amount"}}},
         {"item_count", {"item_count", true, {"item"}}},
@@ -675,7 +755,7 @@ std::string Graph::expression(int id, const std::string& pin, int depth, std::ve
         std::string call = std::string("orchard::") + sc->second.fn + "(";
         bool first = true;
         if (sc->second.target) { call += who(*n, depth, errors); first = false; }
-        for (const char* a : sc->second.args) { call += (first ? "" : ", ") + arg(a); first = false; }
+        for (const char* a : sc->second.args) { call += (first ? "" : ", ") + (a[0] == '@' ? "orchard::find(" + arg(a + 1) + ")" : arg(a)); first = false; }
         return call + ")";
     }
     if (n->type == "add") return "(" + arg("a") + " + " + arg("b") + ")";
@@ -829,7 +909,7 @@ void Graph::statements(int id, const std::string& out_pin, int indent, int depth
             std::string call = std::string("orchard::") + sc->second.fn + "(";
             bool first = true;
             if (sc->second.target) { call += who(*n, depth, errors); first = false; }
-            for (const char* a : sc->second.args) { call += (first ? "" : ", ") + arg(a); first = false; }
+            for (const char* a : sc->second.args) { call += (first ? "" : ", ") + (a[0] == '@' ? "orchard::find(" + arg(a + 1) + ")" : arg(a)); first = false; }
             code += pad(indent) + call + ");\n";
         } else if (n->type == "drink") {
             code += pad(indent) + "orchard::drink(" + who(*n, depth, errors) + ", " + arg("amount") + ");\n";

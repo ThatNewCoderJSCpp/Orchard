@@ -36,6 +36,7 @@ struct Damage {
     float stagger = -1.0f;
     std::string key;
     bool stack = false;
+    float armor_scale = 1.0f;
 
     bool over_time() const { return duration != 0.0f; }
     bool forever() const { return duration < 0.0f; }
@@ -92,6 +93,34 @@ struct Projectile {
     float effect_chance = 0.0f;
     std::vector<Vec3> trail;
     bool done = false;
+    float armor_scale = 1.0f;
+    float ricochet = 1.0f;
+    float stagger = 1.0f;
+    bool breaks_up = false;
+    bool tracer = false;
+    std::string effects;
+    std::string extra_damage;
+    std::string variant;
+    bool wet = false;
+};
+
+struct SoundCue {
+    std::string clip;
+    Vec3 at;
+    Entity follow;
+    float volume = 1.0f;
+    float pitch = 1.0f;
+    float range = 30.0f;
+    float loudness = 0.0f;
+};
+
+struct ItemEvent {
+    Entity owner;
+    std::string event;
+    std::string action;
+    std::string item;
+    std::string list;
+    int index = -1;
 };
 
 struct Tracer {
@@ -114,6 +143,7 @@ struct ClimateSample {
 };
 
 struct Exertion {
+    float slip = 0.0f;
     float speed = 0.0f;
     float jump = 1.0f;
     bool sprinting = false;
@@ -234,6 +264,65 @@ public:
     std::vector<Entity> visual_parts(Entity e) const;
     void refresh_visuals(Entity e);
 
+    bool unload(Entity e, const std::string& hand = "mainhand");
+    float load_magazine(Entity e, const std::string& list, int index, const std::string& ammo = std::string(), const std::string& variant = std::string(), float amount = -1.0f);
+    float unload_magazine(Entity e, const std::string& list, int index);
+    bool choose_ammo(Entity e, const std::string& ammo, const std::string& variant, const std::string& hand = "mainhand");
+    std::string loaded_ammo(Entity e, const std::string& hand = "mainhand");
+    std::string loaded_variant(Entity e, const std::string& hand = "mainhand");
+    float loaded_rounds(Entity e, const std::string& hand = "mainhand");
+    float give_stack(Entity e, const ItemStack& stack);
+    float count_variant(Entity e, const std::string& item, const std::string& variant) const;
+    float take_variant(Entity e, const std::string& item, const std::string& variant, float amount);
+    void fill_for_world(ItemStack& stack, const std::string& fill);
+    std::string reload_mode(Entity e) const;
+    void prepare_world();
+    void set_open_inventory(Entity viewer, Entity other);
+
+    ItemStack* cursor(Entity e);
+    bool inventory_action(Entity viewer, Entity who, const std::string& list, int index, int x, int y, const std::string& action, const std::string& event = std::string());
+    bool return_cursor(Entity e);
+    bool next_item_event(Entity e, ItemEvent& out);
+    void push_item_event(const ItemEvent& ev);
+
+    std::vector<SoundCue> take_sound_cues();
+    void cue_sound(const std::string& name, Vec3 at, Entity follow = Entity{}, float volume = 1.0f, float pitch = 1.0f, float loudness = 0.0f);
+    std::string sound_for(const ItemDef& d, const std::string& what) const;
+
+    std::string describe(Entity e, const std::string& lines, Entity viewer = Entity{});
+    Entity looked_at(Entity viewer, float range, bool items, bool everything);
+    void set_look_info(Entity e, const std::string& text);
+    std::string look_info(Entity e) const;
+    float worn_resist(Entity e, const std::string& type) const;
+    void apply_hit_extras(Entity target, Entity attacker, const std::string& effects, const std::string& extra_damage, float scale = 1.0f);
+    std::string stack_enchant_effects(const ItemStack& s) const;
+    std::string stack_enchant_damage(const ItemStack& s) const;
+
+    std::string surface_of(Entity hit, Vec3 point) const;
+    std::string surface_at(Vec3 point) const;
+    std::string surface_under(Entity e) const;
+    std::string wading_in(Entity e) const;
+    float ground_speed(Entity e) const;
+    float ground_minus(Entity e) const;
+    float ground_jump(Entity e) const;
+    float ground_slip(Entity e) const;
+    bool set_ground_speed(Entity e, const std::string& text);
+    std::string ground_speed_override(Entity e) const;
+    const SurfaceDef* surface_def(const std::string& id) const;
+    bool define_surface(const std::string& id, const std::string& key, const std::string& value);
+    std::string surface_setting(const std::string& id, const std::string& key) const;
+    bool set_surface(Entity e, const std::string& id);
+
+    std::string gun_state(Entity e, const std::string& hand = "mainhand");
+    bool cycle_weapon(Entity e, const std::string& hand = "mainhand");
+    bool set_fire_mode(Entity e, const std::string& mode, const std::string& hand = "mainhand");
+    std::string fire_mode(Entity e, const std::string& hand = "mainhand");
+    bool next_fire_mode(Entity e, const std::string& hand = "mainhand");
+    std::vector<std::string> fire_modes(Entity e, const std::string& hand = "mainhand");
+    bool cycling(Entity e) const;
+    float action_phase(Entity e) const;
+    std::string action_kind(Entity e) const;
+
     ClimateSample climate_at(Vec3 point) const;
     float climate_weight(Entity zone, Vec3 point) const;
     Entity start_weather(const std::string& preset, float duration = -1.0f, float fade_in = 2.0f, float fade_out = 2.0f, Vec3 at = Vec3{}, float radius = 0.0f);
@@ -326,7 +415,87 @@ private:
         std::vector<Entity> visuals;
         std::string visual_key;
         std::vector<std::string> worn_effects;
+        std::vector<ItemStack> cursor;
+        double reload_start = 0.0;
+        int reload_rounds = 0;
+        double next_round = 0.0;
+        float round_time = 0.0f;
+        std::string reload_hand = "mainhand";
+        std::string reload_ammo;
+        std::string reload_variant;
+        float kick = 0.0f;
+        float aim_blend = 0.0f;
+        float swing = 0.0f;
+        float swing_dir = 1.0f;
+        Entity hand_visual;
+        Vec3 hand_pos;
+        Quat hand_rot{0.0f, 0.0f, 0.0f, 1.0f};
+        bool was_aiming = false;
+        bool was_reloading = false;
+        Entity open_other;
+        double cycle_start = 0.0;
+        double cycle_until = -1.0;
+        std::string cycle_kind;
+        std::string cycle_hand = "mainhand";
+        std::vector<std::pair<double, std::string>> sound_queue;
+        int burst_left = 0;
+        std::string reload_style;
+        bool trigger_down = false;
     };
+    struct ShotMods {
+        float armor_scale = 1.0f;
+        float ricochet = 1.0f;
+        float stagger = 1.0f;
+        bool breaks_up = false;
+        bool tracer = false;
+        std::string variant;
+        std::string effects;
+        std::string extra_damage;
+    };
+    ShotMods m_mods;
+    std::vector<SoundCue> m_sound_cues;
+    std::vector<ItemEvent> m_item_events;
+    std::map<std::uint64_t, std::string> m_look_info;
+    bool finish_reload(Entity who);
+    void tick_reloads();
+    void tick_animations(float dt);
+    void tick_ground(float dt);
+    void tick_actions();
+    void start_cycle(Entity who, const std::string& kind, float seconds, const std::string& hand);
+    bool by_hand(const ItemDef& d) const;
+    bool needs_working(const ItemDef& d) const;
+    std::vector<std::string> modes_for(const ItemDef& d) const;
+    std::string cycle_kind_for(const ItemDef& d) const;
+    void queue_sound(Carry& c, double at, const std::string& name);
+    void eject_casing(Entity who, const ItemDef& gun, const std::string& ammo);
+    void surface_hit(Entity hit, Vec3 point, Vec3 normal, const std::string& surface);
+    std::string terrain_surface(Entity terrain, Vec3 point) const;
+    std::string volume_at(Vec3 feet, float height, float* depth) const;
+    struct Ground {
+        std::string surface;
+        std::string wade;
+        float depth = 0.0f;
+        float speed = 1.0f;
+        float minus = 0.0f;
+        float jump = 1.0f;
+        float stamina = 1.0f;
+        float slip = 0.0f;
+        Vec3 last;
+        bool have_last = false;
+        float stride = 0.0f;
+        double next_probe = 0.0;
+    };
+    std::unordered_map<std::uint64_t, Ground> m_ground;
+    std::unordered_map<std::uint64_t, std::string> m_ground_override;
+    struct VolumeSpot {
+        Vec3 at;
+        float radius = 0.5f;
+        float height = 1.0f;
+        std::string surface;
+    };
+    mutable std::unordered_map<std::uint64_t, std::vector<VolumeSpot>> m_volume_spots;
+    mutable bool m_volume_built = false;
+    bool m_quiet_reload = false;
     struct Zone {
         double started = 0.0;
         double stopping = -1.0;

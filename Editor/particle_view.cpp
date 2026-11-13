@@ -94,10 +94,25 @@ void warm_builtin_textures() {
     });
 }
 
+std::string g_particle_look;
+
 std::string effective_texture(const Emitter& e) {
-    if (!e.texture.empty()) return e.texture;
-    if (const char* b = builtin_particle_texture_for_preset(e.preset)) return b;
-    return std::string();
+    std::string t = e.texture;
+    if (t.empty())
+        if (const char* b = builtin_particle_texture_for_preset(e.preset)) t = b;
+    if (g_particle_look == "plain" && !t.empty() && is_builtin_particle_texture(t)) return "builtin:glow";
+    if (g_particle_look == "simple" || g_particle_look == "better") {
+        const ParticleLook look = particle_look_for(e.texture, e.preset);
+        if (!look.simple.empty() && t != "builtin:glow") return g_particle_look == "simple" ? look.simple : look.better;
+    }
+    return t;
+}
+
+bool forced_additive(const Emitter& e) {
+    if (g_particle_look != "simple" && g_particle_look != "better") return e.blend == ParticleBlend::additive;
+    const ParticleLook look = particle_look_for(e.texture, e.preset);
+    if (!look.better_covers || e.texture == "builtin:glow") return e.blend == ParticleBlend::additive;
+    return g_particle_look == "simple";
 }
 
 void flipbook_grid(int frames, unsigned width, unsigned height, int& columns, int& rows) {
@@ -265,7 +280,7 @@ fp::EmitterSettings particle_settings(const Emitter& e, bool flat, Vec3 up, int 
     const float size = std::max(0.0005f, e.size);
     s.size = fp::RangeF(size * 0.85f, size * 1.15f);
     s.size_over_life = fp::LifeCurve::linear(1.0f, safe_ratio(e.size_end, size));
-    const bool additive = e.blend == ParticleBlend::additive;
+    const bool additive = forced_additive(e);
     float boost = 1.0f;
     if (additive) boost = std::clamp(0.45f + e.glow * 0.25f, 0.2f, 1.0f);
     s.color = fp::ColorF(1.0f, 1.0f, 1.0f, 1.0f);
@@ -704,6 +719,13 @@ void ParticleView::command(Entity e, int action, int count) {
 }
 
 void ParticleView::reset() {
+    m->clear_all();
+}
+
+void ParticleView::set_look(const std::string& look) {
+    const std::string want = look == "simple" || look == "better" || look == "plain" ? look : std::string();
+    if (want == g_particle_look) return;
+    g_particle_look = want;
     m->clear_all();
 }
 

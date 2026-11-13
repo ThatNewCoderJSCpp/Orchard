@@ -6,6 +6,7 @@
 #include <orchard/graph.hpp>
 
 #include <cmath>
+#include <filesystem>
 #include <set>
 #include <functional>
 #include <memory>
@@ -1806,7 +1807,6 @@ void test_inventories() {
         orchard::Inventory inv;
         check(orchard::apply_inventory_preset(inv, p), "the " + p + " preset applies");
     }
-    // Minecraft: counts, stacks of 64, whole items only.
     orchard::Inventory mc;
     orchard::apply_inventory_preset(mc, "minecraft");
     check(orchard::inventory_add(cat, mc, "apple", 100.0f) == 100.0f, "100 apples fit in a Minecraft inventory");
@@ -1822,7 +1822,6 @@ void test_inventories() {
     orchard::set_inventory_field(mc, "stack_limit", "-3");
     check(mc.stack_limit == 0.0f, "stack limits can't go negative");
     check(orchard::inventory_take(cat, mc, "apple", 30.0f) == 30.0f && orchard::inventory_count(mc, "apple") == 70.0f, "taking apples leaves the rest");
-    // Weight and volume measured stacks allow fractions.
     orchard::Inventory dz;
     orchard::apply_inventory_preset(dz, "dayz");
     dz.stack_measure = "volume";
@@ -1830,7 +1829,6 @@ void test_inventories() {
     dz.stack_limit = 2.5f;
     const float poured = orchard::inventory_add(cat, dz, "water", 1.75f);
     check(near(poured, 1.75f, 1e-4f) && near(orchard::inventory_count(dz, "water"), 1.75f, 1e-4f), "liquids are carried as fractions (" + str(poured) + " L)");
-    // Tarkov: grid placement and the weight limit.
     orchard::Inventory tk;
     orchard::apply_inventory_preset(tk, "tarkov");
     tk.columns = 4;
@@ -1842,7 +1840,6 @@ void test_inventories() {
     for (int i = 0; i < 20; ++i) placed += orchard::inventory_add(cat, tk, "glock17", 1.0f) > 0.0f ? 1 : 0;
     check(placed < 20, "a full grid or a weight limit stops more going in (" + str(static_cast<float>(placed)) + " more fit)");
     check(orchard::inventory_weight(cat, tk) <= tk.max_weight + 1e-3f, "the weight limit is respected (" + str(orchard::inventory_weight(cat, tk)) + " kg)");
-    // Stack text round trip.
     orchard::ItemStack st;
     st.item = "rucksack";
     st.amount = 1.0f;
@@ -1928,7 +1925,6 @@ void test_holsters_and_weapons(bool flat) {
         check(g.health(target) < 100.0f, std::string(flat ? "2D " : "3D ") + orchard::to_string(mode) + " ballistics hit a target 6 m away (" + str(g.health(target)) + ")");
     }
     static_cast<void>(before);
-    // Drop and pick up again.
     std::string list = "worn:mainhand";
     const orchard::Entity dropped = g.drop_item(p, list, 0);
     check(s.alive(dropped) && s.pickup(dropped), "dropping makes a pickup in the world");
@@ -1989,6 +1985,545 @@ void test_items_save() {
     check(back->pickup(back->find("Drop")) && back->pickup(back->find("Drop"))->stack.item == "my_blade", "pickups are saved");
 }
 
+void test_guns_actions_and_surfaces() {
+    orchard::ItemCatalog cat;
+    int guns = 0;
+    for (const orchard::ItemDef& d : orchard::item_library()) guns += d.kind == orchard::ItemKind::gun ? 1 : 0;
+    check(guns > 600, "lots of guns in the library (" + str(static_cast<float>(guns)) + ")");
+    bool all_have_action = true;
+    for (const orchard::ItemDef& d : orchard::item_library())
+        if (d.kind == orchard::ItemKind::gun && (d.action.empty() || d.gun_class.empty())) all_have_action = false;
+    check(all_have_action, "every library gun has an action and a type");
+    check(orchard::find_guns(cat, "class=pistol, ammo=9mm").size() > 30, "find 9mm pistols");
+    check(orchard::find_guns(cat, "action=bolt, class=sniper").size() > 10, "find bolt-action sniper rifles");
+    check(orchard::find_guns(cat, "action=lever").size() > 10, "find lever actions");
+    check(orchard::find_guns(cat, "action=pump, class=shotgun").size() > 10, "find pump shotguns");
+    const std::vector<const orchard::ItemDef*> m1 = orchard::find_guns(cat, "garand");
+    check(!m1.empty(), "search by name");
+    check(orchard::find_guns(cat, "era=world_wars, country=Germany").size() > 5, "find German guns from the world wars");
+    check(!orchard::gun_filter_values(cat, "action").empty() && !orchard::gun_info(cat, "glock17").empty(), "filter values and gun info");
+    const orchard::ItemDef* glock = cat.find("glock17");
+    check(glock && glock->slide_lock && glock->action == "semi", "a Glock is semi-automatic and locks open");
+    const orchard::ItemDef* r870 = cat.find("rem870");
+    check(r870 && orchard::manual_action(*r870), "a Remington 870 is worked by hand");
+    orchard::ItemStack st;
+    st.item = "glock17";
+    st.amount = 1.0f;
+    st.action = "open";
+    st.fire_mode = "semi";
+    const std::optional<orchard::ItemStack> back = orchard::parse_stack(orchard::stack_text(st));
+    check(back && back->action == "open" && back->fire_mode == "semi", "a gun keeps its slide and fire mode when saved");
+    check(orchard::weight_text(0.012f, "kg") == "12 g" && orchard::weight_text(2.5f, "kg") == "2.50 kg", "weights read in normal units");
+    float m = 1.0f, minus = 0.0f;
+    check(orchard::parse_speed_change("80%", m, minus) && near(m, 0.8f, 1e-4f), "80% speed");
+    check(orchard::parse_speed_change("-1.5", m, minus) && near(minus, 1.5f, 1e-4f) && m == 1.0f, "a plain number takes speed off");
+    check(orchard::guess_surface("builtin:snow") == "snow" && orchard::guess_surface("Steel crate") == "metal" && orchard::guess_surface("Office chair").empty(), "surfaces guessed from names");
+
+    auto setup = [&](orchard::Scene& s, const std::string& gun, const std::string& ammo) {
+        const orchard::Entity p = s.create("P");
+        orchard::Inventory& pi = s.add_inventory(p);
+        orchard::apply_inventory_preset(pi, "tarkov");
+        pi.columns = 10;
+        pi.rows = 8;
+        return std::make_pair(p, std::make_pair(gun, ammo));
+    };
+    {
+        orchard::Scene s(orchard::Dimension::three_d);
+        s.set_rule("reload", "pool");
+        auto [p, ids] = setup(s, "rem870", "12g_buck");
+        xylem::World w(s.dimension());
+        w.build(s);
+        orchard::Gameplay g;
+        g.start(&s, &w);
+        g.give(p, "rem870", 1.0f);
+        g.give(p, "12g_buck", 20.0f);
+        int gi = -1;
+        for (std::size_t i = 0; i < s.inventory(p)->items.size(); ++i)
+            if (s.inventory(p)->items[i].item == "rem870") gi = static_cast<int>(i);
+        g.hold(p, "mainhand", "items", gi);
+        double t = 0.0;
+        auto run = [&](int frames) {
+            for (int i = 0; i < frames; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        };
+        g.reload(p);
+        run(60 * 6);
+        check(g.loaded_rounds(p) >= 5.0f, "the pump gun loads shell by shell (" + str(g.loaded_rounds(p)) + ")");
+        g.set_aim(p, {0.0f, 1.5f, 0.0f}, {0.0f, 0.0f, -1.0f});
+        const float before = g.loaded_rounds(p);
+        check(g.use_held(p, true, false, 1.0f / 60.0f), "the pump gun fires");
+        check(g.cycling(p) && g.action_kind(p) == "pump", "then works the pump by itself");
+        check(!g.use_held(p, true, false, 1.0f / 60.0f), "and can't fire while pumping");
+        run(60);
+        check(g.gun_state(p) == "ready" && g.loaded_rounds(p) == before - 1.0f, "ready again after pumping");
+        s.set_rule("cycle", "manual");
+        g.use_held(p, true, false, 1.0f / 60.0f);
+        run(30);
+        check(g.gun_state(p) == "spent", "with manual cycling the spent shell stays until you pump");
+        g.reload(p);
+        check(g.cycling(p), "R works the action");
+        run(60);
+        check(g.gun_state(p) == "ready", "and it's ready");
+    }
+    {
+        orchard::Scene s(orchard::Dimension::three_d);
+        s.set_rule("reload", "pool");
+        auto [p, ids] = setup(s, "glock17", "9mm");
+        xylem::World w(s.dimension());
+        w.build(s);
+        orchard::Gameplay g;
+        g.start(&s, &w);
+        g.give(p, "glock17", 1.0f);
+        g.give(p, "9mm", 3.0f);
+        int gi = -1;
+        for (std::size_t i = 0; i < s.inventory(p)->items.size(); ++i)
+            if (s.inventory(p)->items[i].item == "glock17") gi = static_cast<int>(i);
+        g.hold(p, "mainhand", "items", gi);
+        double t = 0.0;
+        auto run = [&](int frames) {
+            for (int i = 0; i < frames; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        };
+        g.reload(p);
+        run(150);
+        g.set_aim(p, {0.0f, 1.5f, 0.0f}, {0.0f, 0.0f, -1.0f});
+        for (int i = 0; i < 3; ++i) {
+            g.use_held(p, true, false, 1.0f / 60.0f);
+            run(20);
+        }
+        check(g.loaded_rounds(p) == 0.0f && g.gun_state(p) == "open", "the slide locks open on the last round");
+        bool clicked = false;
+        g.take_sound_cues();
+        g.use_held(p, true, false, 1.0f / 60.0f);
+        for (const orchard::SoundCue& c : g.take_sound_cues()) clicked = clicked || c.clip.find("dry_fire") != std::string::npos;
+        check(!clicked, "a locked-open gun doesn't click");
+        const orchard::ItemDef* mp5 = cat.find("mp5");
+        check(mp5 && orchard::fire_modes_of(*mp5).size() == 3, "an MP5 has three fire modes");
+    }
+    {
+        orchard::Scene s(orchard::Dimension::three_d);
+        const orchard::Entity floor = ground(s, 40.0f);
+        (*s.colliders(floor))[0].surface = "snow";
+        const orchard::Entity metal = s.create("Steel plate");
+        s.transform(metal)->position = {10.0f, 0.5f, 0.0f};
+        s.add_body(metal).type = orchard::BodyType::fixed;
+        s.add_collider(metal)->size = {2.0f, 1.0f, 2.0f};
+        const orchard::Entity walker = s.create("Walker");
+        s.transform(walker)->position = {0.0f, 1.0f, 0.0f};
+        s.add_survival(walker);
+        xylem::World w(s.dimension());
+        w.build(s);
+        orchard::Gameplay g;
+        g.start(&s, &w);
+        double t = 0.0;
+        for (int i = 0; i < 20; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        check(g.surface_under(walker) == "snow", "standing on snow (" + g.surface_under(walker) + ")");
+        check(near(g.ground_speed(walker), 0.8f, 0.01f), "snow slows you to 80% (" + str(g.ground_speed(walker)) + ")");
+        s.set_rule("ground_snow", "50%");
+        for (int i = 0; i < 20; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        check(near(g.ground_speed(walker), 0.5f, 0.01f), "the rule changes it to 50%");
+        s.set_rule("surface_strength", "0");
+        for (int i = 0; i < 20; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        check(near(g.ground_speed(walker), 1.0f, 0.01f), "strength 0 turns it off");
+        s.set_rule("surface_strength", "100");
+        g.set_ground_speed(walker, "-1");
+        for (int i = 0; i < 20; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        check(near(g.ground_minus(walker), 1.0f, 0.01f), "a script can take 1 m/s off");
+        g.set_ground_speed(walker, "");
+        check(g.surface_at({10.0f, 2.0f, 0.0f}) == "metal", "the steel plate is metal");
+        g.define_surface("snow", "walk", "70%");
+        check(g.surface_setting("snow", "walk") == "70%", "surfaces can be changed");
+        const std::string saved = s.save();
+        const std::optional<orchard::Scene> loaded = orchard::Scene::load(saved);
+        check(loaded && loaded->surfaces().find("snow") && near(loaded->surfaces().find("snow")->walk, 0.7f, 1e-4f), "custom surfaces are saved");
+        check(loaded && (*loaded->colliders(loaded->find("Ground")))[0].surface == "snow", "a collider's surface is saved");
+    }
+}
+
+void test_auto_actions_hammers_and_bursts() {
+    auto armed = [](orchard::Scene& s, xylem::World& w, orchard::Gameplay& g, const std::string& gun, const std::string& ammo, float rounds) {
+        const orchard::Entity p = s.create("P");
+        orchard::Inventory& pi = s.add_inventory(p);
+        orchard::apply_inventory_preset(pi, "tarkov");
+        pi.columns = 10;
+        pi.rows = 8;
+        w.build(s);
+        g.start(&s, &w);
+        g.give(p, gun, 1.0f);
+        g.give(p, ammo, rounds);
+        int gi = -1;
+        for (std::size_t i = 0; i < s.inventory(p)->items.size(); ++i)
+            if (s.inventory(p)->items[i].item == gun) gi = static_cast<int>(i);
+        g.hold(p, "mainhand", "items", gi);
+        g.set_aim(p, {0.0f, 1.5f, 0.0f}, {0.0f, 0.0f, -1.0f});
+        return p;
+    };
+    {
+        orchard::Scene s(orchard::Dimension::three_d);
+        s.set_rule("reload", "pool");
+        xylem::World w(s.dimension());
+        orchard::Gameplay g;
+        const orchard::Entity p = armed(s, w, g, "colt_saa", "45colt", 12.0f);
+        double t = 0.0;
+        auto run = [&](int frames) {
+            for (int i = 0; i < frames; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        };
+        g.reload(p);
+        run(60 * 8);
+        check(g.loaded_rounds(p) >= 6.0f, "the single-action revolver loads (" + str(g.loaded_rounds(p)) + ")");
+        run(60);
+        check(g.gun_state(p) == "ready", "and its hammer is cocked after loading (" + g.gun_state(p) + ")");
+        check(g.use_held(p, true, false, 1.0f / 60.0f), "it fires");
+        check(g.cycling(p) && g.action_kind(p) == "hammer", "and the hammer gets cocked again by itself");
+        run(60);
+        check(g.gun_state(p) == "ready", "ready after cocking");
+        s.set_rule("manual_cycle", "1");
+        g.use_held(p, true, false, 1.0f / 60.0f);
+        run(30);
+        check(g.gun_state(p) == "spent", "with manual actions on, the hammer stays down");
+        check(!g.use_held(p, true, false, 1.0f / 60.0f), "so pulling the trigger does nothing");
+        g.reload(p);
+        check(g.cycling(p) && g.action_kind(p) == "hammer", "R cocks the hammer");
+        run(60);
+        check(g.gun_state(p) == "ready", "then it's ready");
+    }
+    {
+        orchard::Scene s(orchard::Dimension::three_d);
+        s.set_rule("reload", "pool");
+        xylem::World w(s.dimension());
+        orchard::Gameplay g;
+        const orchard::Entity p = armed(s, w, g, "brown_bess", "musket_ball", 5.0f);
+        double t = 0.0;
+        auto run = [&](int frames) {
+            for (int i = 0; i < frames; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        };
+        g.reload(p);
+        run(60 * 25);
+        check(g.loaded_rounds(p) == 1.0f && g.gun_state(p) == "ready", "a muzzle-loader is rammed and cocked (" + g.gun_state(p) + ")");
+        check(g.use_held(p, true, false, 1.0f / 60.0f), "the musket fires");
+        run(60);
+        check(g.loaded_rounds(p) == 0.0f && !g.use_held(p, true, false, 1.0f / 60.0f), "and has to be loaded again");
+    }
+    {
+        orchard::Scene s(orchard::Dimension::three_d);
+        s.set_rule("reload", "pool");
+        xylem::World w(s.dimension());
+        orchard::Gameplay g;
+        const orchard::Entity p = armed(s, w, g, "double_barrel", "12g_buck", 10.0f);
+        const orchard::ItemDef* d = g.held_def(p);
+        check(d && d->hammer, "the coach gun has hammers");
+        double t = 0.0;
+        auto run = [&](int frames) {
+            for (int i = 0; i < frames; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        };
+        g.reload(p);
+        run(60 * 6);
+        check(g.loaded_rounds(p) == 2.0f && g.gun_state(p) == "ready", "both barrels load and cock (" + str(g.loaded_rounds(p)) + ", " + g.gun_state(p) + ")");
+        g.use_held(p, true, false, 1.0f / 60.0f);
+        run(60);
+        check(g.loaded_rounds(p) == 1.0f && g.gun_state(p) == "ready", "the second hammer is cocked automatically");
+    }
+    {
+        orchard::Scene s(orchard::Dimension::three_d);
+        s.set_rule("reload", "pool");
+        xylem::World w(s.dimension());
+        orchard::Gameplay g;
+        const orchard::Entity p = armed(s, w, g, "ak47", "762x39", 60.0f);
+        double t = 0.0;
+        auto run = [&](int frames) {
+            for (int i = 0; i < frames; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        };
+        g.reload(p);
+        run(60 * 4);
+        std::vector<std::string> modes = g.fire_modes(p);
+        check(std::find(modes.begin(), modes.end(), "burst5") == modes.end(), "no 5-round burst until the rule is on");
+        s.set_rule("burst5", "1");
+        modes = g.fire_modes(p);
+        check(std::find(modes.begin(), modes.end(), "burst5") != modes.end(), "the rule adds a 5-round burst to automatic guns");
+        check(g.set_fire_mode(p, "burst5"), "and it can be picked");
+        const float before = g.loaded_rounds(p);
+        g.use_held(p, true, false, 1.0f / 60.0f);
+        for (int i = 0; i < 120; ++i) {
+            g.use_held(p, false, true, 1.0f / 60.0f);
+            g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        }
+        check(near(before - g.loaded_rounds(p), 5.0f, 0.01f), "one pull fires five rounds (" + str(before - g.loaded_rounds(p)) + ")");
+        const orchard::ItemDef* d = g.held_def(p);
+        check(d && orchard::burst_size(*d, "burst5") == 5 && orchard::burst_size(*d, "burst") >= 1 && orchard::burst_size(*d, "auto") == 0, "burst sizes come from the mode");
+    }
+    {
+        orchard::Scene s(orchard::Dimension::three_d);
+        s.set_rule("reload", "pool");
+        s.set_rule("manual_cycle", "1");
+        xylem::World w(s.dimension());
+        orchard::Gameplay g;
+        const orchard::Entity p = armed(s, w, g, "rem870", "12g_buck", 10.0f);
+        double t = 0.0;
+        auto run = [&](int frames) {
+            for (int i = 0; i < frames; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        };
+        g.reload(p);
+        run(60 * 6);
+        check(g.gun_state(p) == "spent", "loaded from empty with manual actions on, the pump is left for you (" + g.gun_state(p) + ")");
+        g.reload(p);
+        run(60);
+        check(g.gun_state(p) == "ready", "R pumps it");
+        g.use_held(p, true, false, 1.0f / 60.0f);
+        run(30);
+        check(g.gun_state(p) == "spent", "and after a shot the pump is left for you again");
+        s.set_rule("manual_cycle", "0");
+        g.reload(p);
+        run(60);
+        g.use_held(p, true, false, 1.0f / 60.0f);
+        check(g.cycling(p), "turned off, the pump is worked automatically again");
+    }
+}
+
+void test_ai_ground() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity floor = s.create("Ground");
+    s.transform(floor)->position = {0.0f, -0.5f, 0.0f};
+    s.add_body(floor).type = orchard::BodyType::fixed;
+    s.add_collider(floor)->size = {200.0f, 1.0f, 200.0f};
+    (*s.colliders(floor))[0].surface = "ice";
+    auto agent = [&](const char* name, float z) {
+        const orchard::Entity a = s.create(name);
+        s.transform(a)->position = {0.0f, 0.05f, z};
+        orchard::Body& b = s.add_body(a);
+        b.set(orchard::body_lock_rotation_x, true);
+        b.set(orchard::body_lock_rotation_z, true);
+        orchard::Collider* c = s.add_collider(a, orchard::ColliderShape::capsule);
+        c->size = {0.5f, 1.8f, 0.5f};
+        c->offset = {0.0f, 0.9f, 0.0f};
+        orchard::Agent& ag = s.add_agent(a);
+        ag.brain = "wander";
+        return a;
+    };
+    const orchard::Entity skater = agent("Skater", 0.0f);
+    xylem::World w(s.dimension());
+    w.build(s);
+    orchard::Gameplay g;
+    g.start(&s, &w);
+    double t = 0.0;
+    for (int i = 0; i < 20; ++i) {
+        w.step(1.0f / 60.0f);
+        g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+    }
+    check(g.surface_under(skater) == "ice", "the agent stands on ice (" + g.surface_under(skater) + ")");
+    check(g.ground_slip(skater) > 0.5f, "and ice is slippery for agents too (" + str(g.ground_slip(skater)) + ")");
+    (*s.colliders(floor))[0].surface = "mud";
+    for (int i = 0; i < 20; ++i) {
+        w.step(1.0f / 60.0f);
+        g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+    }
+    check(g.ground_speed(skater) < 0.95f, "mud slows agents down (" + str(g.ground_speed(skater)) + ")");
+}
+
+void test_ammo_and_magazines() {
+    orchard::ItemCatalog cat;
+    int cartridges = 0;
+    for (const orchard::ItemDef& d : orchard::item_library()) cartridges += d.kind == orchard::ItemKind::ammo && d.grain > 0.0f ? 1 : 0;
+    check(cartridges > 290, "the cartridge list is in the library (" + str(static_cast<float>(cartridges)) + ")");
+    const orchard::ItemDef* nine = cat.find("9mm");
+    check(nine && nine->grain == 115.0f && nine->category == "Ammo/Handgun", "9mm is a 115 gr handgun cartridge");
+    check(nine && near(orchard::round_weight(cat, *nine, "fmj") * orchard::grains_per_kg, 184.0f, 0.5f), "a 9mm round weighs its grains");
+    check(nine && orchard::round_weight(cat, *nine, "ap") < orchard::round_weight(cat, *nine, "fmj"), "a lighter AP bullet makes a lighter round");
+    const std::vector<std::string> v = nine ? orchard::ammo_variants(cat, *nine) : std::vector<std::string>{};
+    for (const char* t : {"fmj", "ap", "hp", "sp", "otm", "wadcutter", "frangible"}) check(std::find(v.begin(), v.end(), t) != v.end(), std::string("9mm comes in ") + t);
+    const orchard::ItemDef* rifle = cat.find("ammo_6_5_creedmoor");
+    const std::vector<std::string> rv = rifle ? orchard::ammo_variants(cat, *rifle) : std::vector<std::string>{};
+    check(std::find(rv.begin(), rv.end(), "bt") != rv.end(), "rifle rounds come in boat tail");
+    const orchard::ItemDef* glock = cat.find("glock17");
+    check(glock && nine && orchard::ammo_fits(*glock, *nine), "a Glock takes 9mm");
+    check(glock && !orchard::magazines_for_gun(cat, *glock).empty(), "a Glock has a magazine");
+    const orchard::ItemDef* python = cat.find("python357");
+    const orchard::ItemDef* special = cat.find("ammo_38_special");
+    check(python && special && orchard::ammo_fits(*python, *special), "a .357 revolver also fires .38 Special");
+    check(!orchard::ammo_info(cat, "9mm").empty() && orchard::ammo_info(cat, "9mm").find("Glock 17") != std::string::npos, "ammo lookup lists the guns it fits");
+    orchard::ItemStack st;
+    st.item = "9mm";
+    st.amount = 20.0f;
+    st.variant = "hp";
+    const std::optional<orchard::ItemStack> back = orchard::parse_stack(orchard::stack_text(st));
+    check(back && back->variant == "hp", "a stack keeps its bullet type when saved");
+    orchard::Inventory inv;
+    orchard::apply_inventory_preset(inv, "tarkov");
+    orchard::ItemStack hp = st, fmj = st;
+    fmj.variant = "fmj";
+    orchard::inventory_add_stack(cat, inv, hp, 20.0f);
+    orchard::inventory_add_stack(cat, inv, fmj, 20.0f);
+    check(orchard::inventory_count_variant(inv, "9mm", "hp") == 20.0f && orchard::inventory_count(inv, "9mm") == 40.0f, "different bullet types stack separately");
+
+    for (const char* mode : {"keep", "drop", "discard", "pool"}) {
+        orchard::Scene s(orchard::Dimension::three_d);
+        s.set_rule("reload", mode);
+        const orchard::Entity p = s.create("P");
+        orchard::Inventory& pi = s.add_inventory(p);
+        orchard::apply_inventory_preset(pi, "tarkov");
+        pi.columns = 10;
+        pi.rows = 8;
+        xylem::World w(s.dimension());
+        w.build(s);
+        orchard::Gameplay g;
+        g.start(&s, &w);
+        g.give(p, "glock17", 1.0f);
+        orchard::ItemStack rounds;
+        rounds.item = "9mm";
+        rounds.variant = "ap";
+        rounds.amount = 50.0f;
+        g.give_stack(p, rounds);
+        const std::string mag = orchard::magazines_for_gun(cat, *glock).front()->id;
+        g.give(p, mag, 2.0f);
+        int gi = -1;
+        for (std::size_t i = 0; i < s.inventory(p)->items.size(); ++i)
+            if (s.inventory(p)->items[i].item == "glock17") gi = static_cast<int>(i);
+        g.hold(p, "mainhand", "items", gi);
+        double t = 0.0;
+        auto run = [&](int frames) {
+            for (int i = 0; i < frames; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+        };
+        if (std::string(mode) != "pool") {
+            for (std::size_t i = 0; i < s.inventory(p)->items.size(); ++i)
+                if (s.inventory(p)->items[i].item == mag) {
+                    g.load_magazine(p, "items", static_cast<int>(i));
+                    break;
+                }
+        }
+        run(120);
+        check(g.reload(p), std::string(mode) + ": reloading works");
+        run(150);
+        check(g.loaded_rounds(p) >= 1.0f && g.loaded_variant(p) == "ap", std::string(mode) + ": the gun is loaded with AP (" + str(g.loaded_rounds(p)) + ")");
+        g.set_aim(p, {0.0f, 1.5f, 0.0f}, {0.0f, 0.0f, -1.0f});
+        g.use_held(p, true, false, 1.0f / 60.0f);
+        run(30);
+        const float left = g.loaded_rounds(p);
+        check(g.reload(p), std::string(mode) + ": a second reload works");
+        run(150);
+        float mags_carried = g.count(p, mag), on_ground = 0.0f;
+        for (orchard::Entity e : s.entities())
+            if (const orchard::Pickup* pk = s.pickup(e); pk && pk->stack.item == mag) on_ground += 1.0f;
+        if (std::string(mode) == "keep") check(mags_carried >= 1.0f && on_ground == 0.0f, "keep: the partly used magazine goes back in the inventory");
+        if (std::string(mode) == "drop") check(on_ground >= 1.0f, "drop: the old magazine falls on the ground");
+        if (std::string(mode) == "discard") check(on_ground == 0.0f && mags_carried == 0.0f, "discard: the old magazine is gone");
+        if (std::string(mode) == "pool") check(left >= 1.0f && g.loaded_rounds(p) == static_cast<float>(glock->magazine) && g.count(p, mag) == 2.0f, "pool: rounds come straight from the inventory");
+    }
+    orchard::Scene ws(orchard::Dimension::three_d);
+    ws.set_rule("world_fill", "empty");
+    orchard::Gameplay wg;
+    wg.start(&ws, nullptr);
+    const orchard::Entity full = wg.spawn_item("glock17", 1.0f, {0.0f, 0.0f, 0.0f});
+    check(ws.pickup(full) && ws.pickup(full)->stack.loaded == 0.0f, "guns in the world can start empty");
+    ws.set_rule("world_fill", "partial");
+    ws.set_rule("fill_fraction", "0.5");
+    const orchard::Entity half = wg.spawn_item("glock17", 1.0f, {0.0f, 0.0f, 0.0f});
+    check(ws.pickup(half) && near(ws.pickup(half)->stack.loaded, 9.0f, 0.6f), "or half full (" + str(ws.pickup(half) ? ws.pickup(half)->stack.loaded : -1.0f) + ")");
+    orchard::Pickup& placed = ws.add_pickup(ws.create("Placed"));
+    placed.stack.item = orchard::magazines_for_gun(cat, *glock).front()->id;
+    placed.stack.amount = 1.0f;
+    placed.fill = "random";
+    wg.prepare_world();
+    check(placed.stack.loaded >= 0.0f && placed.stack.loaded <= static_cast<float>(glock->magazine) && placed.stack.ammo == "9mm", "a placed magazine can get a random amount");
+}
+
+void test_cursor_and_actions() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    const orchard::Entity p = s.create("P");
+    orchard::apply_inventory_preset(s.add_inventory(p), "minecraft");
+    auto inventory = [&]() -> orchard::Inventory& { return *s.inventory(p); };
+    orchard::Gameplay g;
+    g.start(&s, nullptr);
+    g.give(p, "apple", 10.0f);
+    int at = -1;
+    std::string list;
+    for (const char* l : {"hotbar", "items"}) {
+        std::vector<orchard::ItemStack>& v = std::string(l) == "hotbar" ? inventory().hotbar_items : inventory().items;
+        for (std::size_t i = 0; i < v.size() && at < 0; ++i)
+            if (v[i].item == "apple") {
+                at = static_cast<int>(i);
+                list = l;
+            }
+    }
+    check(at >= 0, "the apples are somewhere");
+    check(orchard::inventory_action(inventory(), "right_click") == "pick_half", "right click picks up half by default");
+    check(g.inventory_action(p, p, list, at, -1, -1, "pick_half") && g.cursor(p)->amount == 5.0f, "picking up half leaves 5 on the cursor");
+    check(g.inventory_action(p, p, "items", 20, -1, -1, "place_one") && inventory().items[20].amount == 1.0f && g.cursor(p)->amount == 4.0f, "placing one puts down one");
+    inventory().place_amount = 3.0f;
+    check(g.inventory_action(p, p, "items", 21, -1, -1, "place_amount") && inventory().items[21].amount == 3.0f, "placing a set amount uses the inventory's amount");
+    check(g.inventory_action(p, p, "", -1, -1, -1, "drop_cursor") && g.cursor(p)->empty(), "G drops what's on the cursor");
+    bool dropped = false;
+    for (orchard::Entity e : s.entities()) dropped = dropped || (s.pickup(e) && s.pickup(e)->stack.item == "apple");
+    check(dropped, "and it lands in the world");
+    check(g.inventory_action(p, p, "items", 21, -1, -1, "pick_all") && g.cursor(p)->amount == 3.0f && inventory().items[21].empty(), "left click picks up the whole stack");
+    check(g.return_cursor(p) && g.cursor(p)->empty() && g.count(p, "apple") == 9.0f, "closing the inventory puts the cursor back");
+    orchard::ItemEvent ev;
+    int events = 0;
+    while (g.next_item_event(p, ev)) ++events;
+    check(events >= 5, "scripts can see inventory clicks (" + std::to_string(events) + ")");
+    check(orchard::set_inventory_field(inventory(), "action:middle_click", "use") && orchard::inventory_action(inventory(), "middle_click") == "use", "click actions can be changed");
+}
+
+void test_worn_magic_and_weight() {
+    orchard::Scene s(orchard::Dimension::three_d);
+    auto person = [&](const char* name, orchard::Vec3 at) {
+        const orchard::Entity e = s.create(name);
+        s.transform(e)->position = at;
+        s.add_health(e);
+        orchard::Inventory& inv = s.add_inventory(e);
+        orchard::apply_inventory_preset(inv, "dayz");
+        inv.columns = 12;
+        inv.rows = 12;
+        return e;
+    };
+    const orchard::Entity a = person("A", {0.0f, 0.0f, 0.0f});
+    const orchard::Entity b = person("B", {1.0f, 0.0f, 0.0f});
+    orchard::Gameplay g;
+    g.start(&s, nullptr);
+    g.give(b, "thornmail", 1.0f);
+    g.give(b, "fireward_cloak", 1.0f);
+    for (int pass = 0; pass < 2; ++pass)
+        for (std::size_t i = 0; i < s.inventory(b)->items.size(); ++i)
+            if (s.inventory(b)->items[i].item == "thornmail" || s.inventory(b)->items[i].item == "fireward_cloak") {
+                g.equip(b, "items", static_cast<int>(i));
+                break;
+            }
+    check(g.worn_resist(b, "fire") > 0.5f, "a fireward cloak resists fire");
+    g.set_health(b, 100.0f);
+    orchard::Damage burn;
+    burn.amount = 20.0f;
+    burn.type = "fire";
+    g.apply_damage(b, burn);
+    check(g.health(b) > 90.0f, "so fire hurts less (" + str(g.health(b)) + ")");
+    g.set_health(a, 100.0f);
+    orchard::Damage hit;
+    hit.amount = 10.0f;
+    hit.type = "melee";
+    hit.attacker = a;
+    g.apply_damage(b, hit);
+    check(g.health(a) < 100.0f, "thornmail hurts whoever hits it (" + str(g.health(a)) + ")");
+    double t = 0.0;
+    g.give(a, "ring_vigor", 1.0f);
+    for (std::size_t i = 0; i < s.inventory(a)->items.size(); ++i)
+        if (s.inventory(a)->items[i].item == "ring_vigor") g.equip(a, "items", static_cast<int>(i));
+    for (int i = 0; i < 5; ++i) g.tick(1.0 / 60.0, t += 1.0 / 60.0);
+    check(g.effect_stacks(a, "regeneration") > 0, "a ring can keep an effect on while worn");
+    const float with_worn = orchard::inventory_weight(s.items(), *s.inventory(b));
+    s.inventory(b)->worn_weight = false;
+    check(orchard::inventory_weight(s.items(), *s.inventory(b)) < with_worn - 5.0f, "worn armor's weight can be left out");
+    orchard::ItemStack blade;
+    blade.item = "gladius";
+    blade.amount = 1.0f;
+    blade.enchant = "fire=7, burning:3:1";
+    const std::optional<orchard::ItemStack> eb = orchard::parse_stack(orchard::stack_text(blade));
+    check(eb && eb->enchant == "fire=7, burning:3:1", "enchantments are saved with the stack");
+    check(g.stack_enchant_damage(blade) == "fire=7" && g.stack_enchant_effects(blade) == "burning:3:1", "enchantments split into damage and effects");
+    const std::string info = g.describe(b, "{name}\n{health_bar}\n{health} / {max_health}\n{item}\n{nothing}", a);
+    check(info.find("B") == 0 && info.find("#bar health") != std::string::npos, "the look-at panel fills in names and bars:\n" + info);
+    s.set_rule("look_range", "12");
+    check(s.rule_number("look_range") == 12.0f && s.rule("plates") == "1", "game rules have defaults and can change");
+    const std::optional<orchard::Scene> loaded = orchard::Scene::load(s.save());
+    check(loaded && loaded->rule_number("look_range") == 12.0f, "game rules are saved with the scene");
+    const std::string wav = (std::filesystem::temp_directory_path() / "orchard-shot.wav").string();
+    check(orchard::write_item_sound("gunshot_rifle", wav) && std::filesystem::file_size(wav) > 10000, "gunshot sounds are made for you");
+}
+
 int main() {
     test_running_stays_down();
     test_detailed_player_walks_hills();
@@ -2031,6 +2566,12 @@ int main() {
     test_holsters_and_weapons(true);
     test_climate_zones();
     test_items_save();
+    test_ammo_and_magazines();
+    test_auto_actions_hammers_and_bursts();
+    test_ai_ground();
+    test_cursor_and_actions();
+    test_worn_magic_and_weight();
+    test_guns_actions_and_surfaces();
     test_encumbrance();
     test_units();
     test_ai_walks_around_walls();

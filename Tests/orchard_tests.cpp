@@ -299,9 +299,8 @@ void test_script_runtime() {
         g.connect(g.add_node("secure_whole"), "value", as_text, "value");
         g.connect(j2, "text", log2, "message");
         g.connect(g.add_node("secure_random"), "value", place, "x");
-        // Items, weapons and weather nodes.
         int last = place;
-        for (const char* t : {"give_item", "take_item", "equip_item", "hold_item", "holster_item", "draw_item", "select_slot", "use_item", "use_held", "release_held", "reload_weapon", "fire_weapon", "set_aim", "set_stance", "set_aiming", "set_blocking", "set_ballistics", "drop_item", "pick_up_nearest", "move_item", "define_item", "set_inventory_setting", "spawn_item", "start_weather", "start_weather_at", "stop_all_weather", "set_climate"}) {
+        for (const char* t : {"give_item", "take_item", "equip_item", "hold_item", "holster_item", "draw_item", "select_slot", "use_item", "use_held", "release_held", "reload_weapon", "fire_weapon", "set_aim", "set_stance", "set_aiming", "set_blocking", "set_ballistics", "drop_item", "pick_up_nearest", "move_item", "define_item", "set_inventory_setting", "spawn_item", "start_weather", "start_weather_at", "stop_all_weather", "set_climate", "load_magazine", "unload_magazine", "unload_weapon", "choose_ammo", "give_ammo", "define_bullet", "inventory_click", "return_cursor", "enchant_item", "set_game_rule", "set_look_info", "play_item_sound", "cycle_weapon", "set_fire_mode", "next_fire_mode", "set_ground_speed", "define_surface", "set_surface"}) {
             const int n = g.add_node(t);
             check(n >= 0, std::string("the ") + t + " node exists");
             g.connect(last, "then", n, "in");
@@ -321,6 +320,17 @@ void test_script_runtime() {
         g.connect(g.add_node("temperature_at"), "celsius", warm, "x");
         g.connect(g.add_node("rain_at"), "amount", warm, "y");
         g.connect(g.add_node("worn_armor"), "value", warm, "z");
+        const int say2 = g.add_node("log");
+        g.connect(warm, "then", say2, "in");
+        const int tj2 = g.add_node("join");
+        g.connect(g.add_node("ammo_info"), "info", tj2, "a");
+        g.connect(g.add_node("describe"), "text", tj2, "b");
+        g.connect(tj2, "text", say2, "message");
+        const int warm2 = g.add_node("set_position");
+        g.connect(say2, "then", warm2, "in");
+        g.connect(g.add_node("loaded_rounds"), "rounds", warm2, "x");
+        g.connect(g.add_node("ammo_count"), "count", warm2, "y");
+        g.connect(g.add_node("worn_resist"), "value", warm2, "z");
         std::vector<std::string> errors;
         const std::string code = g.to_walnut(&errors);
         check(errors.empty(), "a graph with random, bag, sound and AI nodes makes Walnut");
@@ -660,16 +670,16 @@ void test_item_scripts() {
     };
     write("Scripts/gear.cpp",
           "#include <orchard/script/orchard.hpp>\nusing namespace orchard::script;\n\n"
-          "void on_start(Entity self) {\n    set_inventory_setting(self, \"preset\", \"tarkov\");\n    give_item(self, \"glock17\", 1.0);\n    give_item(self, \"9mm\", 20.0);\n    Entity w = start_weather(\"rain\", 30.0, 0.0, 0.0);\n    set_climate(w, \"temperature\", \"5\");\n    spawn_item(\"apple\", 2.0, 0.0, 1.0, 0.0);\n}\n");
+          "void on_start(Entity self) {\n    set_inventory_setting(self, \"preset\", \"tarkov\");\n    give_item(self, \"glock17\", 1.0);\n    give_item(self, \"9mm\", 20.0);\n    give_ammo(self, \"9mm\", \"hp\", 30.0);\n    define_surface(\"snow\", \"walk\", \"70%\");\n    set_ground_speed(self, find_guns(\"class=pistol, ammo=9mm\").empty() ? \"10%\" : \"\");\n    Entity w = start_weather(\"rain\", 30.0, 0.0, 0.0);\n    set_climate(w, \"temperature\", \"5\");\n    spawn_item(\"apple\", 2.0, 0.0, 1.0, 0.0);\n}\n");
     write("Scripts/gear_c.c",
           "#include <orchard/script/orchard.h>\n\n"
-          "void on_start(orchard_entity self) {\n    orchard_set_inventory_setting(self, \"preset\", \"tarkov\");\n    orchard_give_item(self, \"glock17\", 1.0);\n    orchard_give_item(self, \"9mm\", 20.0);\n    orchard_entity w = orchard_start_weather(\"rain\", 30.0, 0.0, 0.0);\n    orchard_set_climate(w, \"temperature\", \"5\");\n    orchard_spawn_item(\"apple\", 2.0, 0.0, 1.0, 0.0, \"detailed\");\n}\n");
+          "void on_start(orchard_entity self) {\n    orchard_set_inventory_setting(self, \"preset\", \"tarkov\");\n    orchard_give_item(self, \"glock17\", 1.0);\n    orchard_give_item(self, \"9mm\", 20.0);\n    orchard_give_ammo(self, \"9mm\", \"hp\", 30.0);\n    orchard_define_surface(\"snow\", \"walk\", \"70%\");\n    if (orchard_find_guns(\"class=pistol, ammo=9mm\")[0] == 0) orchard_set_ground_speed(self, \"10%\");\n    orchard_entity w = orchard_start_weather(\"rain\", 30.0, 0.0, 0.0);\n    orchard_set_climate(w, \"temperature\", \"5\");\n    orchard_spawn_item(\"apple\", 2.0, 0.0, 1.0, 0.0, \"detailed\");\n}\n");
     write("Scripts/gear.lua",
-          "function on_start(self)\n    orchard.set_inventory_setting(self, \"preset\", \"tarkov\")\n    orchard.give_item(self, \"glock17\", 1)\n    orchard.give_item(self, \"9mm\", 20)\n    local w = orchard.start_weather(\"rain\", 30, 0, 0)\n    orchard.set_climate(w, \"temperature\", \"5\")\n    orchard.spawn_item(\"apple\", 2, 0, 1, 0)\nend\n");
+          "function on_start(self)\n    orchard.set_inventory_setting(self, \"preset\", \"tarkov\")\n    orchard.give_item(self, \"glock17\", 1)\n    orchard.give_item(self, \"9mm\", 20)\n    orchard.give_ammo(self, \"9mm\", \"hp\", 30)\n    orchard.define_surface(\"snow\", \"walk\", \"70%\")\n    if orchard.find_guns(\"class=pistol, ammo=9mm\") == \"\" then orchard.set_ground_speed(self, \"10%\") end\n    local w = orchard.start_weather(\"rain\", 30, 0, 0)\n    orchard.set_climate(w, \"temperature\", \"5\")\n    orchard.spawn_item(\"apple\", 2, 0, 1, 0)\nend\n");
     write("Scripts/Gear.cs",
-          "using Orchard;\n\npublic class Gear : Script\n{\n    public override void OnStart()\n    {\n        World.SetInventorySetting(Entity, \"preset\", \"tarkov\");\n        World.GiveItem(Entity, \"glock17\", 1);\n        World.GiveItem(Entity, \"9mm\", 20);\n        Entity w = World.StartWeather(\"rain\", 30, 0, 0);\n        World.SetClimate(w, \"temperature\", \"5\");\n        World.SpawnItem(\"apple\", 2, 0, 1, 0);\n    }\n}\n");
+          "using Orchard;\n\npublic class Gear : Script\n{\n    public override void OnStart()\n    {\n        World.SetInventorySetting(Entity, \"preset\", \"tarkov\");\n        World.GiveItem(Entity, \"glock17\", 1);\n        World.GiveItem(Entity, \"9mm\", 20);\n        World.GiveAmmo(Entity, \"9mm\", \"hp\", 30);\n        World.DefineSurface(\"snow\", \"walk\", \"70%\");\n        if (World.FindGuns(\"class=pistol, ammo=9mm\") == \"\") World.SetGroundSpeed(Entity, \"10%\");\n        Entity w = World.StartWeather(\"rain\", 30, 0, 0);\n        World.SetClimate(w, \"temperature\", \"5\");\n        World.SpawnItem(\"apple\", 2, 0, 1, 0);\n    }\n}\n");
     write("Scripts/Gear.java",
-          "import orchard.*;\n\npublic class Gear extends Script {\n    @Override\n    public void onStart() {\n        World.setInventorySetting(entity, \"preset\", \"tarkov\");\n        World.giveItem(entity, \"glock17\", 1);\n        World.giveItem(entity, \"9mm\", 20);\n        Entity w = World.startWeather(\"rain\", 30, 0, 0);\n        World.setClimate(w, \"temperature\", \"5\");\n        World.spawnItem(\"apple\", 2, 0, 1, 0);\n    }\n}\n");
+          "import orchard.*;\n\npublic class Gear extends Script {\n    @Override\n    public void onStart() {\n        World.setInventorySetting(entity, \"preset\", \"tarkov\");\n        World.giveItem(entity, \"glock17\", 1);\n        World.giveItem(entity, \"9mm\", 20);\n        World.giveAmmo(entity, \"9mm\", \"hp\", 30);\n        World.defineSurface(\"snow\", \"walk\", \"70%\");\n        if (World.findGuns(\"class=pistol, ammo=9mm\").isEmpty()) World.setGroundSpeed(entity, \"10%\");\n        Entity w = World.startWeather(\"rain\", 30, 0, 0);\n        World.setClimate(w, \"temperature\", \"5\");\n        World.spawnItem(\"apple\", 2, 0, 1, 0);\n    }\n}\n");
     {
         orchard::graph::Graph g;
         const int start = g.add_node("on_start");
@@ -724,8 +734,12 @@ void test_item_scripts() {
     for (const auto& [language, e] : running) {
         const orchard::Inventory* inv = scene.inventory(e);
         check(inv && inv->preset == "tarkov", language + " scripts give things an inventory and set it up");
-        check(g.count(e, "glock17") == 1.0f && g.count(e, "9mm") == 20.0f, language + " scripts give items (" + std::to_string(g.count(e, "9mm")) + ")");
+        const float hp_rounds = language == "Walnut" ? 0.0f : 30.0f;
+        check(g.count(e, "glock17") == 1.0f && g.count(e, "9mm") == 20.0f + hp_rounds, language + " scripts give items (" + std::to_string(g.count(e, "9mm")) + ")");
+        if (language != "Walnut") check(g.count_variant(e, "9mm", "hp") == 30.0f, language + " scripts give hollow points");
+        if (language != "Walnut") check(g.ground_speed_override(e).empty(), language + " scripts find 9mm pistols");
     }
+    check(scene.surfaces().find("snow") && near(scene.surfaces().find("snow")->walk, 0.7f), "scripts change surfaces");
     int zones = 0, apples = 0;
     for (orchard::Entity e : scene.entities()) {
         if (const orchard::Climate* c = scene.climate(e)) zones += c->preset == "rain" && c->temperature == 5.0f ? 1 : 0;
@@ -821,6 +835,12 @@ void test_axis_flips() {
     const std::optional<orchard::ProjectInfo> again = orchard::Project::read_info(text);
     check(again && again->axis_system() == info.axis_system(), "flips round trip through project.orchard");
     check(orchard::Project::write_info(orchard::ProjectInfo()).find("flip-axes") == std::string::npos, "no flips, no flip-axes line");
+    orchard::ProjectInfo looks;
+    looks.physics.particle_look = "simple";
+    looks.physics.plant_sway = false;
+    const std::optional<orchard::ProjectInfo> looks_again = orchard::Project::read_info(orchard::Project::write_info(looks));
+    check(looks_again && looks_again->physics.particle_look == "simple" && !looks_again->physics.plant_sway, "the particle look and plant sway settings are saved");
+    check(orchard::ProjectInfo().physics.plant_sway && orchard::ProjectInfo().physics.particle_look.empty(), "plants sway and particles keep their own look by default");
     orchard::Viewport flat;
     flat.set_view_size(320, 200);
     flat.set_dimension(orchard::Dimension::two_d);

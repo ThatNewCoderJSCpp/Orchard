@@ -98,6 +98,11 @@ public:
         static_cast<void>(point);
         return 0.0f;
     }
+    virtual std::shared_ptr<const TerrainHeights> terrain_heights(Entity e) const {
+        static_cast<void>(e);
+        return nullptr;
+    }
+    virtual Vec3 up_axis() const { return Vec3{0.0f, 1.0f, 0.0f}; }
 };
 
 struct ScriptHooks {

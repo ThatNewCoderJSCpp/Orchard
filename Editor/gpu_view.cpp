@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <map>
@@ -117,6 +118,35 @@ std::uint8_t to_byte(float linear) {
     return static_cast<std::uint8_t>(std::lround(std::clamp(s, 0.0f, 1.0f) * 255.0f));
 }
 
+fg::Wind3D scene_wind(const Scene& scene, Vec3 at) {
+    fg::Wind3D out;
+    float best = 0.0f;
+    for (Entity e : scene.entities()) {
+        const Climate* c = scene.climate(e);
+        if (!c || !c->active || c->wind_speed <= 0.0f) continue;
+        if (!c->global) {
+            const Mat4 w = scene.world_matrix(e);
+            const Vec3 p = mul_point(w, Vec3{0.0f, 0.0f, 0.0f});
+            const Vec3 d = at - p;
+            if (c->shape == "sphere" ? length(d) > std::max({c->size.x, c->size.y, c->size.z}) * 0.5f + c->blend : std::fabs(d.x) > c->size.x * 0.5f + c->blend || std::fabs(d.y) > c->size.y * 0.5f + c->blend || std::fabs(d.z) > c->size.z * 0.5f + c->blend) continue;
+        }
+        const float score = c->wind_speed + (c->global ? 0.0f : 1000.0f) + static_cast<float>(c->priority) * 10000.0f;
+        if (score <= best) continue;
+        best = score;
+        const Vec3 dir = length(c->wind_dir) > 1e-5f ? normalize(c->wind_dir) : Vec3{1.0f, 0.0f, 0.0f};
+        out.direction = vector3d{dir.x, dir.y, dir.z};
+        out.strength = std::clamp(c->wind_speed / 18.0f, 0.0f, 1.6f);
+        out.gustiness = std::clamp(c->gust / std::max(1.0f, c->wind_speed), 0.0f, 1.5f);
+        out.speed = std::clamp(0.7f + c->wind_speed / 25.0f, 0.5f, 2.0f);
+    }
+    return out;
+}
+
+double wind_clock() {
+    static const auto start = std::chrono::steady_clock::now();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+}
+
 Color material_color(const Material& m) {
     const float see = std::clamp(m.opacity, 0.0f, 1.0f) * (1.0f - 0.85f * std::clamp(m.transmission, 0.0f, 1.0f));
     return Color(to_byte(m.color.x), to_byte(m.color.y), to_byte(m.color.z), static_cast<std::uint8_t>(std::lround(std::clamp(see, 0.03f, 1.0f) * 255.0f)));
@@ -137,6 +167,7 @@ fg::Material3D material_3d(const Material& m) {
         out.depth_write = c.alpha() >= 250;
     }
     out.shadow = m.casts_shadows ? fg::Shadow3D::Cast : fg::Shadow3D::None;
+    if (m.translucency > 0.0f) out.with_translucency(m.translucency);
     return out;
 }
 
@@ -781,9 +812,14 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 lighting.atmosphere.sun_position = wv(0.4f, 1.0f, 0.6f);
                 lighting.atmosphere.moon_position = wv(-0.4f, -1.0f, -0.6f);
                 lighting.atmosphere.up = wv(0.0f, 1.0f, 0.0f);
+                lighting.time = wind_clock();
+                if (m_options.plant_sway) lighting.wind = scene_wind(scene, oc.target);
                 r.set_scene_lighting(lighting);
             } else {
-                r.set_scene_lighting(fg::SceneLighting3D::off());
+                fg::SceneLighting3D off = fg::SceneLighting3D::off();
+                off.time = wind_clock();
+                if (m_options.plant_sway) off.wind = scene_wind(scene, oc.target);
+                r.set_scene_lighting(off);
             }
             float step = 1.0f;
             while (oc.distance / step > 40.0f) step *= 10.0f;
@@ -1433,6 +1469,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
                 }
                 if (m_options.particles) {
                     m_particles.set_budget(m_options.particle_budget, m_options.particle_quality);
+                    m_particles.set_look(m_options.particle_look);
                     m_particles.sync(scene, axes.up(), m_options.particles_running);
                     if (m_options.particles_running) m_particles.step_3d(f.dt, cam);
                     m_particles.draw_3d(r);
@@ -1753,6 +1790,7 @@ void GpuView::draw(grove::GpuCanvasFrame& f, const Scene& scene, Entity selected
     }
     if (m_options.particles) {
         m_particles.set_budget(m_options.particle_budget, m_options.particle_quality);
+        m_particles.set_look(m_options.particle_look);
         const bool screen_up = px({0.0f, 1.0f, 0.0f}).y < px({0.0f, 0.0f, 0.0f}).y;
         m_particles.sync(scene, Vec3{0.0f, screen_up ? 1.0f : -1.0f, 0.0f}, m_options.particles_running);
         if (m_options.particles_running) m_particles.step_2d(f.dt, left, bottom, right, top);
